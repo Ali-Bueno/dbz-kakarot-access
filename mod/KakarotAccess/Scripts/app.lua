@@ -1,46 +1,27 @@
--- App controller: the single place that owns every accessibility feature.
+-- App controller: registers the screen adapters and drives the UI registry.
 --
--- main.lua (the bootstrap) is loaded once and never reloaded; it wires keybinds
--- that delegate here. This module and everything it requires (menu, and future
--- features like options/gameplay) ARE reloadable at runtime, so we can iterate
--- on the whole mod from inside the game without restarting. The PRISM bridge
--- (speech/prism_bridge) is deliberately NOT touched by a reload.
+-- main.lua (the bootstrap, loaded once) wires keybinds that delegate here. This
+-- module and everything it requires (ui_core, ui_archetypes, ui_registry, the
+-- screen_* adapters) are reloadable at runtime via Ctrl+Shift+R; only the PRISM
+-- bridge (speech/prism_bridge) survives a reload.
+--
+-- Adding a new screen = write a screen_<name>.lua adapter (is_active/update/reset)
+-- reusing the archetype readers, then register it below. No engine changes.
 
-local Menu = require("menu")
-local Options = require("options")
+local Registry = require("ui_registry")
+
+-- Register most-specific screens FIRST: a submenu (Options) opens on top of the
+-- title, and the base title widget can still report visible underneath, so the
+-- registry must prefer the submenu. The title is the base/fallback → registered
+-- last. (The dispatcher picks the first active adapter.)
+Registry.register(require("screen_options"))
+Registry.register(require("screen_title"))
 
 local App = {}
 
--- Every feature module. Each should expose start()/stop(). Add new ones here as
--- the mod grows; the reload machinery in main.lua picks them up automatically.
-local features = { Menu, Options }
-
-function App.start()
-    for _, f in ipairs(features) do
-        if f.start then f.start() end
-    end
-end
-
-function App.stop()
-    for _, f in ipairs(features) do
-        if f.stop then f.stop() end
-    end
-end
-
--- Passthroughs for the dev/diagnostic keybinds registered in main.lua, so they
--- always hit the freshly reloaded code.
-function App.menu_read_current()
-    Menu.read_current()
-end
-
-function App.menu_toggle()
-    if Menu.is_enabled() then
-        Menu.stop()
-        return false
-    else
-        Menu.start()
-        return true
-    end
-end
+function App.start() Registry.start() end
+function App.stop() Registry.stop() end
+function App.toggle() return Registry.toggle() end
+function App.repeat_current() Registry.repeat_current() end
 
 return App

@@ -220,9 +220,12 @@ function Discover.run()
     ExecuteInGameThread(function()
         local out = {}
 
-        -- New numbered file per press: dumps/dump_001.txt, dump_002.txt, ...
+        -- Timestamped file per press so the newest sorts last even across game
+        -- restarts (the counter resets, os.time keeps climbing): dump_<time>_NNN.txt
         _G.__dumpN = (_G.__dumpN or 0) + 1
-        local outfile = string.format("%sdump_%03d.txt", OUT_DIR, _G.__dumpN)
+        local stamp = 0
+        pcall(function() stamp = os.time() end)
+        local outfile = string.format("%sdump_%d_%03d.txt", OUT_DIR, stamp, _G.__dumpN)
 
         local function valid(o) return o ~= nil and o:IsValid() == true end
 
@@ -283,17 +286,22 @@ function Discover.run()
 
         local fadCount = 0
         local rows = FindAllOf("Xlist_Bar03_C") or {}
-        -- Sort-ish by index via name for readability.
+        -- Sort-ish by index via name for readability. Show every value-ish node so
+        -- we can see how the current tab stores values (buttons/graphics tabs may
+        -- differ from the game-settings tab).
         for i = 0, 20 do
             for _, r in pairs(rows) do
                 if valid(r) and r:GetFullName():find("Xlist_Bar03_" .. string.format("%02d", i), 1, true)
                    and r:GetFullName():find("Start_Option_C", 1, true) then
                     local f = vis(r.Ins_Cursor_Fad)
                     if f == "true" then fadCount = fadCount + 1 end
-                    out[#out + 1] = string.format(
-                        "  %02d  fad=%-5s  list=%q (vis=%s)  enter=%q (vis=%s)",
-                        i, f, tostring(txt(r.Txt_List)), vis(r.Txt_List),
-                        tostring(txt(r.Txt_Enter)), vis(r.Txt_Enter))
+                    out[#out + 1] = string.format("  %02d  fad=%-5s  list=%q(v=%s)", i, f,
+                        tostring(txt(r.Txt_List)), vis(r.Txt_List))
+                    out[#out + 1] = string.format("        mode=%q(v=%s)  scroll=%q(v=%s)  gauge_v=%s  arrowL=%s arrowR=%s",
+                        tostring(txt(r.Txt_Mode)), vis(r.Txt_Mode),
+                        tostring(txt(r.Txt_Mode_Scroll)), vis(r.Txt_Mode_Scroll),
+                        vis(r.Xlist_Bar_03_Gauge),
+                        vis(r.Xmenu_Arrow01_L), vis(r.Xmenu_Arrow01_R))
                 end
             end
         end

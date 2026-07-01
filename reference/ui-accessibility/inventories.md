@@ -2,7 +2,9 @@
 
 > When the user says **"accessibilize the inventory"** (or the Spanish **"accesibilizar inventario"**),
 > apply exactly this behavior. It builds on the [menu rules](menus.md); the points below are
-> inventory-specific. Shared principles live in [the topic README](README.md).
+> inventory-specific. Shared principles live in [the topic README](README.md). The reusable
+> architecture (grid-cell archetype, subscriptions, one reader shared by belt/equipment/storage) is in
+> [generic-strategy.md](generic-strategy.md).
 
 ## Item readout (navigation)
 

@@ -48,12 +48,12 @@ RegisterKeyBind(Key.F9, function()
     end)
 end)
 
--- F1: diagnostic — speak the current title selection (or why nothing is read).
-RegisterKeyBind(Key.F1, function() App.menu_read_current() end)
+-- F1: repeat the currently focused menu item.
+RegisterKeyBind(Key.F1, function() App.repeat_current() end)
 
--- Ctrl+M: toggle the title menu reader on/off.
+-- Ctrl+M: toggle the menu reader on/off.
 RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function()
-    Speech.say(App.menu_toggle() and "Menu reader on" or "Menu reader off", true)
+    Speech.say(App.toggle() and "Menu reader on" or "Menu reader off", true)
 end)
 
 -- F7: dev-only discovery. Re-requires discover.lua fresh each press (so it can be
