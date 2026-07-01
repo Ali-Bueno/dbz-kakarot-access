@@ -130,12 +130,26 @@ end
 -- ---- poll engine -----------------------------------------------------------
 -- One loop for the whole UI. A generation guard stops any loop left over from a
 -- prior load (so a reload never leaves two loops racing on a stale Lua state).
+--
+-- BUSY GUARD: LoopAsync fires every POLL_MS on a worker thread and queues `step` onto
+-- the game thread WITHOUT waiting for it. When the game thread is saturated (loading,
+-- a fullscreen movie, etc.), those queued steps pile up into a backlog that then runs
+-- late and in bursts — felt as long delays when navigating a menu. So we only queue a
+-- new step once the previous one has finished, keeping the reader on the CURRENT state.
 function Core.loop(step)
     _G.__KakarotUiGen = (_G.__KakarotUiGen or 0) + 1
     local myGen = _G.__KakarotUiGen
+    local busy = false
     LoopAsync(Core.POLL_MS, function()
         if _G.__KakarotUiGen ~= myGen then return true end
-        ExecuteInGameThread(step)
+        if not busy then
+            busy = true
+            ExecuteInGameThread(function()
+                local ok, err = pcall(step)
+                busy = false
+                if not ok then print("[KakarotAccess] UI step error: " .. tostring(err) .. "\n") end
+            end)
+        end
         return false
     end)
 end

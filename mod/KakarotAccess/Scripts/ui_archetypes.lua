@@ -130,6 +130,27 @@ function A.row_binding(row)
     return name and (I18n.t("controller_prefix") .. name) or nil
 end
 
+-- The spoken button for ANY KeyConfigId (direct button id or action alias resolved
+-- through the icon-data asset), with NO "controller:" prefix. For inline-icon markup
+-- (dialogs, tutorials, prompts) where we just want the button name. nil if unresolvable.
+function A.keyconfig_button(kc)
+    return A.button_name(kc) or (resolve_ctrl(kc) and A.button_name(resolve_ctrl(kc))) or nil
+end
+
+-- Turn CFramework rich-text markup into speakable text: resolve <inputicon> tags to
+-- button names, drop other tags (<span color=…>, </>), and collapse whitespace. Reused
+-- by any inline-icon text (dialogs, move lists, tutorials). nil if empty.
+function A.markup_to_speech(s)
+    if not s or s == "" then return nil end
+    s = s:gsub('<inputicon%s+KeyConfigId="([^"]+)"%s*/>', function(id)
+        local b = A.keyconfig_button(id)
+        return b and (" " .. b .. " ") or " "
+    end)
+    s = s:gsub("<[^>]->", " ")                    -- drop remaining tags
+    s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    return s ~= "" and s or nil
+end
+
 -- The row's current value. A button-config row exposes its binding via the rich
 -- text (checked first). Otherwise only ADJUSTABLE rows (a slider gauge, or the
 -- left/right value arrows) carry a real inline value; plain action rows leave STALE

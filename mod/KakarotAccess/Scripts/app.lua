@@ -13,10 +13,13 @@ local Keyhelp = require("keyhelp")
 local Speech = require("speech")
 local I18n = require("i18n")
 
--- Register most-specific screens FIRST: a submenu (Options) opens on top of the
--- title, and the base title widget can still report visible underneath, so the
--- registry must prefer the submenu. The title is the base/fallback → registered
--- last. (The dispatcher picks the first active adapter.)
+-- Register most-specific screens FIRST: overlays win over the screens beneath them,
+-- which can still report visible underneath (the dispatcher picks the first active
+-- adapter). Order: choice-list > plain dialog > options submenu > title (base/fallback).
+-- The choice list must precede the dialog: the difficulty window shows both a Txt_Detail
+-- prompt (dialog) and the option list, and the list reading is the useful one.
+Registry.register(require("screen_choicelist"))
+Registry.register(require("screen_dialog"))
 Registry.register(require("screen_options"))
 Registry.register(require("screen_title"))
 
