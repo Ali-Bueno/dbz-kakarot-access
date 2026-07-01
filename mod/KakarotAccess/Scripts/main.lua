@@ -56,6 +56,16 @@ RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function()
     Speech.say(App.menu_toggle() and "Menu reader on" or "Menu reader off", true)
 end)
 
+-- F7: dev-only discovery. Re-requires discover.lua fresh each press (so it can be
+-- edited between presses without a restart) and runs its current step, writing to
+-- Scripts/dump.txt. A function key so the game doesn't read it as input. Not
+-- shipped; used to map new screens.
+RegisterKeyBind(Key.F7, function()
+    package.loaded.discover = nil
+    require("discover").run()
+    Speech.say("Discover", true)
+end)
+
 -- Ctrl+Shift+R: reload the WHOLE mod's logic from inside the game (no UE4SS
 -- console needed). We stop all features, drop every non-protected module from
 -- the require cache, then re-require app.lua (which re-requires its features

@@ -11,6 +11,10 @@ local Discover = {}
 -- mod is deployed. Absolute on purpose (UE4SS's relative cwd is unpredictable).
 local OUT = "D:\\code\\unreal\\dragon ball kakarot access\\mod\\KakarotAccess\\Scripts\\dump.txt"
 local OUT_PROBE = "D:\\code\\unreal\\dragon ball kakarot access\\mod\\KakarotAccess\\Scripts\\probe.txt"
+-- Each run() writes a NEW numbered file here, so several F7 dumps can pile up and
+-- be compared. Counter lives in _G so it keeps incrementing across F7 presses
+-- (require cache is cleared per press, but globals persist).
+local OUT_DIR = "D:\\code\\unreal\\dragon ball kakarot access\\mod\\KakarotAccess\\Scripts\\dumps\\"
 
 local function write_lines(path, lines)
     local f, err = io.open(path, "w")
@@ -204,6 +208,97 @@ function Discover.menu()
             end
         end
         write_lines(OUT_PROBE, out)
+    end)
+end
+
+-- run(): the current hot-editable discovery step. main.lua's dev key re-requires
+-- this file and calls run() each press, so we can iterate without a restart.
+-- Options menu (Start_Option_C): reflect the container + one row class to find how
+-- the SELECTED row is marked (cursor image? bool? Txt_Select?) and confirm the
+-- name/value/tab property names.
+function Discover.run()
+    ExecuteInGameThread(function()
+        local out = {}
+
+        -- New numbered file per press: dumps/dump_001.txt, dump_002.txt, ...
+        _G.__dumpN = (_G.__dumpN or 0) + 1
+        local outfile = string.format("%sdump_%03d.txt", OUT_DIR, _G.__dumpN)
+
+        local function valid(o) return o ~= nil and o:IsValid() == true end
+
+        local function first_live(cls_name)
+            local all = FindAllOf(cls_name) or {}
+            for _, o in pairs(all) do
+                if valid(o) and o:GetFullName():find("/Engine/Transient", 1, true) then
+                    return o
+                end
+            end
+            return nil
+        end
+
+        local function reflect(label, obj)
+            out[#out + 1] = "==== " .. label .. " ===="
+            write_lines(outfile, out) -- breadcrumb before touching obj
+            if obj == nil then out[#out + 1] = "  (nil)" return end
+            out[#out + 1] = obj:GetFullName()
+            local cls = obj:GetClass()
+            out[#out + 1] = "-- properties --"
+            pcall(function()
+                cls:ForEachProperty(function(prop)
+                    local t = "?"
+                    pcall(function() t = prop:GetClass():GetFName():ToString() end)
+                    out[#out + 1] = string.format("  %s : %s", prop:GetFName():ToString(), t)
+                end)
+            end)
+            out[#out + 1] = "-- functions --"
+            pcall(function()
+                cls:ForEachFunction(function(fn)
+                    out[#out + 1] = "  " .. fn:GetFName():ToString()
+                end)
+            end)
+        end
+
+        local function vis(o)
+            if not valid(o) then return "invalid" end
+            local ok, v = pcall(function() return o:IsVisible() end)
+            return ok and tostring(v) or "err"
+        end
+        local function txt(o)
+            if not valid(o) then return nil end
+            local m = o.mainTxt
+            if not valid(m) then return nil end
+            local ok, s = pcall(function() return m.Text:ToString() end)
+            return ok and s or nil
+        end
+
+        -- STATE snapshot of the options menu (reproduce the bug, then F7). Shows the
+        -- keyhelp tooltip and, per row, its name + whether Ins_Cursor_Fad is visible
+        -- + its Txt_Enter, so we can see exactly what marks focus when it goes mute.
+        local opt = first_live("Start_Option_C")
+        out[#out + 1] = "tab title: " .. tostring(valid(opt) and (txt(opt.Txt_Title_Steam) or txt(opt.Txt_Title)))
+        local kh = first_live("Xcmn_Keyhelp_C")
+        out[#out + 1] = "keyhelp tooltip: " .. tostring(valid(kh) and txt(kh.Txt_Helpmsg_Main))
+        out[#out + 1] = "==== rows ===="
+        write_lines(outfile, out)
+
+        local fadCount = 0
+        local rows = FindAllOf("Xlist_Bar03_C") or {}
+        -- Sort-ish by index via name for readability.
+        for i = 0, 20 do
+            for _, r in pairs(rows) do
+                if valid(r) and r:GetFullName():find("Xlist_Bar03_" .. string.format("%02d", i), 1, true)
+                   and r:GetFullName():find("Start_Option_C", 1, true) then
+                    local f = vis(r.Ins_Cursor_Fad)
+                    if f == "true" then fadCount = fadCount + 1 end
+                    out[#out + 1] = string.format(
+                        "  %02d  fad=%-5s  list=%q (vis=%s)  enter=%q (vis=%s)",
+                        i, f, tostring(txt(r.Txt_List)), vis(r.Txt_List),
+                        tostring(txt(r.Txt_Enter)), vis(r.Txt_Enter))
+                end
+            end
+        end
+        out[#out + 1] = "fad count: " .. fadCount
+        write_lines(outfile, out)
     end)
 end
 

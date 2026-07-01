@@ -7,12 +7,13 @@
 -- (speech/prism_bridge) is deliberately NOT touched by a reload.
 
 local Menu = require("menu")
+local Options = require("options")
 
 local App = {}
 
 -- Every feature module. Each should expose start()/stop(). Add new ones here as
 -- the mod grows; the reload machinery in main.lua picks them up automatically.
-local features = { Menu }
+local features = { Menu, Options }
 
 function App.start()
     for _, f in ipairs(features) do

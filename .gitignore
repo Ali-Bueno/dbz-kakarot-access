@@ -16,6 +16,7 @@ libs/prism/lib/
 # Dev discovery dumps (written at runtime by discover.lua)
 mod/KakarotAccess/Scripts/dump.txt
 mod/KakarotAccess/Scripts/probe.txt
+mod/KakarotAccess/Scripts/dumps/
 
 # Scratch
 *.log
