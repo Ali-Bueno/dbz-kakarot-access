@@ -274,38 +274,135 @@ function Discover.run()
             return ok and s or nil
         end
 
-        -- STATE snapshot of the options menu (reproduce the bug, then F7). Shows the
-        -- keyhelp tooltip and, per row, its name + whether Ins_Cursor_Fad is visible
-        -- + its Txt_Enter, so we can see exactly what marks focus when it goes mute.
-        local opt = first_live("Start_Option_C")
-        out[#out + 1] = "tab title: " .. tostring(valid(opt) and (txt(opt.Txt_Title_Steam) or txt(opt.Txt_Title)))
-        local kh = first_live("Xcmn_Keyhelp_C")
-        out[#out + 1] = "keyhelp tooltip: " .. tostring(valid(kh) and txt(kh.Txt_Helpmsg_Main))
-        out[#out + 1] = "==== rows ===="
-        write_lines(outfile, out)
-
-        local fadCount = 0
+        -- The binding (which physical button an action is mapped to) is NOT text in
+        -- Txt_List/Txt_Mode/Txt_Mode_Scroll. It must be an image glyph inside the row.
+        -- Reflect the focused row's class to reveal EVERY child node (name + type),
+        -- so we can spot the icon/image node; then read the brush texture of every
+        -- Image-typed node under the row so we can map texture -> button name.
+        local sel
         local rows = FindAllOf("Xlist_Bar03_C") or {}
-        -- Sort-ish by index via name for readability. Show every value-ish node so
-        -- we can see how the current tab stores values (buttons/graphics tabs may
-        -- differ from the game-settings tab).
-        for i = 0, 20 do
-            for _, r in pairs(rows) do
-                if valid(r) and r:GetFullName():find("Xlist_Bar03_" .. string.format("%02d", i), 1, true)
-                   and r:GetFullName():find("Start_Option_C", 1, true) then
-                    local f = vis(r.Ins_Cursor_Fad)
-                    if f == "true" then fadCount = fadCount + 1 end
-                    out[#out + 1] = string.format("  %02d  fad=%-5s  list=%q(v=%s)", i, f,
-                        tostring(txt(r.Txt_List)), vis(r.Txt_List))
-                    out[#out + 1] = string.format("        mode=%q(v=%s)  scroll=%q(v=%s)  gauge_v=%s  arrowL=%s arrowR=%s",
-                        tostring(txt(r.Txt_Mode)), vis(r.Txt_Mode),
-                        tostring(txt(r.Txt_Mode_Scroll)), vis(r.Txt_Mode_Scroll),
-                        vis(r.Xlist_Bar_03_Gauge),
-                        vis(r.Xmenu_Arrow01_L), vis(r.Xmenu_Arrow01_R))
-                end
+        for _, r in pairs(rows) do
+            if valid(r) and r:GetFullName():find("Start_Option_C", 1, true)
+               and vis(r.Ins_Cursor_Fad) == "true" then sel = r break end
+        end
+        out[#out + 1] = "focused row: " .. tostring(sel and txt(sel.Txt_List) or "(none)")
+
+        -- PER-ROW BINDING GLYPH dump. The mando tab shows each action's assigned
+        -- button as an Xcmn_Btn_Plat_C glyph under the option list (NOT a child of the
+        -- Xlist_Bar03 row — that's why the row reflection missed it). Dump every
+        -- Xcmn_Btn_Plat under Start_Option with its full name + visible Dmy_Btn texture
+        -- paths, plus each row's label + full name, so we can correlate row -> glyph
+        -- and build the token -> button-name map (validated against the screenshot).
+        -- Dump the KeyConfigList / IconList arrays of the icon data asset to resolve
+        -- KeyConfigId -> current key/icon. Struct field names are unknown, so try a
+        -- set of candidates per element and print whichever read.
+        if not sel then out[#out + 1] = "no focused row" write_lines(outfile, out) return end
+        local rich = valid(sel.Txt_Mode) and sel.Txt_Mode.ExMainTxt or nil
+        local ico = valid(rich) and rich.ExtendRichTextIconData or nil
+        out[#out + 1] = "iconData: " .. tostring(valid(ico) and ico:GetFullName())
+        if not valid(ico) then write_lines(outfile, out) return end
+
+        -- Build a ConfigName -> {IconName, DynId, DynCtrl} map from KeyConfigList (159
+        -- entries), then resolve each visible row's markup KeyConfigId against it, so we
+        -- can see the ConfigName match format + the current-device IconName (keyboard
+        -- key) + the semantic controller button per action.
+        local arr = ico.KeyConfigList
+        local n = 0
+        pcall(function() n = #arr end)
+        local function fld(e, nm)
+            local okv, v = pcall(function() return e[nm] end)
+            if not okv or v == nil then return "" end
+            if type(v) == "userdata" then local oks, s = pcall(function() return v:ToString() end) return oks and s or "" end
+            return tostring(v)
+        end
+        -- LANGUAGE DETECTION probe #3. The game's language likely lives on a NATIVE
+        -- parent class of the GameInstance (ForEachProperty only lists a class's OWN
+        -- props, not inherited ones — that's why the earlier GameInstance reflect looked
+        -- empty). Walk the whole class chain, dumping each level's properties, to spot a
+        -- Language/Locale/Message-language field.
+        local function reflect_chain(label, obj)
+            out[#out + 1] = "==== " .. label .. " class chain ===="
+            write_lines(outfile, out)
+            if not valid(obj) then out[#out + 1] = "  (invalid)" return end
+            out[#out + 1] = obj:GetFullName()
+            local cls = obj:GetClass()
+            local guard = 0
+            while valid(cls) and guard < 20 do
+                guard = guard + 1
+                out[#out + 1] = "-- " .. cls:GetFName():ToString()
+                write_lines(outfile, out) -- breadcrumb per class level
+                pcall(function()
+                    cls:ForEachProperty(function(prop)
+                        local t = "?"
+                        pcall(function() t = prop:GetClass():GetFName():ToString() end)
+                        out[#out + 1] = string.format("    %s : %s", prop:GetFName():ToString(), t)
+                    end)
+                end)
+                local ok, sup = pcall(function() return cls:GetSuperStruct() end)
+                cls = ok and sup or nil
             end
         end
-        out[#out + 1] = "fad count: " .. fadCount
+
+        -- CFGameInstance.LocalizeManager is the localization manager — reflect its class
+        -- chain AND read every scalar field value, to find the current language directly.
+        local gi = FindFirstOf("BP_ATGameInstance_C") or FindFirstOf("GameInstance")
+        local lm = valid(gi) and gi.LocalizeManager or nil
+        local mm = valid(gi) and gi.MessageManager or nil
+        out[#out + 1] = "LocalizeManager: " .. tostring(valid(lm) and lm:GetFullName())
+        out[#out + 1] = "MessageManager: " .. tostring(valid(mm) and mm:GetFullName())
+
+        local function full_reflect(label, obj)
+            out[#out + 1] = "==== " .. label .. " (all props + functions) ===="
+            write_lines(outfile, out)
+            if not valid(obj) then out[#out + 1] = "  (invalid)" return end
+            out[#out + 1] = obj:GetFullName()
+            local cls = obj:GetClass()
+            local guard = 0
+            while valid(cls) and guard < 20 do
+                guard = guard + 1
+                out[#out + 1] = "-- " .. cls:GetFName():ToString()
+                write_lines(outfile, out)
+                pcall(function()
+                    cls:ForEachProperty(function(prop)
+                        local t = "?"
+                        pcall(function() t = prop:GetClass():GetFName():ToString() end)
+                        out[#out + 1] = string.format("    prop  %s : %s", prop:GetFName():ToString(), t)
+                    end)
+                end)
+                pcall(function()
+                    cls:ForEachFunction(function(fn)
+                        out[#out + 1] = "    fn    " .. fn:GetFName():ToString()
+                    end)
+                end)
+                local ok, sup = pcall(function() return cls:GetSuperStruct() end)
+                cls = ok and sup or nil
+            end
+        end
+
+        -- MessageManager (CFMessageManager) holds the language in its data path/table:
+        -- DataDirectory (a string) and DataTable (an object whose full name encodes the
+        -- loaded language, e.g. .../Message/PLAT_X/es_ES/...). Read them directly.
+        out[#out + 1] = "==== MessageManager language source ===="
+        write_lines(outfile, out)
+        if valid(mm) then
+            for _, f in ipairs({ "DataDirectory", "DataDirectory_NoRelease" }) do
+                write_lines(outfile, out)
+                local sv = "?"
+                pcall(function()
+                    local v = mm[f]
+                    if type(v) == "userdata" then local ok, s = pcall(function() return v:ToString() end) sv = ok and s or "<ud>" else sv = tostring(v) end
+                end)
+                out[#out + 1] = string.format("  %s = %q", f, sv)
+            end
+            for _, f in ipairs({ "DataTable", "NounParamTable", "DataTable_NoRelease", "FontRegist" }) do
+                write_lines(outfile, out)
+                local fn = "?"
+                pcall(function() local v = mm[f] if v and v:IsValid() then fn = v:GetFullName() end end)
+                out[#out + 1] = string.format("  %s -> %s", f, fn)
+            end
+        else
+            out[#out + 1] = "  (no MessageManager)"
+        end
         write_lines(outfile, out)
     end)
 end

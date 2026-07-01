@@ -60,6 +60,24 @@ hook its ID→FString/FText getter).
 `MasterData/` (data tables incl. `MasterData/UI/CharacterIconParam`), `Parameter/`, `Maps/`
 (`Boot/` has the boot menu), `Sound/`, `DataAssets/`.
 
+## Detecting the game's current language at runtime (CONFIRMED 2026-07-01)
+
+**Do NOT use UE culture** — `UKismetInternationalizationLibrary.GetCurrentCulture/Language/Locale` all
+return **`"en"`** even when the game runs in Spanish (CC2 decouples its language from UE culture). Instead
+read it from the **message manager's loaded data table path**:
+
+```
+GameInstance (BP_ATGameInstance_C → AT_GameInstance → CFGameInstance → GameInstance) →
+  .MessageManager (AT_MessageManager_BP_C : CFMessageManager) →
+    .DataTable  → full name ".../Message/PLAT_W/es_ES/messageData.messageData"
+```
+
+Parse the lang out of that path: `path:match("/Message/[%w_]+/(%a%a)_%u%u")` → `es` (es_ES and es_MX both →
+`es`). `CFGameInstance` also exposes `LocalizeManager` (a `CFLocalizeManager`) but it has **no reflectable
+fields** — the MessageManager path is the reliable source. Note the **two independent PLAT axes**: message
+text uses `PLAT_W` here, while button glyphs use `PLAT_X` (Xbox) — don't conflate them. Implemented in
+`mod/KakarotAccess/Scripts/i18n.lua` (`detect()`), which drives the mod's own localized strings.
+
 ## TODO at first in-game session (runtime confirmation)
 
 1. Confirm UE4SS loads (UE4SS.log) and the KakarotAccess C++ bridge logs "PRISM ready".

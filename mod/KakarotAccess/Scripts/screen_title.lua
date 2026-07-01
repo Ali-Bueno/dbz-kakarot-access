@@ -8,15 +8,12 @@
 -- whose .Txt_Select is visible; its label is in .Txt_List.
 
 local Core = require("ui_core")
+local I18n = require("i18n")
 
 local Title = {}
 
 local OPTION_COUNT = 6
 local REACQUIRE_EVERY = 10
-
--- The title screen has no on-screen name, so this is a mod-added label. Kept here
--- as the one hardcoded string; move to a shared strings layer if more accumulate.
-local SCREEN_NAME = "Menú principal"
 
 local ann = Core.make_announcer()
 local gt = nil
@@ -41,7 +38,8 @@ function Title.update()
             break
         end
     end
-    ann:focus(SCREEN_NAME, nil, name, nil, nil)
+    -- The title screen has no on-screen name → a mod-added, localized label.
+    ann:focus(I18n.t("main_menu"), nil, name, nil, nil)
 end
 
 return Title

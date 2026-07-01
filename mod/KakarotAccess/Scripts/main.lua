@@ -51,10 +51,11 @@ end)
 -- F1: repeat the currently focused menu item.
 RegisterKeyBind(Key.F1, function() App.repeat_current() end)
 
--- Ctrl+M: toggle the menu reader on/off.
-RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function()
-    Speech.say(App.toggle() and "Menu reader on" or "Menu reader off", true)
-end)
+-- F2: read the on-screen button prompts (the contextual keyhelp bar).
+RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)
+
+-- Ctrl+M: toggle the menu reader on/off (App.toggle announces the state, localized).
+RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function() App.toggle() end)
 
 -- F7: dev-only discovery. Re-requires discover.lua fresh each press (so it can be
 -- edited between presses without a restart) and runs its current step, writing to

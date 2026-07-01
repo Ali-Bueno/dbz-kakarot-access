@@ -1,0 +1,104 @@
+# DBZ Kakarot — inline input icons (`<inputicon>`) & KeyConfig resolution (runtime-confirmed)
+
+How the game shows **button/key glyphs inside text**, and how to turn them into spoken button names.
+Confirmed live (UE4SS Lua reflection + screenshots) on 2026-07-01 while building the Options readers.
+
+> **Why this matters beyond Options:** the same `<inputicon>` markup + KeyConfig system is how the game
+> renders button prompts EVERYWHERE inline text appears — **move lists, battle tutorials, quest/objective
+> text, HUD prompts, help/agreement popups**. Any of those become readable by reusing the exact
+> mechanism below. Don't re-discover it; reuse `ui_archetypes.lua`.
+
+## Two text renderers per text node (key gotcha)
+
+Every game text node is an `Xcmn_MultiLineText_C` (there is **no** UMG `TextBlock`). It holds **two**
+renderers, and which one is visible depends on the content:
+
+| child property | class | holds |
+|---|---|---|
+| `mainTxt` | `CFUIMultiLineTextBox` | **plain** text (labels, values) |
+| `ExMainTxt` | `CFExtendRichTextBlock` | **rich** text with inline-icon **markup** |
+
+- Read plain text: `node.mainTxt.Text:ToString()`.
+- Read the rich **markup source**: `node.ExMainTxt.Text:ToString()` → returns the raw string incl. tags,
+  e.g. `" <inputicon KeyConfigId=\"KeyConfig_Controller_Btn_B\"/> "`.
+- Exactly one renderer is shown; gate on `ExMainTxt:IsVisible()` to know a node is showing a glyph.
+- **Trap:** the hidden renderer keeps **stale** content. On the controller tab `mainTxt` held recycled
+  graphics-tab values ("1920x1080", "FXAA") while the real binding was only in `ExMainTxt`. Never trust
+  the hidden renderer.
+
+## The markup: `<inputicon KeyConfigId="..."/>`
+
+Inline button/key glyphs are a decorator tag in the rich text source:
+
+```
+<inputicon KeyConfigId="KeyConfig_Controller_Btn_B"/>     ← a physical controller button (direct)
+<inputicon KeyConfigId="KeyConfig_Battle_HighBoost"/>     ← an ACTION alias (needs resolution)
+```
+
+To make any inline-icon text accessible: read `ExMainTxt.Text`, and replace each
+`<inputicon KeyConfigId="ID"/>` with the resolved button name (below). Other tags seen: `<span color=...>`
+(plain color, strip it). Regex used: `KeyConfigId="([^"]+)"`.
+
+## Resolving a KeyConfigId → button
+
+Two id shapes:
+
+1. **Direct button id** — `KeyConfig_Controller_Btn_<TOKEN>` (and the raw `Controller_Btn_<TOKEN>`).
+   The token after the last `Btn_` **is** the button: `B`, `X`, `A`, `Y`, `LB`, `RB`, `LT`, `RT`, `L3`,
+   `R3`, `Start`, `Back`. Canonical **Xbox-style**, device-independent (only the glyph changes per device).
+
+2. **Action alias** — `KeyConfig_Battle_HighBoost`, `KeyConfig_Battle_Guard`, `KeyConfig_Boost`, … The
+   physical button is resolved through the shared icon-data asset:
+
+   Asset: **`/Game/CFramework/DataAssets/CFTextIconData.CFTextIconData`** (`StaticFindObject`).
+   Array: **`KeyConfigList`** — 159 entries, element struct **`/Script/CFramework.CFKeyConfigAssign`**.
+   **The array is 1-based; indexing `[0]` aborts.** Struct fields (StrProperty each):
+
+   | field | meaning | example |
+   |---|---|---|
+   | `ConfigName` | the config slot / alias id | `Battle_HighBoost`, `KeyConfig_Battle_HighBoost`, `Jump` |
+   | `IconName` | glyph of the **current device**, **INDEXED** (not descriptive) | `Btn_L3`, `Btn_2`, `Btn_Key_6` |
+   | `DynamicAssignInputId` | the abstract input action | `Battle_HighBoost`, `Boost`, `Jump` |
+   | `DynamicAssignInputControllerId` | **semantic controller button** | `Controller_Btn_L3` |
+
+   The `KeyConfig_*` alias entries have EMPTY `IconName`/`ctrl` but a `DynamicAssignInputId`; a *different*
+   entry with that same dyn id carries the controller button. So build two maps once and cache:
+   - `configToCtrl[ConfigName] = ctrl` (for entries with a ctrl)
+   - `configToDyn[ConfigName]  = dyn`  and  `dynToCtrl[dyn] = ctrl`
+
+   Resolve: `ctrl = configToCtrl[id] or dynToCtrl[ configToDyn[id] ]` → strip `Controller_Btn_` → token.
+
+## What is and isn't recoverable
+
+- **Controller button: YES**, for every action, on every tab/screen, device-independent (via `ctrl`).
+- **Keyboard key: NO.** For keyboard the glyph is still an **indexed** `IconName` (`Btn_Key_6`), there is
+  no key field, and UE's `UPlayerInput.ActionMappings`/`AxisMappings` are **empty (count 0)** — the game
+  uses a **proprietary CFramework input system**. Reading the literal key would need native RE of the exe.
+  → Keyboard config tabs can announce the controller-equivalent button, not the literal key.
+
+## Platform glyph sets
+
+`PLAT_X` = **Xbox** glyph set (`/Game/Art/UI/Xcmn/PLAT_X/…`), `PLAT_P` = PlayStation, `PLAT_W` = other.
+An 8BitDo pad in Xbox mode drives `PLAT_X` even with a DualSense connected. The KeyConfig **token stays
+Xbox-canonical** regardless (`Btn_B`); only the rendered glyph swaps. Optional future: translate to PS
+names (A→✕, B→○, X→□, Y→△, LB→L1, RB→R1, LT→L2, RT→R2, L3/R3 same) when a PS set is active.
+
+## Reuse (don't re-discover)
+
+Implemented in **`mod/KakarotAccess/Scripts/ui_archetypes.lua`**:
+- `A.button_name(id)` — token → "botón X"/friendly (`BUTTON_NAMES`).
+- `A.row_keyconfig(row)` — pulls the `KeyConfigId` out of a row's `ExMainTxt` markup (visibility-gated).
+- `build_bindings()` / `resolve_ctrl(id)` — the cached KeyConfigList resolver (`A.clear_binding_cache()`
+  drops the cache; call it on screen entry since a rebind changes the mapping).
+- `A.row_binding(row)` — direct id → `button_name`; action alias → `resolve_ctrl` → `button_name`.
+
+For a **move list / tutorial / quest** reader: find the `Xcmn_MultiLineText_C` (or its `CFExtendRichTextBlock`)
+showing the prompt, read `ExMainTxt.Text`, and for each `<inputicon KeyConfigId="…"/>` substitute
+`A.button_name(id) or A.button_name(resolve_ctrl(id))`. Same pipeline, different host widget.
+
+## Gotchas recap
+
+- 1-based struct arrays; index 0 aborts uncatchably (pcall can't catch a C++ abort).
+- Accessing a struct field with a **wrong name** also aborts uncatchably → reflect the `UScriptStruct`
+  (`StaticFindObject("/Script/CFramework.CFKeyConfigAssign"):ForEachProperty(...)`) to get real names first.
+- Reading 159 structs per focus tick is too slow → build the map **once** and cache.

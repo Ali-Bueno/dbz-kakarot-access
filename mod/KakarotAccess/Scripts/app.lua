@@ -9,6 +9,9 @@
 -- reusing the archetype readers, then register it below. No engine changes.
 
 local Registry = require("ui_registry")
+local Keyhelp = require("keyhelp")
+local Speech = require("speech")
+local I18n = require("i18n")
 
 -- Register most-specific screens FIRST: a submenu (Options) opens on top of the
 -- title, and the base title widget can still report visible underneath, so the
@@ -21,7 +24,18 @@ local App = {}
 
 function App.start() Registry.start() end
 function App.stop() Registry.stop() end
-function App.toggle() return Registry.toggle() end
 function App.repeat_current() Registry.repeat_current() end
+
+-- Toggle the menu reader and announce the new state in the game's language. Announced
+-- here (not in main.lua) so the i18n layer stays reloadable.
+function App.toggle()
+    local on = Registry.toggle()
+    Speech.say(I18n.t(on and "reader_on" or "reader_off"), true)
+    return on
+end
+
+-- Read the on-screen contextual button prompts (the keyhelp bar) on demand.
+-- Touches live UObjects, so it runs on the game thread.
+function App.read_keyhelp() ExecuteInGameThread(Keyhelp.announce) end
 
 return App

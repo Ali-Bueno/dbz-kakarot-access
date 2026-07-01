@@ -6,6 +6,7 @@
 -- focused control and call in here; no per-screen branching lives in a reader.
 
 local Core = require("ui_core")
+local I18n = require("i18n")
 
 local A = {}
 
@@ -29,12 +30,115 @@ local function gauge_value(row)
     return math.floor(on / GAUGE_SEGMENTS * 100 + 0.5) .. "%"
 end
 
--- The row's current value. Only ADJUSTABLE rows (a slider gauge, or the left/right
--- value arrows) carry a real inline value; action rows (button remapping, submenu
--- links) have no value and leave STALE text in Txt_Mode from a previously-viewed
--- tab (rows are recycled across tabs), so reading it would bleed e.g. a graphics
--- value onto a button action. Gate on adjustability, not just node visibility.
+-- ---- Button binding (controller-config "Ajustes del mando" tab) ------------
+
+-- Localized name for a controller-button KeyConfigId (e.g. "KeyConfig_Controller_Btn_B"
+-- -> "botón B"). Returns nil if the id carries no Btn_ token. The token after "Btn_" is
+-- the game's canonical (Xbox-style) button id, the SAME regardless of the connected
+-- device — only the on-screen glyph changes. Spoken words come from the i18n layer.
+function A.button_name(keyconfigid)
+    local tok = keyconfigid:match("Btn_(.+)$")
+    if not tok then return nil end
+    return I18n.button(tok)
+end
+
+-- ---- KeyConfig resolver (controller button behind an action alias) ---------
+
+-- The mando tab's markup id IS the button (KeyConfig_Controller_Btn_X). The combat /
+-- exploration tabs use an ACTION alias (KeyConfig_Battle_HighBoost) whose physical
+-- button lives in the shared icon-data asset: the alias entry gives a DynamicAssignInputId
+-- (Battle_HighBoost), and another entry with that same dyn id carries the semantic
+-- controller button (DynamicAssignInputControllerId = Controller_Btn_L3). We build both
+-- lookups once from that asset (159 structs) and cache them. The KEYBOARD key is NOT in
+-- any readable data (the game uses a proprietary input system, and PlayerInput's
+-- ActionMappings are empty), so only the controller button is recoverable.
+local ICON_DATA = "/Game/CFramework/DataAssets/CFTextIconData.CFTextIconData"
+local bindings -- { configToCtrl = {}, configToDyn = {}, dynToCtrl = {} } or nil
+
+local function struct_str(e, field)
+    local ok, v = pcall(function() return e[field] end)
+    if not ok or v == nil then return "" end
+    if type(v) == "userdata" then
+        local oks, s = pcall(function() return v:ToString() end)
+        return oks and s or ""
+    end
+    return tostring(v)
+end
+
+local function build_bindings()
+    local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {} }
+    local ico = StaticFindObject(ICON_DATA)
+    if not Core.valid(ico) then return m end
+    local arr = ico.KeyConfigList
+    local n = 0
+    pcall(function() n = #arr end)
+    for i = 1, n do
+        local e = arr[i]
+        if e then
+            local cn = struct_str(e, "ConfigName")
+            local dyn = struct_str(e, "DynamicAssignInputId")
+            local ctrl = struct_str(e, "DynamicAssignInputControllerId")
+            if cn ~= "" and ctrl ~= "" then m.configToCtrl[cn] = ctrl end
+            if cn ~= "" and dyn ~= "" then m.configToDyn[cn] = dyn end
+            if dyn ~= "" and ctrl ~= "" and not m.dynToCtrl[dyn] then m.dynToCtrl[dyn] = ctrl end
+        end
+    end
+    return m
+end
+
+-- Drop the cached map so the next resolve rebuilds it (call on options-screen entry,
+-- since rebinding a controller button changes the mapping).
+function A.clear_binding_cache() bindings = nil end
+
+-- The controller button (e.g. "Controller_Btn_L3") an action-alias KeyConfigId maps to,
+-- or nil. Direct button ids are handled by button_name, not here.
+local function resolve_ctrl(configId)
+    if not bindings then bindings = build_bindings() end
+    local ctrl = bindings.configToCtrl[configId]
+    if ctrl then return ctrl end
+    local dyn = bindings.configToDyn[configId]
+    return dyn and bindings.dynToCtrl[dyn] or nil
+end
+
+-- The KeyConfigId in a row's RICH text markup (Txt_Mode.ExMainTxt, a
+-- CFExtendRichTextBlock): <inputicon KeyConfigId="KeyConfig_Controller_Btn_X"/>.
+-- Only the tab that shows this glyph has ExMainTxt visible (other tabs show a plain
+-- value in mainTxt and leave stale markup here), so gate on visibility to avoid
+-- recycled-row bleed. Returns the raw KeyConfigId, or nil.
+function A.row_keyconfig(row)
+    local tm = row.Txt_Mode
+    if not Core.valid(tm) then return nil end
+    local rich = tm.ExMainTxt
+    if not Core.is_visible(rich) then return nil end
+    local ok, s = pcall(function() return rich.Text:ToString() end)
+    if not ok or not s then return nil end
+    return s:match('KeyConfigId="([^"]+)"')
+end
+
+-- The controller button an action is bound to, spoken. On the mando tab the id IS the
+-- button → spoken plainly ("botón A"), since that tab configures the controller. On the
+-- combat/exploration tabs the id is an action alias whose on-screen glyph is the KEYBOARD
+-- key (not recoverable); we resolve the controller EQUIVALENT and label it "mando: ..."
+-- so it isn't mistaken for the literal key. nil if the row carries no binding.
+function A.row_binding(row)
+    local kc = A.row_keyconfig(row)
+    if not kc then return nil end
+    local direct = A.button_name(kc)
+    if direct then return direct end
+    local ctrl = resolve_ctrl(kc)
+    local name = ctrl and A.button_name(ctrl)
+    return name and (I18n.t("controller_prefix") .. name) or nil
+end
+
+-- The row's current value. A button-config row exposes its binding via the rich
+-- text (checked first). Otherwise only ADJUSTABLE rows (a slider gauge, or the
+-- left/right value arrows) carry a real inline value; plain action rows leave STALE
+-- text in Txt_Mode from a previously-viewed tab (rows are recycled across tabs), so
+-- reading it would bleed e.g. a graphics value onto a button action. Gate on
+-- adjustability, not just node visibility.
 function A.row_value(row)
+    local b = A.row_binding(row)
+    if b then return b end
     local g = gauge_value(row)
     if g then return g end
     local adjustable = Core.is_visible(row.Xmenu_Arrow01_L)

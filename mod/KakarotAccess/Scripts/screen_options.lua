@@ -8,6 +8,7 @@
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
+local I18n = require("i18n")
 
 local Options = {}
 
@@ -58,6 +59,9 @@ end
 function Options.reset()
     ann:reset()
     fadStable, lastFad0Tip = 0, nil
+    -- Rebuild the KeyConfig->button map next time it's needed: a controller rebind
+    -- done in this screen changes the mapping.
+    A.clear_binding_cache()
 end
 
 function Options.update()
@@ -87,7 +91,7 @@ function Options.update()
     end
 
     if isGuardar then
-        name = (anyRow and Core.text_of(anyRow.Txt_Enter)) or "Guardar cambios"
+        name = (anyRow and Core.text_of(anyRow.Txt_Enter)) or I18n.t("save_changes")
         value = nil
     end
 
