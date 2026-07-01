@@ -1,0 +1,21 @@
+# Build outputs / binaries (rebuilt by src/prism_bridge/build.ps1)
+libs/lua54/lua54.lib
+*.obj
+*.exp
+*.pdb
+
+# Vendored runtime DLLs deployed into the mod (not source)
+mod/KakarotAccess/Scripts/prism_bridge.dll
+mod/KakarotAccess/Scripts/prism.dll
+mod/KakarotAccess/Scripts/tolk.dll
+
+# PRISM prebuilt binaries (downloaded release, not source)
+libs/prism/bin/
+libs/prism/lib/
+
+# Dev discovery dumps (written at runtime by discover.lua)
+mod/KakarotAccess/Scripts/dump.txt
+mod/KakarotAccess/Scripts/probe.txt
+
+# Scratch
+*.log
