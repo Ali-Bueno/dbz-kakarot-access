@@ -13,6 +13,13 @@ local adapters = {}
 local active = nil
 local enabled = false
 
+-- Switch debounce: a screen must be the top active adapter for this many consecutive
+-- polls before we commit to it. Stops a screen that's active for only a moment from
+-- announcing — e.g. the title menu flashing on-screen for a tick at boot right before the
+-- "Checking system data…" dialog appears (which would blurt "Main menu, Continue" first).
+local CONFIRM_TICKS = 2
+local pending, pending_n = nil, 0
+
 function Registry.register(adapter)
     adapters[#adapters + 1] = adapter
 end
@@ -24,20 +31,31 @@ local function step()
     end
 
     if cur ~= active then
-        -- Context change: reset both so nothing leaks across the switch and the
+        -- Wait for the switch to be stable before committing; during the wait we announce
+        -- nothing (neither the old nor the candidate screen). An adapter may ask for a
+        -- longer confirm via `confirm_ticks` — the title menu does, so it doesn't blurt
+        -- "Main menu, Continue" in the short gaps between boot dialogs (Checking system
+        -- data / do not turn off / Saving data) where it's briefly the only screen up.
+        local need = (cur and cur.confirm_ticks) or CONFIRM_TICKS
+        if cur ~= pending then pending, pending_n = cur, 1 return end
+        pending_n = pending_n + 1
+        if pending_n < need then return end
+        -- Context change confirmed: reset both so nothing leaks across the switch and the
         -- newly focused screen announces its current control fresh.
         if active and active.reset then active.reset() end
         if cur and cur.reset then cur.reset() end
-        active = cur
+        active, pending, pending_n = cur, nil, 0
+    else
+        pending, pending_n = nil, 0
     end
 
-    if cur then cur.update() end
+    if active then active.update() end
 end
 
 function Registry.start()
     if enabled then return end
     enabled = true
-    active = nil
+    active, pending, pending_n = nil, nil, 0
     Core.loop(step, function() return enabled end)
 end
 

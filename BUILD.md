@@ -63,6 +63,16 @@ pwsh -File src\prism_bridge\build.ps1
 3. **F9** → speaks the player's X/Y/Z world position — validates reading live game state.
 4. **Ctrl+F8** → silence.
 
+## Conventions
+
+- **Dumps live with the source.** Discovery dumps (F7 → `discover.lua`) are always written to
+  `mod/KakarotAccess/Scripts/dumps/` as `dump_<time>_<NNN>.txt`. Always call them **dumps** (one
+  consistent name — not "probes"). Only the mod itself runs from the game folder, via the
+  `Scripts` junction; nothing gets copied there by hand.
+- **Screenshots** the user takes of unread screens are always in
+  `C:\Users\ali-b\Pictures\Screenshots` (`Captura de pantalla (N).png`). Pick the most recent by
+  mtime to match the current session's dumps.
+
 ## Iterate (no game restart)
 
 Edit `mod/KakarotAccess/Scripts/*.lua`, then press **Ctrl+R** in the UE4SS console to hot-reload.

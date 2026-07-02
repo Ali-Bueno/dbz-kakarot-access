@@ -15,11 +15,17 @@ local I18n = require("i18n")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
--- adapter). Order: choice-list > plain dialog > options submenu > title (base/fallback).
--- The choice list must precede the dialog: the difficulty window shows both a Txt_Detail
--- prompt (dialog) and the option list, and the list reading is the useful one.
+-- adapter). Order: choice-list > dialog > loading > tutorial > pause > options > title.
+-- Notes on the ordering:
+--  * the choice list precedes the dialog: the difficulty window shows both a Txt_Detail
+--    prompt (dialog) and the option list, and the list reading is the useful one;
+--  * a confirmation dialog can pop over the pause menu, so dialog precedes pause;
+--  * "View Controls" opens the tutorial ON TOP of the pause menu, so tutorial precedes pause.
 Registry.register(require("screen_choicelist"))
 Registry.register(require("screen_dialog"))
+Registry.register(require("screen_loading"))
+Registry.register(require("screen_tutorial"))
+Registry.register(require("screen_pause"))
 Registry.register(require("screen_options"))
 Registry.register(require("screen_title"))
 

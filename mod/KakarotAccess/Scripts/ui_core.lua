@@ -29,6 +29,31 @@ function Core.is_visible(o)
     return ok and v == true
 end
 
+-- ESlateVisibility values whose subtree is NOT rendered: an ancestor set to either
+-- hides everything below it, even though each child's own IsVisible() still returns
+-- true. (1 = Collapsed, 2 = Hidden.)
+local NOT_RENDERED = { [1] = true, [2] = true }
+
+-- Robust "actually on screen" test. IsVisible() reflects only a widget's OWN slate
+-- visibility, so in this game a POOLED/closed window (collapsed at some ancestor) keeps
+-- reporting its children as visible — stale "Yes/No", "Saving…", difficulty prompts, etc.
+-- look on-screen and make an adapter latch on, shadowing the screen that's really up.
+-- So on top of IsVisible() we walk the parent chain and reject if any ancestor is
+-- Collapsed/Hidden. Cheap: a handful of GetParent()/GetVisibility() calls, only for the
+-- few widgets an adapter probes per tick.
+function Core.on_screen(o)
+    if not Core.is_visible(o) then return false end
+    local cur, depth = o, 0
+    while depth < 8 do
+        local okp, p = pcall(function() return cur:GetParent() end)
+        if not okp or not Core.valid(p) then break end
+        local oke, e = pcall(function() return p:GetVisibility() end)
+        if oke and NOT_RENDERED[tonumber(e) or -1] then return false end
+        cur, depth = p, depth + 1
+    end
+    return true
+end
+
 -- Text out of an Xcmn_MultiLineText_C node (its inner CFUIMultiLineTextBox is
 -- `mainTxt`). Empty string counts as nil (recycled rows keep stale hidden text).
 function Core.text_of(node)
@@ -40,15 +65,66 @@ function Core.text_of(node)
     return nil
 end
 
--- First live (runtime, not archetype/CDO) instance of a class.
+-- First live (runtime, not archetype/CDO) instance of a class. PREFERS the shared
+-- top-level widget — a DIRECT child of the GameInstance (…BP_ATGameInstance_C_0.<Name>) —
+-- over a nested/pooled copy inside another screen's WidgetTree. This matters for classes
+-- with several live instances (e.g. Xcmn_Win01_C exists both as the real message window
+-- and as a collapsed copy under a quest screen): the adapters want the top-level one, and
+-- caching the nested copy would make the screen never detect as on-screen.
 function Core.first_live(cls_name)
     local all = FindAllOf(cls_name) or {}
+    local fallback
     for _, o in pairs(all) do
-        if Core.valid(o) and o:GetFullName():find("/Engine/Transient", 1, true) then
-            return o
+        if Core.valid(o) then
+            local fn = o:GetFullName()
+            if fn:find("/Engine/Transient", 1, true) then
+                if fn:match("BP_ATGameInstance_C_%d+%.[%w_]+$") then return o end
+                fallback = fallback or o
+            end
         end
     end
-    return nil
+    return fallback
+end
+
+-- Persistent live-instance cache — the PERFORMANCE-critical path for screen detection.
+--
+-- FindAllOf scans EVERY UObject (tens of thousands), so calling it every few ticks in
+-- each adapter (to re-detect a screen) stalls the game thread → input lag. But these
+-- container widgets are POOLED: once created they persist for the session (closing a
+-- screen only Collapses it, never destroys it). So we find each class ONCE and keep the
+-- reference; per-tick detection becomes a cheap on_screen(cached) check. We only re-scan
+-- when the cached ref is gone, and when a class isn't present yet we back off (a screen
+-- that hasn't appeared shouldn't cost a full scan every tick).
+local live_cache, live_backoff = {}, {}
+local ABSENT_BACKOFF = 20   -- ticks (~2s at 100ms) between scans for a not-yet-present class
+
+function Core.cached_live(cls_name, tick)
+    local c = live_cache[cls_name]
+    if Core.valid(c) then return c end
+    if tick and live_backoff[cls_name] and tick < live_backoff[cls_name] then return nil end
+    c = Core.first_live(cls_name)
+    live_cache[cls_name] = c
+    if not c and tick then live_backoff[cls_name] = tick + ABSENT_BACKOFF end
+    return c
+end
+
+-- Persistent FindAllOf-LIST cache. FindAllOf(cls) scans EVERY UObject on each call, so an
+-- adapter that iterates a class every tick (dialog choices, tutorial text boxes, list
+-- items) pays a full-array scan every 100ms → game-thread stall. These widget POOLS are
+-- essentially static, so we cache the list and only re-scan every REFRESH_EVERY ticks to
+-- pick up any newly-created pooled instances. Callers still validity/visibility-check each
+-- returned widget, so stale entries are harmless. Returns the cached Lua array.
+local all_cache, all_next = {}, {}
+local REFRESH_EVERY = 30   -- ticks (~3s) between full re-scans of a class list
+
+function Core.cached_all(cls_name, tick)
+    local c = all_cache[cls_name]
+    if not c or (tick and (not all_next[cls_name] or tick >= all_next[cls_name])) then
+        c = FindAllOf(cls_name) or {}
+        all_cache[cls_name] = c
+        if tick then all_next[cls_name] = tick + REFRESH_EVERY end
+    end
+    return c
 end
 
 -- Join non-empty parts with commas, skipping nils in ANY position.

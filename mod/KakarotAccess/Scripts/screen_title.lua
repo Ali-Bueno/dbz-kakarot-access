@@ -12,19 +12,27 @@ local I18n = require("i18n")
 
 local Title = {}
 
+-- The title is the fallback screen and stays on-screen behind boot dialogs, the intro
+-- cinematic, and the New Game → load transition, so require a longer stable window before
+-- announcing it — otherwise it blurts "Main menu, Continue" in those gaps. (Gaps longer
+-- than this still leak; a movie/fade-aware suppression is the proper fix, pending a dump.)
+Title.confirm_ticks = 15
+
 local OPTION_COUNT = 6
-local REACQUIRE_EVERY = 10
 
 local ann = Core.make_announcer()
 local gt = nil
 local tick = 0
 
-local function acquire() gt = Core.first_live("Gametitle_C") end
-
 function Title.is_active()
     tick = tick + 1
-    if not Core.valid(gt) and tick % REACQUIRE_EVERY == 0 then acquire() end
-    return Core.valid(gt) and Core.is_visible(gt)
+    gt = Core.cached_live("Gametitle_C", tick)   -- cheap: cached ref, no per-tick scan
+    if not Core.on_screen(gt) then return false end
+    -- Only when the title is truly INTERACTIVE (ESlateVisibility.Visible == 0). During the
+    -- intro cinematic the title is on-screen but HitTestInvisible (enum 3) — rendered, not
+    -- usable — so we must not blurt "Main menu" over the movie.
+    local ok, v = pcall(function() return gt:GetVisibility() end)
+    return ok and tonumber(v) == 0
 end
 
 function Title.reset() ann:reset() end

@@ -14,20 +14,16 @@ local A = require("ui_archetypes")
 
 local Choice = {}
 
-local REACQUIRE_EVERY = 3
-
 local ann = Core.make_announcer()
 local win = nil
 local tick = 0
 
-local function acquire() win = Core.first_live("Xcmn_Win01_C") end
-
--- Live, visible option items with a non-empty label.
+-- On-screen option items (on_screen, not IsVisible — pooled list rows stay IsVisible
+-- under a collapsed window) with a non-empty label.
 local function options()
     local list = {}
-    for _, it in pairs(FindAllOf("Xcmn_Win01_List_C") or {}) do
-        if Core.valid(it) and it:GetFullName():find("/Engine/Transient", 1, true)
-           and Core.is_visible(it) then
+    for _, it in pairs(Core.cached_all("Xcmn_Win01_List_C", tick)) do
+        if it:GetFullName():find("/Engine/Transient", 1, true) and Core.on_screen(it) then
             local label = Core.text_of(it.Txt_Item)
             if label then list[#list + 1] = { it = it, label = label } end
         end
@@ -45,10 +41,8 @@ end
 
 function Choice.is_active()
     tick = tick + 1
-    if (not Core.valid(win) or not Core.is_visible(win)) and tick % REACQUIRE_EVERY == 0 then
-        acquire()
-    end
-    if not (Core.valid(win) and Core.is_visible(win)) then return false end
+    win = Core.cached_live("Xcmn_Win01_C", tick)   -- cheap: cached ref, no per-tick scan
+    if not Core.on_screen(win) then return false end
     return selected(options()) ~= nil
 end
 

@@ -12,7 +12,6 @@ local I18n = require("i18n")
 
 local Options = {}
 
-local REACQUIRE_EVERY = 10
 local GUARDAR_STABLE = 2   -- ticks the keyhelp must settle before the fad==0 case is Guardar
 
 local ann = Core.make_announcer()
@@ -36,24 +35,23 @@ local function tooltip()
     return nil
 end
 
-local function acquire()
-    opt, rows = nil, {}
-    opt = Core.first_live("Start_Option_C")
-    if not opt then return end
-    local rr = FindAllOf("Xlist_Bar03_C") or {}
-    for _, r in pairs(rr) do
+-- Rescan the option rows (pooled Xlist_Bar03_C filtered to this screen). Only called when
+-- the menu is on screen and the cached rows are gone, so it runs ~once per entry.
+local function refresh_rows()
+    rows = {}
+    for _, r in pairs(FindAllOf("Xlist_Bar03_C") or {}) do
         if Core.valid(r) and r:GetFullName():find("Start_Option_C", 1, true) then
             rows[#rows + 1] = r
         end
     end
 end
 
-local function ready() return Core.valid(opt) and rows[1] ~= nil and Core.valid(rows[1]) end
-
 function Options.is_active()
     tick = tick + 1
-    if not ready() and tick % REACQUIRE_EVERY == 0 then acquire() end
-    return ready() and Core.is_visible(opt)
+    opt = Core.cached_live("Start_Option_C", tick)   -- cheap: cached ref, no per-tick scan
+    if not Core.on_screen(opt) then return false end
+    if not (rows[1] and Core.valid(rows[1])) then refresh_rows() end
+    return rows[1] ~= nil and Core.valid(rows[1])
 end
 
 function Options.reset()
