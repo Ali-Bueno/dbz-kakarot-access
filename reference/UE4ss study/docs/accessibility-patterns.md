@@ -279,6 +279,101 @@ end)
 
 ---
 
+## 8. Detecting UI/state changes: hooks vs polling
+
+Prefer **event-driven** over polling — it's cheaper and more responsive:
+
+1. **Level/mode changes** → `RegisterLoadMapPostHook`, `RegisterBeginPlayPostHook`,
+   `RegisterInitGameStatePostHook`.
+2. **A screen/widget appearing** → `NotifyOnNewObject("/Script/UMG.UserWidget", cb)` (fires per
+   construction, subclasses included). Cache the ref on first sight.
+3. **A value/text/selection changing** → `RegisterHook` on the game's setter (e.g. a `SetText`-equivalent
+   or a cursor-move UFunction). Fires for **all instances** of the class; `self` is the instance. Read
+   wrapped params with `param:Get()`.
+
+**When you must poll** (no usable hook — many custom-engine UIs, e.g. CyberConnect2, expose no stable
+setter): keep it cheap and diff-gated. See the caching + busy-guard rules below.
+
+---
+
+## 9. Hard-won lessons (real bugs, from a UE4.21 CC2 game)
+
+These cost real debugging time — internalize them.
+
+### `IsVisible()` LIES → check the ancestor chain
+`UWidget:IsVisible()` reflects only a widget's **own** slate visibility. A pooled/closed window is usually
+Collapsed at some **ancestor**, but each child still returns `IsVisible()==true`. So a naive
+"is this on screen" check latches onto stale "Yes/No"/"Saving…" widgets and the wrong adapter wins.
+**Fix — an `on_screen()` helper:** `IsVisible()` AND walk `GetParent()` up rejecting any ancestor whose
+`GetVisibility()` is `Collapsed(1)` or `Hidden(2)`.
+```lua
+local NOT_RENDERED = { [1]=true, [2]=true }  -- ESlateVisibility Collapsed / Hidden
+function on_screen(o)
+    if not (o and o:IsValid() and o:IsVisible()) then return false end
+    local cur, depth = o, 0
+    while depth < 8 do
+        local ok, p = pcall(function() return cur:GetParent() end)
+        if not ok or not p or not p:IsValid() then break end
+        local oe, e = pcall(function() return p:GetVisibility() end)
+        if oe and NOT_RENDERED[tonumber(e) or -1] then return false end
+        cur, depth = p, depth + 1
+    end
+    return true
+end
+```
+`GetVisibility()` returns an ESlateVisibility (`0 Visible, 1 Collapsed, 2 Hidden, 3 HitTestInvisible,
+4 SelfHitTestInvisible`). **`0 Visible` = interactive; `3 HitTestInvisible` = rendered but NOT interactive**
+(e.g. a menu shown behind an intro cinematic). Gate "the user is actually here" on `enum == 0`.
+
+### Widgets are POOLED → cache refs, never re-scan
+Containers persist for the session (closing only Collapses them). So `FindAllOf` them **once**, keep the
+ref, and re-scan only when the cached ref is invalid. `FindAllOf` is O(all UObjects); calling it per tick
+per adapter is what causes input lag. Two caches pay off massively:
+```lua
+-- one live ref per class, re-found only when it dies:
+function cached_live(cls)  -- pooled top-level widget persists → ~1 scan per session
+  local c = LIVE[cls]; if c and c:IsValid() then return c end
+  c = first_live(cls); LIVE[cls] = c; return c
+end
+-- a whole FindAllOf list, refreshed every ~30 ticks (pools are static):
+function cached_all(cls, tick) ... end
+```
+Prefer the **top-level instance** (direct GameInstance child) when a class has several live copies (a real
+window + a nested collapsed one) — caching the wrong one makes detection silently fail.
+
+### Some property reads ABORT UNCATCHABLY (pcall can't save you)
+Calling a method on a null/dangling UObject, and **nested struct reads like `widget.RenderTransform
+.Translation.X`**, can hard-abort the whole `ExecuteInGameThread` — pcall does NOT catch it. Guard **every
+level** with `:IsValid()` first, and avoid RenderTransform/struct-field reads in throwaway dumpers. When a
+dev dump keeps truncating, add a **breadcrumb + flush before** each risky read so the last line names the
+culprit.
+
+### Poll busy-guard (no backlog)
+`LoopAsync` fires on a worker thread and queues `ExecuteInGameThread` **without waiting**. On a busy game
+thread (loading, a movie) those pile into a backlog that runs late in bursts → huge input-to-speech lag.
+**Only queue the next step once the previous finished** (a `busy` flag). Keep per-tick work cheap; compute
+state once and reuse within the tick.
+
+### Debounce transitions
+- **Screen-switch debounce:** require a screen to be the top active adapter for N consecutive polls before
+  announcing, so a 1-tick flash (e.g. the title menu behind a boot dialog) stays quiet. Allow a per-screen
+  longer confirm for "fallback" screens (the title).
+- **Content stickiness:** for a paged reader, only commit new content when it's stable across 2 scans, and
+  never drop the cached value to nil on a transient empty scan while still on screen — otherwise a page
+  turn deactivates the screen and re-reads the old page.
+
+### Subtree matching needle
+`GetFullName()` is `"ClassName /Engine/Transient.…Path"`. To match a container's descendants, match on the
+**path** (`fullname:match("%s(.+)$")`), NOT the full name — a child's name starts with ITS own class, so
+the class-prefixed needle never matches (a subtle "reads nothing" bug).
+
+### Baked-image text is unreadable
+Some labels (e.g. a "Loading" word, control glyphs) are **textures**, not text nodes — nothing to read.
+Read the surrounding real text (tips/recap) and map glyphs by their brush-texture token if a button name
+is needed.
+
+---
+
 ## Differences from BepInEx/Unity Approach
 
 | Aspect | BepInEx (Unity) | UE4SS (Unreal) |

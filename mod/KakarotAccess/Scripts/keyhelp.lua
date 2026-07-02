@@ -26,8 +26,10 @@ local MAX_GLYPH_IMAGES = 4   -- Xcmn_Btn_Plat_C exposes Dmy_Btn_00..03 (combo gl
 -- label alone is spoken). Spoken words come from the i18n layer (I18n.keyhelp).
 
 -- The live, visible keyhelp bar (there may be stale hidden instances from other
--- screens, so prefer one that is actually on screen).
-local function keyhelp_bar()
+-- screens, so prefer one that is actually on screen). Exposed so other adapters
+-- (e.g. screen_options' tooltip) reuse the one bar-finding path instead of
+-- re-scanning Xcmn_Keyhelp_C themselves.
+function Keyhelp.bar()
     local all = FindAllOf("Xcmn_Keyhelp_C") or {}
     local fallback
     for _, k in pairs(all) do
@@ -37,6 +39,14 @@ local function keyhelp_bar()
         end
     end
     return fallback
+end
+
+-- The keyhelp bar's contextual help message (Txt_Helpmsg_Main) — the one-line tooltip
+-- shown for the focused control. nil if no bar / no message. Reused as the Options
+-- menu's per-item tooltip.
+function Keyhelp.helpmsg()
+    local kh = Keyhelp.bar()
+    return kh and Core.text_of(kh.Txt_Helpmsg_Main) or nil
 end
 
 -- The last path segment of a widget's brush texture: ".../Btn_L1.Btn_L1" -> "Btn_L1".
@@ -67,7 +77,7 @@ end
 
 -- The current keyhelp entries, in on-screen order: { {label=, button=}, ... }.
 function Keyhelp.read()
-    local kh = keyhelp_bar()
+    local kh = Keyhelp.bar()
     if not kh then return {} end
     local entries = {}
     for n = 1, MAX_ENTRIES do

@@ -9,6 +9,7 @@
 local Core = require("ui_core")
 local A = require("ui_archetypes")
 local I18n = require("i18n")
+local Keyhelp = require("keyhelp")
 
 local Options = {}
 
@@ -21,19 +22,12 @@ local tick = 0
 local fadStable = 0
 local lastFad0Tip = nil
 
--- Fresh keyhelp lookup (the keyhelp bar is recreated on context changes, so it is
--- never cached). Passed to the Announcer as a lazy getter → only called on focus
--- changes / while a tooltip is pending, not every tick.
-local function tooltip()
-    local all = FindAllOf("Xcmn_Keyhelp_C") or {}
-    for _, k in pairs(all) do
-        if Core.valid(k) and k:GetFullName():find("/Engine/Transient", 1, true) then
-            local t = Core.text_of(k.Txt_Helpmsg_Main)
-            if t then return t end
-        end
-    end
-    return nil
-end
+-- The focused control's contextual tooltip is the keyhelp bar's help message. Reuse the
+-- shared Keyhelp reader (single Xcmn_Keyhelp_C-finding path) rather than re-scanning here.
+-- Passed to the Announcer as a lazy getter → only called on focus changes / while a
+-- tooltip is pending, not every tick. The bar is recreated on context changes, so it is
+-- never cached; each call reads it fresh.
+local tooltip = Keyhelp.helpmsg
 
 -- Rescan the option rows (pooled Xlist_Bar03_C filtered to this screen). Only called when
 -- the menu is on screen and the cached rows are gone, so it runs ~once per entry.

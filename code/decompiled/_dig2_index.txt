@@ -1,0 +1,85 @@
+CALLERS of 0x1416f7bd0: 59
+   1416d13e0
+   1411e8b70
+   14166d2d0
+   14166d4e0
+   14166db70
+   141613140
+   14163e1c0
+   141667620
+   141657610
+   140fca0e0
+   14163bd10
+   1415c7ea0
+   141525270
+   1415ed270
+   1415ed370
+   141178300
+   14118f940
+   14163c3b0
+   1411af020
+   1411afe10
+   1411d6170
+   1411d6bb0
+   141695b80
+   14128bea0
+   14128cb00
+   1416d1370
+   14140d220
+   1416132b0
+   1414cbba0
+   1414d75e0
+   1414c9210
+   1414e24f0
+   14158b7c0
+   14159c330
+   1416123f0
+   14163be40
+   14164fda0
+   141652240
+   141692240
+   141694d30
+   1416951a0
+   141695bd0
+   1416b6b00
+   1416b6b60
+   1416c38a0
+   1416c7860
+   1416c79d0
+   1416c7ab0
+   1416d4720
+   1417c2960
+   1419ee500
+   141d008b0
+   141ce4950
+   141ce6e60
+   14169ed10
+   141148630
+   1412e1450
+   1416f7b30
+   141521250
+UFUNC In_Curs: strs=9 impls=3
+   impl 1417b9d40
+   impl 14203aad0
+   impl 1417bb1c0
+UFUNC Sys_In_Curs: strs=3 impls=3
+   impl 1417b9e00
+   impl 14203aad0
+   impl 1417bad80
+UFUNC Com_In_Curs: strs=3 impls=3
+   impl 1417b9c20
+   impl 14203aad0
+   impl 1417bad80
+UFUNC Out_Curs: strs=10 impls=3
+   impl 1417b9dd0
+   impl 14203aad0
+   impl 1417bb440
+UFUNC Sys_Out_Curs: strs=3 impls=3
+   impl 1417b9e90
+   impl 14203aad0
+   impl 1417bade0
+UFUNC CheckHovered: strs=61 impls=0
+UFUNC OnEnterAnimEnd: strs=3 impls=2
+   impl 1417c2740
+   impl 1454f25f0
+UFUNC MouseClickDecide: strs=61 impls=0

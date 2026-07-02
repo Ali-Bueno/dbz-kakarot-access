@@ -26,8 +26,13 @@ local CONTAINERS = {
     "Xcmn_Win00_C", "Xcmn_Win01_C",
     "Xcmn_Win00_Choice_C", "Xcmn_Win01_List_C",
     "Xcmn_Pause_C",
+    -- field / overworld pause (Start menu) — a different widget from the battle pause.
+    "Start_Top_C", "Start_Menu_C", "Start_Sub_C",
     "Loading_C", "Tips_C",
     "Battle_Tips_Tutorial_C",
+    -- dialogue surfaces: check whether a faded battle voice line stays on_screen with stale
+    -- text and shadows the pause menu (screen_dialogue is registered above the menus).
+    "Xcmn_Subtitles_C", "Field_Talk_Win_C",
     "Gametitle_C", "Start_Option_C",
     -- transition/save-overlay suspects: to find a signal that suppresses the title menu
     -- while a save/fade is happening over it (when the title is enum 0 but not "the menu").
@@ -170,76 +175,195 @@ function Discover.run()
             if not any then out[#out + 1] = "-- " .. cls .. "  (not present)" ; flush() end
         end
 
-        -- 2) PAUSE MENU — wide dump to find the selected-row discriminator ------------
+        -- 2c) TUTORIAL rows: the raw button-glyph markup (Txt_Btn plain + rich + reflected
+        --     GetText) + action, so we can see where the glyph lives and why it isn't
+        --     resolving to a button name. Runs BEFORE the pause section, which can truncate.
         out[#out + 1] = ""
-        out[#out + 1] = "==== pause menu (find the SELECTED-row discriminator) ===="
+        out[#out + 1] = "==== tutorial rows (Txt_Btn plain/rich/gettext + Txt_Operat) ===="
         flush()
-        local pause = nil
-        for _, o in pairs(FindAllOf("Xcmn_Pause_C") or {}) do if live(o) then pause = o break end end
-        if not valid(pause) then
-            out[#out + 1] = "  (Xcmn_Pause_C not present)"
+        local tut = nil
+        for _, o in pairs(FindAllOf("Battle_Tips_Tutorial_C") or {}) do if live(o) then tut = o break end end
+        if not valid(tut) then
+            out[#out + 1] = "  (Battle_Tips_Tutorial_C not present)"
+            out[#out + 1] = "  tutorial container enum=" .. (valid(tut) and vis_enum(tut) or "n/a")
         else
-            -- 2a) the container: all props + animation states
-            out[#out + 1] = "-- Xcmn_Pause_C props/anims:"
-            for _, a in ipairs({ "In", "Out", "Loop" }) do
-                out[#out + 1] = string.format("     anim %-6s playing=%s", a, anim_playing(pause, a))
+            out[#out + 1] = "  tutorial container enum=" .. vis_enum(tut) .. " isvis=" .. isvis(tut)
+            local function rich_of(node)
+                if not (valid(node) and valid(node.ExMainTxt)) then return "" end
+                local ok, s = pcall(function() return node.ExMainTxt.Text:ToString() end)
+                return ok and s or ""
             end
-            pcall(function()
-                pause:GetClass():ForEachProperty(function(prop)
-                    local t = "?"; pcall(function() t = prop:GetClass():GetFName():ToString() end)
-                    if SCALAR[t] then
-                        local pn = prop:GetFName():ToString()
-                        local okv, v = pcall(function() return pause[pn] end)
-                        if okv and v ~= nil then
-                            out[#out + 1] = string.format("     %s = %s (%s)", pn, tostring(v), t)
-                        end
-                    end
-                end)
-            end)
-            flush()
-            -- 2b) each List_Bar: label + xform + colour + all scalars + all image children
-            for i = 0, 4 do
-                local bar = pause["List_Bar0" .. i]
-                if valid(bar) then
-                    out[#out + 1] = string.format("-- List_Bar0%d", i)
-                    flush()   -- breadcrumb BEFORE the risky node reads, so a crash names the bar
-                    -- NOTE: RenderTransform (xform) aborts uncatchably on these rows → omitted.
-                    out[#out + 1] = string.format("   txt=%q  vis=%s  enum=%s  op=%s  color=%s",
-                        node_text(bar.Txt_List), isvis(bar), vis_enum(bar), opacity(bar),
-                        label_color(bar.Txt_List))
-                    pcall(function()
-                        bar:GetClass():ForEachProperty(function(prop)
-                            local t = "?"; pcall(function() t = prop:GetClass():GetFName():ToString() end)
-                            local pn = prop:GetFName():ToString()
-                            if SCALAR[t] then
-                                local okv, v = pcall(function() return bar[pn] end)
-                                if okv and v ~= nil then
-                                    out[#out + 1] = string.format("      %-22s %s = %s", pn, t, tostring(v))
-                                end
-                            elseif t == "ObjectProperty" then
-                                local okc, child = pcall(function() return bar[pn] end)
-                                if okc and valid(child) and cname(child) == "Image" then
-                                    out[#out + 1] = string.format("      %-22s img vis=%-5s op=%s colA=%s brush=%s",
-                                        pn, isvis(child), opacity(child), color_a(child), brush_of(child))
-                                end
-                            end
-                        end)
-                    end)
+            local function gettext_of(node)
+                if not valid(node) then return "" end
+                local ok, s = pcall(function() return node:GetText():ToString() end)
+                return ok and s or ""
+            end
+            for i = 0, 8 do
+                local row = tut["Battle_Tips_List_0" .. i]
+                if valid(row) then
+                    out[#out + 1] = string.format("  row %d  vis=%s enum=%s  operat=%q",
+                        i, isvis(row), vis_enum(row), node_text(row.Txt_Operat))
+                    out[#out + 1] = string.format("        btn_plain=%q  btn_rich=%q  btn_gettext=%q",
+                        node_text(row.Txt_Btn), rich_of(row.Txt_Btn), gettext_of(row.Txt_Btn))
                     flush()
                 end
             end
-            -- 2c) EVERY widget under the pause instance (catch a separate moving cursor).
-            -- Needle is the object PATH (GetFullName minus the leading "ClassName "), since
-            -- a child's own full name starts with ITS class, not the pause's.
-            out[#out + 1] = "-- all widgets under pause (class | short | vis | enum | xform | brush):"
-            local full = pause:GetFullName()
-            local pfx = full:match("%s(.+)$") or full
-            for _, cls in ipairs({ "UserWidget", "Image" }) do
-                for _, w in pairs(FindAllOf(cls) or {}) do
-                    if valid(w) and w:GetFullName():find(pfx, 1, true) then
-                        out[#out + 1] = string.format("      %-24s %-30s vis=%-5s enum=%-20s brush=%s",
-                            cname(w), short(w:GetFullName()), isvis(w), vis_enum(w),
-                            cname(w) == "Image" and brush_of(w) or "-")
+        end
+
+        -- 2) PAUSE MENU — container-level only. The old per-row deep dive (List_Bar props +
+        -- all-widgets enumeration) HALTS the dump on this game (a List_Bar00 read aborts), and
+        -- pause selection is already handled via the cursor-glow alpha, so only the safe
+        -- container/enum + per-bar glow alpha is reported now.
+        out[#out + 1] = ""
+        out[#out + 1] = "==== pause menu (container + per-bar glow alpha) ===="
+        flush()
+        do
+            local pause = nil
+            for _, o in pairs(FindAllOf("Xcmn_Pause_C") or {}) do if live(o) then pause = o break end end
+            if not valid(pause) then
+                out[#out + 1] = "  (Xcmn_Pause_C not present)"
+            else
+                -- Probe several candidate "selected row" signals side by side so one dump
+                -- reveals which (if any) diverges on the highlighted row: the two cursor-glow
+                -- images' alpha + render opacity, and the PnlCursEff border content alpha.
+                local function content_a(o)
+                    local ok, v = pcall(function() return o.ContentColorAndOpacity.A end)
+                    return ok and v ~= nil and string.format("%.2f", v) or "-"
+                end
+                local function brush_a(o)  -- UBorder.BrushColor alpha
+                    local ok, v = pcall(function() return o.BrushColor.A end)
+                    return ok and v ~= nil and string.format("%.2f", v) or "-"
+                end
+                out[#out + 1] = string.format("  Xcmn_Pause_C enum=%s isvis=%s", vis_enum(pause), isvis(pause))
+                for i = 0, 4 do
+                    local bar = pause["List_Bar0" .. i]
+                    if valid(bar) then
+                        -- PnlCursEff (the cursor Border) is the prime suspect: cA=content alpha,
+                        -- bA=brush alpha, op=render opacity. Plus the two glow images' alpha.
+                        out[#out + 1] = string.format(
+                            "  Bar%d enum=%s | eff00 A=%s eff01 A=%s | pnl cA=%s bA=%s op=%s | barOp=%s",
+                            i, vis_enum(bar),
+                            color_a(bar.Ins_Curs_Hexa_Eff00), color_a(bar.Ins_Curs_Hexa_Eff01),
+                            content_a(bar.PnlCursEff), brush_a(bar.PnlCursEff), opacity(bar.PnlCursEff),
+                            opacity(bar))
+                    end
+                end
+            end
+            flush()
+        end
+
+        -- 2c) FIELD PAUSE (Start_Top_C) — the overworld ring menu (different widget from the
+        -- battle pause). Labels are image-font (no text); the icon brush texture identifies each
+        -- option and Ins_List_On / the cursor images mark the selected one. Also dump native
+        -- header text in case the current option's name appears there.
+        out[#out + 1] = ""
+        out[#out + 1] = "==== field pause Start_Top_C (ring) ===="
+        flush()
+        do
+            local st = nil
+            for _, o in pairs(FindAllOf("Start_Top_C") or {}) do if live(o) then st = o break end end
+            if not valid(st) then
+                out[#out + 1] = "  (Start_Top_C not present)"
+                flush()
+            else
+                out[#out + 1] = string.format("  Start_Top_C enum=%s isvis=%s", vis_enum(st), isvis(st))
+                flush()
+                -- Every access wrapped in pcall that CAPTURES the error string (the game does NOT
+                -- crash — a failed read is a catchable Lua error), so the dump never stops and we
+                -- learn WHY each read fails (usually a wrong property name).
+                local function tryget(obj, field)
+                    local ok, v = pcall(function() return obj[field] end)
+                    if not ok then return nil, tostring(v) end
+                    return v, nil
+                end
+                local function readimg(obj, field)
+                    local child, err = tryget(obj, field)
+                    if err then return field .. " ERR(" .. err .. ")" end
+                    if child == nil then return field .. "=nil" end
+                    return string.format("%s vis=%s brush=%s", field, isvis(child), brush_of(child))
+                end
+                local hdr, herr = tryget(st, "UIXCmnHeader")
+                out[#out + 1] = "  UIXCmnHeader = " .. (herr and ("ERR(" .. herr .. ")") or tostring(hdr and valid(hdr)))
+                flush()
+                if valid(hdr) then
+                    -- Named reads (from AT.hpp UAT_UIXCmnHeader) — each pcall'd via readimg, so a
+                    -- wrong name prints ERR(...) and the dump keeps going instead of stopping.
+                    for _, nm in ipairs({ "Image_HeaderFont", "Image_IconFont", "Image_Icon", "Image_IconCaption" }) do
+                        out[#out + 1] = "    hdr." .. readimg(hdr, nm)
+                        flush()
+                    end
+                end
+                -- Ring items: reflect each item's Image children + brushes (real names, pcall'd).
+                for i = 0, 6 do
+                    local it, ierr = tryget(st, "Start_Top_List0" .. i)
+                    out[#out + 1] = string.format("  List0%d = %s", i, ierr and ("ERR(" .. ierr .. ")") or tostring(it and valid(it)))
+                    flush()
+                    if valid(it) then
+                        out[#out + 1] = "    FontOn: " .. readimg(it, "Image_FontOn") .. " | Font: " .. readimg(it, "Image_Font")
+                        flush()
+                    end
+                end
+            end
+        end
+
+        -- 2d) TIPS_C nodes — the tutorial tip pages read by screen_loading. Show each text
+        -- node's PLAIN (mainTxt) + RICH (ExMainTxt) so we can see whether the control glyphs
+        -- are inline <inputicon> markup (resolvable) or separate images.
+        out[#out + 1] = ""
+        out[#out + 1] = "==== Tips_C per-window structure (validate screen_tips) ===="
+        flush()
+        do
+            local function gettext(n)
+                if not valid(n) then return "" end
+                local ok, s = pcall(function() return n:GetText():ToString() end)
+                return ok and s or ""
+            end
+            -- Slot offsets (a buffered/off-screen window should sit far off the visible area,
+            -- the current one centred) — the likeliest "which window is current" signal.
+            local function slot_pos(w)
+                local ok, s = pcall(function()
+                    local sl = w.Slot
+                    local o = sl.LayoutData.Offsets
+                    local z = "?"; pcall(function() z = tostring(sl.ZOrder) end)
+                    return string.format("L=%.0f T=%.0f Z=%s", o.Left, o.Top, z)
+                end)
+                return ok and s or "-"
+            end
+            local tips = nil
+            for _, o in pairs(FindAllOf("Tips_C") or {}) do if live(o) then tips = o break end end
+            if not valid(tips) then
+                out[#out + 1] = "  (Tips_C not present)"
+            else
+                -- The window-pointer array order (index 0 may track the current page).
+                pcall(function()
+                    local arr = tips.UITipsWin_List
+                    for i = 1, #arr do
+                        out[#out + 1] = string.format("  UITipsWin_List[%d] page=%q", i, gettext(arr[i].Txt_Page))
+                    end
+                end)
+                for _, wn in ipairs({ "Tips_Win00", "Tips_Win01" }) do
+                    local w = tips[wn]
+                    if valid(w) then
+                        out[#out + 1] = string.format("-- %s vis=%s enum=%s op=%s slot=[%s] anIn=%s anOut=%s",
+                            wn, isvis(w), vis_enum(w), opacity(w), slot_pos(w),
+                            anim_playing(w, "Anim_In"), anim_playing(w, "Anim_Out"))
+                        out[#out + 1] = string.format("   title=%q sub=%q page=%q",
+                            gettext(w.Txt_Title), gettext(w.Txt_Subtitle), gettext(w.Txt_Page))
+                        for _, cv in ipairs({ "Canvas_TextOnly", "Canvas_TextAndImage", "Canvas_KeyTips", "Canvas_BigImage" }) do
+                            out[#out + 1] = string.format("   %s vis=%s enum=%s", cv, isvis(w[cv]), vis_enum(w[cv]))
+                        end
+                        for _, d in ipairs({ "Txt_Detail00", "Txt_Detail01", "Txt_Detail03", "Txt_Detail04" }) do
+                            local t = gettext(w[d])
+                            if t ~= "" then out[#out + 1] = string.format("   %s vis=%s = %q", d, isvis(w[d]), t) end
+                        end
+                        for _, it in ipairs({ "Tips_List00_L00_00", "Tips_List00_L00_01", "Tips_List00_R00_00" }) do
+                            local item = w[it]
+                            if valid(item) then
+                                out[#out + 1] = string.format("   %s vis=%s name=%q btn=%q",
+                                    it, isvis(item), gettext(item.Txt_Detail), gettext(item.Txt_Btn))
+                            end
+                        end
+                        flush()
                     end
                 end
             end
@@ -251,6 +375,25 @@ function Discover.run()
         out[#out + 1] = "==== all visible on-screen text ===="
         flush()
         for _, o in pairs(ALLTEXT) do
+            if valid(o) then
+                local okv = pcall(function() return o:IsVisible() end)
+                if okv and o:IsVisible() == true then
+                    local ok2, s = pcall(function() return o.Text:ToString() end)
+                    if ok2 and s and s ~= "" then
+                        out[#out + 1] = string.format("  %q  <- %s", s, short(o:GetFullName()))
+                    end
+                end
+            end
+        end
+        flush()
+
+        -- 4) all visible RICH text (CFExtendRichTextBlock) — where <inputicon> glyph markup
+        --    lives. The control tutorials show a button glyph per line; this reveals whether
+        --    it's inline markup (resolvable to a button name) and in which widget subtree.
+        out[#out + 1] = ""
+        out[#out + 1] = "==== all visible RICH text (CFExtendRichTextBlock, raw markup) ===="
+        flush()
+        for _, o in pairs(FindAllOf("CFExtendRichTextBlock") or {}) do
             if valid(o) then
                 local okv = pcall(function() return o:IsVisible() end)
                 if okv and o:IsVisible() == true then

@@ -1,0 +1,56 @@
+=== SetFontType ===
+  name-string occurrences: 6
+  table @ 0x144087090  exec -> 0x1417c2960
+     impl -> 0x14204e7f0
+  table @ 0x144081ad8  exec -> 0x1417bfeb0
+     impl -> 0x14203aad0
+  wrote _ufunc_SetFontType.c (4 funcs)
+=== SetFontTypeWithCategory ===
+  name-string occurrences: 3
+  table @ 0x1440870a0  exec -> 0x1417c2a70
+     impl -> 0x14204e7f0
+  table @ 0x144081ae8  exec -> 0x1417c0380
+     impl -> 0x141f291f0
+  wrote _ufunc_SetFontTypeWithCategory.c (4 funcs)
+=== IsFinishSetFontType ===
+  name-string occurrences: 3
+  table @ 0x144087050  exec -> 0x1417c24c0
+     impl -> 0x14168f5b0
+  table @ 0x144081a98  exec -> 0x1417bfdf0
+     impl -> 0x14203aad0
+  wrote _ufunc_IsFinishSetFontType.c (4 funcs)
+=== MouseClickTabLeft ===
+  name-string occurrences: 41
+  (no exec thunk found)
+=== MouseClickTabRight ===
+  name-string occurrences: 41
+  (no exec thunk found)
+=== MouseClickDecide ===
+  name-string occurrences: 41
+  (no exec thunk found)
+=== CheckHovered ===
+  name-string occurrences: 41
+  (no exec thunk found)
+=== OnEnterAnimEnd ===
+  name-string occurrences: 3
+  table @ 0x144087170  exec -> 0x1417c2740
+  table @ 0x144083198  exec -> 0x1454f25f0
+  wrote _ufunc_OnEnterAnimEnd.c (2 funcs)
+=== GetSelectValue ===
+  name-string occurrences: 12
+  table @ 0x14401b788  exec -> 0x141799bf0
+     impl -> 0x14203aad0
+  table @ 0x14401bcb8  exec -> 0x14179a140
+     impl -> 0x14203aad0
+  table @ 0x14401c628  exec -> 0x1417992a0
+     impl -> 0x14203aad0
+  table @ 0x1440216e0  exec -> 0x14179bb20
+     impl -> 0x1415bcbc0
+  table @ 0x144022080  exec -> 0x14179bb50
+  table @ 0x1440222d0  exec -> 0x14179bb70
+     impl -> 0x1415bcbd0
+  table @ 0x144027730  exec -> 0x14179bb20
+     impl -> 0x1415bcbc0
+  table @ 0x144027128  exec -> 0x14179dbd0
+     impl -> 0x14203aad0
+  wrote _ufunc_GetSelectValue.c (10 funcs)

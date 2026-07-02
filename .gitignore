@@ -8,15 +8,20 @@ libs/lua54/lua54.lib
 mod/KakarotAccess/Scripts/prism_bridge.dll
 mod/KakarotAccess/Scripts/prism.dll
 mod/KakarotAccess/Scripts/tolk.dll
+# Native memory-reader module (rebuilt by src/mem_bridge/build.ps1)
+mod/KakarotAccess/Scripts/mem_bridge.dll
+# Lua syntax-validator (built from libs/lua54/src/luac.c)
+libs/lua54/luac.exe
 
 # PRISM prebuilt binaries (downloaded release, not source)
 libs/prism/bin/
 libs/prism/lib/
 
-# Dev discovery dumps (written at runtime by discover.lua)
+# Dev discovery dumps (written at runtime by discover.lua / dev tools)
 mod/KakarotAccess/Scripts/dump.txt
 mod/KakarotAccess/Scripts/probe.txt
 mod/KakarotAccess/Scripts/dumps/
+mod/KakarotAccess/Scripts/dev_probe.txt
 
 # Scratch
 *.log

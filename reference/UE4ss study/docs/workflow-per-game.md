@@ -32,11 +32,18 @@ Step-by-step guide for each new Unreal Engine game.
    - HUD classes
    - Menu/inventory classes
 
-### 1.3 Explore with Live Viewer
-1. Open GUI console
-2. Search for `Widget`, `HUD`, `Menu`, `Text`
-3. Note class names, property names, and function names
-4. Watch property values change as you navigate the game
+### 1.3 Explore with Live Viewer  ← do this before writing any reflection code
+Full details in [ue4ss-discovery-tools](ue4ss-discovery-tools.md).
+1. Open the GUI console (`GuiConsoleEnabled=1`).
+2. Search (right-click the bar for filters: **Instances only**, regex, by class/property) for `Widget`,
+   `HUD`, `Menu`, `Text`, or the specific container.
+3. Note class names, property names, and function names.
+4. **Add a watch** on a candidate property/row → open the **Watches** tab → **navigate the menu in-game
+   and see which value flips.** That is your selection/state signal — no colour, no guessing. If nothing
+   in reflection changes, the highlight is material/animation-driven → read the menu behaviourally.
+5. Use **"Find functions"** to call a setter and confirm its effect before hooking it.
+6. If reflection can answer it, prefer `Ctrl+H` (CXX headers) to read a class's real property/function
+   list offline instead of dumping at runtime.
 
 ---
 

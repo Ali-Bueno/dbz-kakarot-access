@@ -9,13 +9,18 @@
 -- is intentionally NOT wired here so the shipping mod stays lean.
 
 local Speech = require("speech")
+local Mem = require("mem")
 
 local MOD = "KakarotAccess"
 print("[" .. MOD .. "] Lua loading...\n")
 
 Speech.init()
+-- Native memory reader (mem_bridge.dll) for the non-reflected menu selection indices.
+-- Loaded here (before the protected snapshot) so it survives Ctrl+Shift+R like the
+-- speech bridge. Kept SEPARATE from prism_bridge (screen reader only).
+Mem.init()
 
--- Snapshot everything loaded so far (stdlib + speech + prism_bridge). These must
+-- Snapshot everything loaded so far (stdlib + speech + prism_bridge + mem_bridge). These must
 -- survive a reload; anything required AFTER this point is our own logic and is
 -- cleared/re-required on reload. New feature modules are picked up automatically.
 local protected = {}
@@ -54,8 +59,23 @@ RegisterKeyBind(Key.F1, function() App.repeat_current() end)
 -- F2: read the on-screen button prompts (the contextual keyhelp bar).
 RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)
 
+-- F6: diagnostic — report whether the SetFontType section hook installed and how many times
+-- it has fired (fired=0 means the game doesn't call it via a hookable path). Dev-only.
+RegisterKeyBind(Key.F6, function()
+    local ok, s = pcall(function() return require("header_hook").status() end)
+    Speech.say(ok and s or "hook status unavailable", true)
+end)
+
 -- Ctrl+M: toggle the menu reader on/off (App.toggle announces the state, localized).
 RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function() App.toggle() end)
+
+-- F4: dev-only runtime memory diff — finds a non-reflected selection offset by reading
+-- a live object's hidden tail and reporting which int32 changed since the last press.
+-- Used to pin the battle-pause selection offset (see native_offsets.lua). Fresh each press.
+RegisterKeyBind(Key.F4, function()
+    package.loaded.dev_memdiff = nil
+    require("dev_memdiff").run()
+end)
 
 -- F7: dev-only discovery. Re-requires discover.lua fresh each press (so it can be
 -- edited between presses without a restart) and runs its current step, writing to
@@ -80,6 +100,16 @@ RegisterKeyBind(Key.R, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function()
     App = require("app")
     App.start()
     Speech.say("Mod reloaded", true)
+end)
+
+-- Field-menu section reader — the mod's ONE RegisterHook, in its own file so it can be
+-- disabled by simply deleting header_hook.lua (see that file). Registered ONCE here (a reload
+-- must not re-register it); the whole thing is pcall'd so even a failure to install can't stop
+-- the mod from loading. Needs a full game restart to take effect (main.lua isn't hot-reloaded).
+pcall(function()
+    if require("header_hook").install() then
+        print("[" .. MOD .. "] Header section hook registered.\n")
+    end
 end)
 
 -- Start all accessibility features.

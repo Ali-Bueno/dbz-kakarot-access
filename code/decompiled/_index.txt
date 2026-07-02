@@ -1,0 +1,28 @@
+=== UAT_UIXCmnPause ===
+  type-descriptor string NOT found
+=== UAT_UIGameoverBar ===
+  type-descriptor string NOT found
+=== UAT_UIGameover ===
+  type-descriptor string NOT found
+=== UAT_UIXCmnHeader ===
+  type-descriptor string NOT found
+=== UAT_UIStartTop ===
+  type-descriptor string NOT found
+=== UAT_UIStartTopList ===
+  type-descriptor string NOT found
+=== UAT_UIStartTopListZ ===
+  type-descriptor string NOT found
+=== UAT_UIMenuListBase00 ===
+  type-descriptor string NOT found
+=== UAT_UIMenuListBase01 ===
+  type-descriptor string NOT found
+=== UAT_UIMenuListBase03 ===
+  type-descriptor string NOT found
+=== UAT_UITips ===
+  type-descriptor string NOT found
+=== UMenuManager ===
+  type-descriptor string NOT found
+=== URootMenu ===
+  type-descriptor string NOT found
+=== UBaseMenu ===
+  type-descriptor string NOT found

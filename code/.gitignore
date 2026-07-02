@@ -1,0 +1,10 @@
+# Large binaries and Ghidra database — do not commit (regenerable)
+*.exe
+*.exe.unpacked.exe
+ghidra/project/
+ghidra/*.rep/
+ghidra/*.gpr
+ghidra/*.lock
+ghidra/*.lock~
+*.gzf
+ghidra/*.log

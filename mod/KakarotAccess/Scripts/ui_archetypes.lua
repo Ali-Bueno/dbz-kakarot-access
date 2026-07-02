@@ -96,6 +96,10 @@ local function resolve_ctrl(configId)
     if not bindings then bindings = build_bindings() end
     local ctrl = bindings.configToCtrl[configId]
     if ctrl then return ctrl end
+    -- The id may already BE a dynamic-input id (tutorials / HUD guides use the raw dyn id,
+    -- e.g. "Battle_Guard", not the "KeyConfig_Battle_Guard" ConfigName the options tab uses),
+    -- so try the dyn->ctrl map directly before the config->dyn->ctrl chain.
+    if bindings.dynToCtrl[configId] then return bindings.dynToCtrl[configId] end
     local dyn = bindings.configToDyn[configId]
     return dyn and bindings.dynToCtrl[dyn] or nil
 end
@@ -142,7 +146,15 @@ end
 -- by any inline-icon text (dialogs, move lists, tutorials). nil if empty.
 function A.markup_to_speech(s)
     if not s or s == "" then return nil end
-    s = s:gsub('<inputicon%s+KeyConfigId="([^"]+)"%s*/>', function(id)
+    -- Match the WHOLE inputicon tag and pull KeyConfigId out of its attributes, so extra
+    -- attributes (e.g. ForceIconScale="2.7", present in tutorial/HUD glyphs) don't stop the
+    -- match and let the generic tag-strip below delete the glyph. "Plus" is the combo
+    -- separator (A + B), spoken as the localized join word.
+    s = s:gsub('<inputicon%s+([^>]-)/>', function(attrs)
+        -- the id is usually KeyConfigId="…" but combo separators use id="Icon_Plus".
+        local id = attrs:match('KeyConfigId="([^"]+)"') or attrs:match('id="([^"]+)"')
+        if not id then return " " end
+        if id == "Plus" or id == "Icon_Plus" then return I18n.t("combo_join") end
         local b = A.keyconfig_button(id)
         return b and (" " .. b .. " ") or " "
     end)
@@ -196,6 +208,40 @@ function A.scan_list(rows)
         end
     end
     return low, maxIdx, any, byIdx
+end
+
+-- ---- Common menu-list (UAT_UIMenuListBase00 / 01 / 03, MenuBarBase03) -------
+-- The game's ONE generic, robust selection mechanism. These list widgets expose a
+-- reflected `GetSelectValue() -> int32` (the highlighted row index) and hold their rows
+-- in the `ListPlateCtn` array (each row a UAT_UIList0NChoice with `TxtName` + optional
+-- `TxtNum`). Reading the index avoids the fragile per-row highlight-image heuristics these
+-- lists would otherwise need — so any screen built on one of these bases (shop, item,
+-- cooking, skill customize, Dragon Ball menu, options bar, …) reuses this reader.
+--
+-- NOTE (from the CXX/object-dump study): MenuListBase06 (quest list) is the exception —
+-- it has NO GetSelectValue, so those stay highlight-only. Widgets outside this family
+-- (Xlist_Bar*, Xcmn_Win*_List, tabs, cursors, map, skill tree) have no reflected index.
+
+-- The selected index of a MenuListBase list, or nil. Calling a member fn on an invalid
+-- UObject is an UNCATCHABLE abort, so validate first, then pcall the reflected call.
+function A.list_select_index(list)
+    if not Core.valid(list) then return nil end
+    local ok, idx = pcall(function() return list:GetSelectValue() end)
+    if ok and type(idx) == "number" and idx >= 0 then return idx end
+    return nil
+end
+
+-- The selected row's { name, num } from a MenuListBase list: GetSelectValue() indexes
+-- ListPlateCtn (a TArray — 1-based in UE4SS Lua, so engine index + 1). name = row.TxtName,
+-- num = row.TxtNum (count/price/level, nil if the row has none). nil if unreadable.
+function A.list_selected_row(list)
+    local idx = A.list_select_index(list)
+    if not idx then return nil end
+    local plates
+    if not pcall(function() plates = list.ListPlateCtn end) or plates == nil then return nil end
+    local row
+    if not pcall(function() row = plates[idx + 1] end) or not Core.valid(row) then return nil end
+    return { name = Core.text_of(row.TxtName), num = Core.text_of(row.TxtNum) }
 end
 
 -- A confirm button (e.g. "Guardar cambios") is a phantom overflow row at the last

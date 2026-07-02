@@ -71,10 +71,33 @@ local S = {
         no_keyhelp = "No hay ayuda de botones",
         save_changes = "Guardar cambios",
         main_menu = "Menú principal",
+        shop = "Tienda",
         paused = "Pausa",
         page = "página %s de %s",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
+        -- Overworld menu section names, keyed by EXCmnHeaderFontType enum value (the shared
+        -- UAT_UIXCmnHeader shows these as image fonts, so the mod supplies the spoken name).
+        header = {
+            [0] = "Comunidad", [1] = "Tablón de comunidad", [2] = "Objetos",
+            [3] = "Opciones", [4] = "Guardar", [5] = "Emblemas de alma", [6] = "Resultado",
+            [7] = "Menú principal", [8] = "Mapa del mundo", [9] = "Personaje",
+            [10] = "Personalizar", [11] = "Desarrollo", [12] = "Mejoras", [13] = "Cocina",
+            [14] = "Árbol de habilidades", [15] = "Personalizar habilidades", [16] = "Misiones",
+            [17] = "Tutorial", [18] = "Cargar", [19] = "Dragon Balls", [20] = "Tienda",
+            [21] = "Mapa de zona", [22] = "Carrera", [23] = "Béisbol", [24] = "Grupo",
+            [25] = "Misiones de comunidad", [26] = "Sistema", [27] = "Info de tienda",
+            [28] = "Misiones pasadas", [29] = "Hora de comer", [30] = "Tienda de comida",
+            [31] = "Tienda de materiales", [32] = "Intercambio de piezas", [33] = "Aprendizaje",
+            [34] = "Entrenamiento", [35] = "DLC", [37] = "Viaje rápido",
+        },
+        -- Overworld main-menu list entries, keyed by START_TOP_LIST_ID (the item's 0x404 byte).
+        startlist = {
+            [0] = "Comunidad", [1] = "Dragon Balls", [2] = "Objetos", [3] = "Grupo",
+            [4] = "Historia", [5] = "Personajes", [6] = "Sistema", [7] = "Tablón de comunidad",
+            [8] = "Emblema de comunidad", [9] = "Guardar", [10] = "Cargar", [11] = "Opciones",
+            [12] = "Tutorial", [13] = "Pantalla de título", [14] = "Contenido descargable",
+        },
     },
     en = {
         buttons = {
@@ -99,10 +122,30 @@ local S = {
         no_keyhelp = "No button help",
         save_changes = "Save changes",
         main_menu = "Main menu",
+        shop = "Shop",
         paused = "Paused",
         page = "page %s of %s",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
+        header = {
+            [0] = "Community", [1] = "Community board", [2] = "Items",
+            [3] = "Options", [4] = "Save", [5] = "Soul Emblems", [6] = "Result",
+            [7] = "Main menu", [8] = "World map", [9] = "Character",
+            [10] = "Customize", [11] = "Development", [12] = "Power up", [13] = "Cooking",
+            [14] = "Skill tree", [15] = "Skill customize", [16] = "Quests",
+            [17] = "Tutorial", [18] = "Load", [19] = "Dragon Balls", [20] = "Shop",
+            [21] = "Area map", [22] = "Race", [23] = "Baseball", [24] = "Party",
+            [25] = "Community quests", [26] = "System", [27] = "Shop info",
+            [28] = "Past quests", [29] = "Meal time", [30] = "Food shop",
+            [31] = "Material shop", [32] = "Parts trade", [33] = "Learning",
+            [34] = "Training", [35] = "DLC", [37] = "Fast travel",
+        },
+        startlist = {
+            [0] = "Community", [1] = "Dragon Balls", [2] = "Items", [3] = "Party",
+            [4] = "Story", [5] = "Characters", [6] = "System", [7] = "Community board",
+            [8] = "Community emblem", [9] = "Save", [10] = "Load", [11] = "Options",
+            [12] = "Tutorial", [13] = "Title screen", [14] = "Downloadable content",
+        },
     },
 }
 
@@ -135,6 +178,43 @@ function I18n.keyhelp(token)
     local t = tbl()
     return (t.keyhelp and t.keyhelp[token])
         or (S[DEFAULT].keyhelp and S[DEFAULT].keyhelp[token]) or nil
+end
+
+-- Spoken name for an overworld menu section by EXCmnHeaderFontType enum value, or nil if
+-- the value has no mapped name (then the reader stays silent rather than guessing).
+function I18n.header(ft)
+    local t = tbl()
+    return (t.header and t.header[ft])
+        or (S[DEFAULT].header and S[DEFAULT].header[ft]) or nil
+end
+
+-- The header's label asset carries a "Lang_<Token>" section id (e.g. Lang_MainMenu). These
+-- tokens are the game's FontType table in order, so the token -> EXCmnHeaderFontType index is
+-- fixed (from the decompiled UAT_UIXCmnHeader::SetFontType). Map token -> the localized name.
+local SECTION_TOKENS = {
+    Commu = 0, Commuboard = 1, Item = 2, Opt = 3, Save = 4, Soulbadge = 5, Storyresult = 6,
+    MainMenu = 7, World = 8, Char = 9, Customize = 10, Develop = 11, Powerup = 12, Cooking = 13,
+    Skilltree = 14, Skillset = 15, Quest = 16, Tips = 17, Load = 18, Db = 19, Shop = 20,
+    Areamap = 21, Minigame_Race = 22, Minigame_BaseBall = 23, Party = 24, Commuquest = 25,
+    System = 26, Shop_Info = 27, Past_Quests = 28, Mealtime = 29, Shop_Food = 30,
+    Shop_Material = 31, Shop_Trade = 32, Learning = 33, Trai = 34, DLC = 35, Fast_Travel = 37,
+}
+
+-- Localized section name for a "Lang_<Token>" section token; falls back to a readable form of
+-- the token itself (spaces for underscores) so an unmapped section is still spoken.
+function I18n.section(token)
+    if not token then return nil end
+    local e = SECTION_TOKENS[token]
+    if e then return I18n.header(e) or token end
+    return (token:gsub("_", " "))
+end
+
+-- Spoken name for an overworld main-menu entry by its START_TOP_LIST_ID (each ring/list item's
+-- 0x404 byte), or nil if unmapped. This is the game's main-menu item id, NOT EXCmnHeaderFontType.
+function I18n.startlist(id)
+    local t = tbl()
+    return (t.startlist and t.startlist[id])
+        or (S[DEFAULT].startlist and S[DEFAULT].startlist[id]) or nil
 end
 
 return I18n
