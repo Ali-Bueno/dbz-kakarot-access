@@ -72,9 +72,18 @@ unacquired) read nothing. Three changes:
   textures) — if the grid stays silent, that file is the ground truth. i18n keys
   added: pos / not_acquired / new_label; screen name = I18n.header(5).
 
-**To verify**: notice with emblems → full readout incl. names; Soul Emblems grid →
-move cursor speaks slot + position; A on emblem → detail readout; X → Sort options
-read with selection. Then read dump_community.txt, pin the cursor signal, DEBUG off.
+**LIVE ITERATION (same day, dump_community.txt):** cursor = the slot whose AnimLoop
+is PLAYING (transient → last index held while idle); Txt_Commu = the emblem's
+COMMUNITY LEVEL (now labeled); acquisition = face brush is a MaterialInstanceDynamic
+(whose texture param is the character icon) vs the constant "?" mask — CAUTION: the
+MID is ALSO named "Ins_Emb_Mask", matching on the mask name made everything read
+"not acquired". Character NAME = the icon texture's token
+(…/Charicon_Ev/Ev_Gok00… → "Gok" → "Goku") via the CHAR_TOKENS table in
+screen_community.lua (full token list extracted from the pak index; unmapped tokens
+are spoken raw — if the user hears a bare token like "Bnw", add that entry).
+DEBUG off. **Verify**: grid reads "Goku, community level 3, 1 of 21" / "Not
+acquired, 8 of 21"; detail on A; Sort options on X; the received-emblems notice
+rows.
 
 ### COOKING menu — REVISED (2026-07-03, after first live test), PENDING re-verify
 

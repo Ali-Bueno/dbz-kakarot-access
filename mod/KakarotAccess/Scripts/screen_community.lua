@@ -7,10 +7,9 @@
 --     LIVE-VERIFIED (dump_community.txt 2026-07-03): the selected slot is the one
 --     whose AnimLoop is PLAYING (transient — fires while the cursor moves, so the
 --     last resolved index is held while idle); Txt_Commu is the emblem's COMMUNITY
---     LEVEL; "not acquired" comes from the face material ("?" mask …Ins_Emb_Mask00
---     vs a MaterialInstanceDynamic face) — ImageUnacquired is never visible. The
---     character NAME is not in the slot (face is an image); the DEBUG dump records
---     the face material's texture params to map names in the next round.
+--     LEVEL; acquisition comes from the face brush (acquired = MaterialInstanceDynamic
+--     whose texture parameter is the character icon → the CHAR_TOKENS name;
+--     unacquired = the constant "?" mask) — ImageUnacquired is never visible.
 --   * Emblem DETAIL — `Start_Commu_Detail_C` (blueprint known from the CXX dump):
 --     character name (Txt_Name), community level (Txt_Commu_Lv), popularity
 --     (Txt_Popular00), link bonus (Txt_Link + Txt_Link_Detail), description
@@ -25,9 +24,10 @@ local I18n = require("i18n")
 
 local Commu = {}
 
--- Appends grid-slot signal samples to dumps/dump_community.txt (which visual marks the
--- selected slot, per-slot texts/face textures). Turn OFF once the grid reads correctly.
-local DEBUG = true
+-- Appends grid-slot signal samples to dumps/dump_community.txt. OFF since selection,
+-- acquisition and character names were all pinned live (2026-07-03); re-enable if the
+-- grid misbehaves again.
+local DEBUG = false
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -106,9 +106,12 @@ local function selected(list)
     return nil, nil
 end
 
--- The emblem face's brush resource full name. Live-verified: unacquired slots show
--- the "?" MASK material (…Ins_Emb_Mask00), acquired ones a MaterialInstanceDynamic
--- with the character's face (ImageUnacquired is never visible — it's NOT the "?").
+-- The emblem face's brush resource full name. Live-verified (dump_community.txt):
+-- an ACQUIRED slot swaps the face brush to a MaterialInstanceDynamic carrying the
+-- character icon as a texture parameter; an unacquired one keeps the constant "?"
+-- mask material. CAUTION: the MID is confusingly ALSO named "Ins_Emb_Mask", so
+-- acquisition is decided by the MaterialInstanceDynamic part of the name, never by
+-- the mask name (that bug made every emblem read "not acquired").
 local function face_resource(emb)
     local name
     pcall(function()
@@ -118,20 +121,62 @@ local function face_resource(emb)
     return name
 end
 
--- What a slot sounds like. Live-verified: Txt_Commu is the emblem's COMMUNITY LEVEL
--- number (labeled so a bare "3" isn't spoken), acquisition comes from the face
--- material. The character NAME isn't in the slot's texts — the face is an image;
--- the DEBUG dump records its material texture parameters to map names next round.
+-- Character-icon token → spoken name. The token is the game's own asset-naming
+-- abbreviation (textures /Game/Art/UI/Charicon_Ev/Ev_<Tok>NN_…; full token list
+-- extracted from the pak index, 2026-07-03). Proper nouns, so no localization.
+-- An UNMAPPED token is spoken raw (e.g. "Bnw") — still identifiable, and it tells
+-- us exactly which entry to add.
+local CHAR_TOKENS = {
+    Gok = "Goku", Ghn = "Gohan", Gtn = "Goten", Vgt = "Vegeta", Trk = "Trunks",
+    Pcl = "Piccolo", Krn = "Krillin", Ymc = "Yamcha", Tsh = "Tien",
+    Coz = "Chiaotzu", Chi = "Chi-Chi", Brm = "Bulma", Vdl = "Videl",
+    Mrs = "Mr. Satan", Mbo = "Majin Buu", Dbl = "Dabura", Bbd = "Babidi",
+    Spp = "Spopovich", Ymu = "Yamu", Ers = "Erasa",
+    Frz = "Frieza", Mfr = "Mecha Frieza", Kcl = "King Cold",
+    Cel = "Cell", Cej = "Cell Jr.", Rdt = "Raditz", Npa = "Nappa", Sbm = "Saibaman",
+    Gny = "Ginyu", Rcm = "Recoome", Brt = "Burter", Jes = "Jeice", Gld = "Guldo",
+    Cui = "Cui", Ddr = "Dodoria", Zbn = "Zarbon", Apr = "Appule",
+    Dnd = "Dende", Nil = "Nail", Kbt = "Kibito", Kki = "King Kai", Kym = "King Yemma",
+    Mpp = "Mr. Popo", Mst = "Master Roshi", Okg = "Ox-King", Oln = "Oolong",
+    Lnc = "Launch", Yjr = "Yajirobe", Krr = "Korin", Upa = "Upa", Mrn = "Marron",
+    Plf = "Pilaf", Mai = "Mai", Shu = "Shu", Bee = "Bee", Bbl = "Bubbles",
+    Geg = "Gregory", Srn = "Shenron", Tpp = "Mercenary Tao", Pui = "Pui Pui",
+    Ykn = "Yakon", Wis = "Whis",
+}
+
+-- Character name of an ACQUIRED emblem: the face MID's texture parameter is the
+-- character icon (…/Charicon_Ev/Ev_Gok00_00_00 → token "Gok" → "Goku").
+local function face_char(emb)
+    local tok
+    pcall(function()
+        local tp = emb.ImageFace.Brush.ResourceObject.TextureParameterValues
+        for j = 1, #tp do
+            local tex = tp[j].ParameterValue
+            if tex and tex:IsValid() then
+                tok = tex:GetFullName():match("/Charicon_%w+/%a-_(%a+)")
+                if tok then return end
+            end
+        end
+    end)
+    return tok and (CHAR_TOKENS[tok] or tok) or nil
+end
+
+-- What a slot sounds like: character name (acquired), "not acquired" ("?" mask),
+-- labeled community level (Txt_Commu is the bare level number — live-verified),
+-- the new marker, and the position in the visible grid.
 local function slot_label(s, idx, count)
     local emb
     pcall(function() emb = s.UIXCmnEmb end)
     local face = Core.valid(emb) and face_resource(emb) or nil
-    local unacq = face ~= nil and face:find("Emb_Mask", 1, true) ~= nil
+    local acquired = face ~= nil and face:find("MaterialInstanceDynamic", 1, true) ~= nil
+    local unacq = face ~= nil and not acquired
     local new = false
     if Core.valid(emb) then new = Core.is_visible(emb.ImageNew) end
     pcall(function() new = new or Core.is_visible(s.Icon_New) end)
-    local lv = not unacq and read(s.Txt_Commu) or nil
+    local name = acquired and face_char(emb) or nil
+    local lv = acquired and read(s.Txt_Commu) or nil
     return Core.phrase(
+        name,
         unacq and I18n.t("not_acquired") or nil,
         lv and string.format(I18n.t("commu_lv"), lv) or nil,
         new and I18n.t("new_label") or nil,
