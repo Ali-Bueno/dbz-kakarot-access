@@ -101,6 +101,8 @@ local S = {
         fish_press = "pulsa %s",
         fish_mash = "machaca %s",
         fish_button = "el botón",
+        fish_buttons = "%s, luego %s",
+        fish_hooked = "¡Enganchado!",
         -- Overworld menu section names, keyed by EXCmnHeaderFontType enum value (the shared
         -- UAT_UIXCmnHeader shows these as image fonts, so the mod supplies the spoken name).
         header = {
@@ -177,6 +179,8 @@ local S = {
         fish_press = "press %s",
         fish_mash = "mash %s",
         fish_button = "the button",
+        fish_buttons = "%s, then %s",
+        fish_hooked = "Hooked!",
         header = {
             [0] = "Community", [1] = "Community board", [2] = "Items",
             [3] = "Options", [4] = "Save", [5] = "Soul Emblems", [6] = "Result",

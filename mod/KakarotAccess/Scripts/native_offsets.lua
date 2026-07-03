@@ -77,6 +77,14 @@ return {
         zoneLow  = 0x520,    -- float, red-outline zone lower edge  (CONFIRMED)
         zoneHigh = 0x524,    -- float, red-outline zone upper edge  (CONFIRMED)
         bounces  = 0x51C,    -- int32, cursor bounce count  (CONFIRMED)
+        phase    = 0x50C,    -- int32, minigame phase: 1 = hook bar, 2 = closing ring, 0 = idle
+
+        -- Phase 2 lives on the UAT_UIBattleRushSpeedCore widget (visible only then;
+        -- its own non-reflected tail, class 0x400). CONFIRMED live 2026-07-03:
+        -- ringSize shrinks ~304 units/s from ~730 toward ringTarget=190 (press
+        -- moment); a press at 332 (0.47 s early) FAILED, matching the model.
+        ringSize   = 0x3E0,  -- float on the core: the closing ring's current size
+        ringTarget = 0x3E4,  -- float on the core: the target size (the center button)
     },
 
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member

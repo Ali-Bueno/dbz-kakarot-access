@@ -44,6 +44,34 @@ Iteration findings, all live-verified with the user:
 `keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
 menu lag gone (check `ui step ms` in the dump).
 
+### Fishing minigame — FULLY DECODED (2026-07-03, iterated live with the user)
+
+Flow (see the fishing review link in the session): attract (wiggle stick, free) ->
+HOOK (phase 1: bar + sweeping arrow, press inside the red zone) -> REEL (phase 2:
+ring closes on a center button, press on alignment; the button CAN differ).
+
+- **Phase state**: `Mgame_Fishing_C` tail — phase at 0x50C (1=bar, 2=ring, 0=idle),
+  cursor 0x518 (triangle wave ~52..124), zone [0x520,0x524] (width 37, random),
+  bounce count 0x51C vs the REFLECTED CursorLapLimit; 0x514 = slow timer.
+- **Phase 2** = `AT_UIBattleRushSpeedCore` (own instance; the fishing widget's
+  pointer to it is UNSET — find it live). Tail: ringSize 0x3E0 shrinks ~304/s to
+  ringTarget 0x3E4 (=190); 0x3E8/0x3EC/0x3F0 = rating tiers 0.75/0.5/0.25 of
+  |size-target|/target — a live press at ratio 0.747 FAILED (the 0.75 boundary),
+  confirming the acceptance model. Its Xcmn_Btn_Plat carries the phase-2 button
+  IN ADVANCE (readable while hidden).
+- **Buttons are INDEXED face buttons** (glyph Btn00..03; ActionBtn structs carry pad
+  ids 0..3). The KeyConfig asset's IconName pairing gave a WRONG mapping live;
+  standard Xbox order (0=A,1=B,2=X,3=Y) is the source (A.platbtn_token / FACE_TOKEN,
+  ui_archetypes). Announcements are BARE TOKENS ("X, luego A") — TTS length was
+  costing the reaction window.
+- **Assist**: CursorSpeed × 0.5 + CursorLapLimit × 2 (reflected, rewritten per
+  attempt; verified live — cursor velocity halved in the dump).
+- **Sonification**: continuous soft sine (audio_bridge tone voice) both phases —
+  pitch rises on approach, high+louder through the accept band with a 2-tick
+  reaction lead; "¡Enganchado! <letra>" on hook success (= the phase-2 announce).
+- **DEBUG flag** in screen_fishing appends tail samples to dumps/dump_fishing.txt
+  (still ON until the user lands a fish; then turn off).
+
 ---
 
 ## NEW (2026-07-03): Quest navigation radar — built, PENDING in-game verify

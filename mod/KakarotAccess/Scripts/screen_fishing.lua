@@ -29,17 +29,57 @@ local OFF = require("native_offsets")
 
 local Fishing = {}
 
+-- Prompts are time-critical: commit to this screen on the FIRST stable poll
+-- (the default 2-tick debounce added ~200 ms before anything could speak).
+Fishing.confirm_ticks = 1
+
 -- Re-enable to append tail samples + button internals to dumps/dump_fishing.txt
 -- (how the fishing offsets in native_offsets.lua were found).
-local DEBUG = false
+-- ON while mapping the second minigame phase ("aim for the center"), whose live
+-- state is NOT at the phase-1 offsets.
+local DEBUG = true
+
+-- ACCESSIBILITY ASSIST (user request): the hook window is brutally short for
+-- ear-driven play — the bar appears the instant the fish bites and allows only a
+-- few cursor bounces. CursorSpeed / CursorLapLimit are REFLECTED and writable, so
+-- each new attempt is slowed to half speed with twice the bounces. Gameplay stays
+-- the same mechanic, just paced for audio reaction time.
+local ASSIST = true
+local ASSIST_SPEED_FACTOR = 0.5
+local ASSIST_LAP_FACTOR = 2
+local orig_speed, orig_laps = nil, nil
 
 local tick = 0
 local fish, mash, pop = nil, nil, nil
 local said = {}   -- per-channel last spoken value (diff gate)
 
+local function apply_assist()
+    if not ASSIST or not Core.valid(fish) then return end
+    pcall(function()
+        local speed = fish.CursorSpeed
+        if speed and speed > 0 then
+            orig_speed = orig_speed or speed
+            -- Only write when the game has (re)set the original value, so repeated
+            -- attempts don't compound the slowdown.
+            if speed > orig_speed * (ASSIST_SPEED_FACTOR + 0.05) then
+                fish.CursorSpeed = orig_speed * ASSIST_SPEED_FACTOR
+            end
+        end
+        local laps = fish.CursorLapLimit
+        if laps and laps > 0 then
+            orig_laps = orig_laps or laps
+            if laps < orig_laps * ASSIST_LAP_FACTOR then
+                fish.CursorLapLimit = orig_laps * ASSIST_LAP_FACTOR
+            end
+        end
+    end)
+end
+
 -- ---- diagnostics -------------------------------------------------------------
-local TAIL_FROM, TAIL_TO = 0x508, 0x524   -- non-reflected tail dwords of AT_UIMgameFishing
-local MAX_SAMPLES = 300
+-- Native class ends at 0x528; sample a bit beyond for possible blueprint-added
+-- state (reads are SEH-guarded, garbage past the object is harmless in a dump).
+local TAIL_FROM, TAIL_TO = 0x508, 0x54C
+local MAX_SAMPLES = 600
 local diag_done, samples = false, 0
 
 local function dump_path()
@@ -94,6 +134,22 @@ local function diag_sample(f)
                 if ro and ro:IsValid() then
                     parts[#parts + 1] = "glyph=" .. (ro:GetFullName():match("([%w_]+)%.[%w_]+$") or "?")
                 end
+            end
+        end
+    end)
+    -- Phase 2 (the closing ring): the RushSpeedCore's own non-reflected tail
+    -- (class 0x400, last reflected member ends 0x3E0). The fishing widget's pointer
+    -- to it is unset live, so find it as its own widget. Sampled even while HIDDEN
+    -- (with its button token) to learn whether the phase-2 button is configured in
+    -- advance — that would let us announce it early.
+    pcall(function()
+        local core = Core.cached_live("AT_UIBattleRushSpeedCore", tick)
+        if Core.valid(core) then
+            parts[#parts + 1] = "CORE vis=" .. tostring(Core.on_screen(core))
+                .. " btn=" .. tostring(A.platbtn_token(core.Xcmn_Btn_Plat))
+            for off = 0x3E0, 0x3FC, 4 do
+                parts[#parts + 1] = string.format("c0x%X=%s/%.3f", off,
+                    tostring(Mem.i32(core, off)), Mem.float(core, off) or 0)
             end
         end
     end)
@@ -156,7 +212,10 @@ local function timing_cue()
     last_cursor = cur
     if still_ticks >= 2 then Audio.tone_stop() return end   -- cursor parked: no active phase
 
-    local predicted = cur + vel           -- next-tick position (reaction-time lead)
+    -- Two-tick lead (~200 ms): the user reacts to the FIRST high note, and the
+    -- press must land while the cursor is still inside (dump showed presses
+    -- arriving 1-2 ticks after zone exit when cued without lead).
+    local predicted = cur + vel * 2
     if (cur >= lo and cur <= hi) or (predicted >= lo and predicted <= hi) then
         Audio.tone(PRESS_VOL, PRESS_PITCH)
     else
@@ -167,25 +226,59 @@ local function timing_cue()
     end
 end
 
--- The fishing action button: the live glyph first, then the ActionBtn00 config
--- struct (KeyConfig action id, then its raw pad key ids).
+-- ---- phase 2: the closing-ring timing cue ------------------------------------------
+-- native_offsets.fishing.ringSize on the RushSpeedCore shrinks (~304/s) toward
+-- ringTarget (= the center button). The game rates a press by |size-target|/target:
+-- the ratios captured live on the core (0.75 / 0.50 / 0.25) are the acceptance
+-- tiers, and the one observed FAILED press sat at ratio 0.747 — right on the 0.75
+-- boundary. So the PRESS band is generous: the tone rises as the ring closes and
+-- goes high through the whole "good" band (|ratio| <= 0.5, ~±310 ms), with a
+-- two-tick reaction lead on entry.
+local RING_SPAN = 540          -- observed shrink range (start ~730 -> target 190)
+local RING_CUE_BAND = 0.5      -- the core's mid rating tier: hold the press tone here
+local ring_prev, ring_still = nil, 0
+
+local function ring_cue(core)
+    local size = Mem.float(core, OFF.fishing.ringSize)
+    local target = Mem.float(core, OFF.fishing.ringTarget)
+    if not size or not target or target <= 0 then Audio.tone_stop() return end
+
+    local vel = ring_prev and (size - ring_prev) or 0
+    if ring_prev and math.abs(vel) < 0.01 then
+        ring_still = ring_still + 1
+    else
+        ring_still = 0
+    end
+    ring_prev = size
+    if ring_still >= 2 then Audio.tone_stop() return end   -- ring parked (pressed/over)
+
+    local hi_band = target * (1 + RING_CUE_BAND)
+    local lo_band = target * (1 - RING_CUE_BAND)
+    local predicted = size + vel * 2                       -- two-tick reaction lead
+    if predicted <= hi_band and size >= lo_band then
+        Audio.tone(PRESS_VOL, PRESS_PITCH)
+    elseif size > target then
+        local prox = 1 - math.min(1, (size - hi_band) / RING_SPAN)
+        Audio.tone(FAR_VOL + (NEAR_VOL - FAR_VOL) * prox,
+                   FAR_PITCH + (NEAR_PITCH - FAR_PITCH) * prox)
+    else
+        Audio.tone_stop()   -- already past the accept band
+    end
+end
+
+-- The phase-1 action button TOKEN ("X"): the live glyph first, then the ActionBtn00
+-- config struct's pad ids. Bare tokens keep the speech minimal (user request).
 local function fishing_button()
-    local n = A.platbtn_name(fish.Xcmn_Btn_Plat_00)
-    if n then return n end
-    local name
+    local tok = A.platbtn_token(fish.Xcmn_Btn_Plat_00)
+    if tok then return tok end
     pcall(function()
-        local ab = fish.ActionBtn00
-        local kc = ab.KeyConfigActionId:ToString()
-        if kc and kc ~= "" and kc ~= "None" then name = A.keyconfig_button(kc) end
-        if not name then
-            local ids = ab.KeyIdsForPad
-            for i = 1, #ids do
-                local nm = A.platbtn_id(tonumber(ids[i]))
-                if nm then name = nm return end
-            end
+        local ids = fish.ActionBtn00.KeyIdsForPad
+        for i = 1, #ids do
+            local t = A.platbtn_id_token(tonumber(ids[i]))
+            if t then tok = t return end
         end
     end)
-    return name
+    return tok
 end
 
 -- Until any of the three widgets exists (pooled after its first appearance), each
@@ -218,6 +311,7 @@ local last_zone = nil
 function Fishing.reset()
     said = {}
     last_cursor, still_ticks, last_zone = nil, 0, nil
+    ring_prev, ring_still = nil, 0
     Audio.tone_stop()
 end
 
@@ -251,14 +345,42 @@ function Fishing.update()
             last_zone = zone
             said = {}
         end
-        local btn = fishing_button()
-        if btn then say_once("btn", string.format(I18n.t("fish_press"), btn), true) end
-        timing_cue()
+        apply_assist()
+
+        -- The phase-2 ring widget (found as its own instance — the fishing widget's
+        -- pointer to it is unset live). Its button is configured IN ADVANCE, so both
+        -- buttons can be announced up front and the tones alone carry the WHEN.
+        local core = Core.cached_live("AT_UIBattleRushSpeedCore", tick)
+        local tok2
+        pcall(function() tok2 = A.platbtn_token(core.Xcmn_Btn_Plat) end)
+
+        -- Bare letters only ("X, luego A") — minimal speech, maximal reaction time.
+        local tok1 = fishing_button()
+        if tok1 then
+            local msg = tok2 and string.format(I18n.t("fish_buttons"), tok1, tok2) or tok1
+            say_once("btn", msg, true)
+        end
+
+        if Core.on_screen(core) then
+            -- Phase 2 running: instant confirmation (+ the letter again) and the
+            -- closing-ring tone. TTS says only the bare token — it's time-critical.
+            say_once("btn2", I18n.t("fish_hooked") .. (tok2 and (" " .. tok2) or ""), true)
+            ring_cue(core)
+        else
+            said.btn2 = nil
+            ring_prev, ring_still = nil, 0
+            timing_cue()
+        end
         for _, prop in ipairs({ "UIMgameTips", "UIMgameTips01" }) do
             local ok, tips = pcall(function() return fish[prop] end)
             if ok and Core.on_screen(tips) then
                 local t = Core.read_text(tips.TextBox_Tips)
-                if t then say_once("tips_" .. prop, A.markup_to_speech(t) or t, false) end
+                if t then
+                    local spoken = A.markup_to_speech(t) or t
+                    -- A tips change = a PHASE change -> re-announce the button too.
+                    if said["tips_" .. prop] ~= spoken then said.btn = nil end
+                    say_once("tips_" .. prop, spoken, false)
+                end
             end
         end
     else

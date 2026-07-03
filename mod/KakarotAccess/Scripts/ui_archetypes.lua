@@ -184,58 +184,78 @@ local PLATBTN_TOKEN = {  -- EATPlatBtnId -> canonical Btn_ token (AT_enums.hpp)
     [11] = "Left", [12] = "Up", [13] = "Right", [14] = "Down",
     [19] = "Start", [20] = "Back",
 }
--- Spoken name for a raw EATPlatBtnId value: semantic ids directly; the indexed face
--- buttons (Btn00..03) resolved through the KeyConfig asset's IconName pairing. nil
--- if unresolvable.
-function A.platbtn_id(id)
+-- Xbox-layout face buttons by glyph index. The KeyConfig asset's IconName pairing
+-- gave a WRONG answer live (glyph index 3 resolved to "B", and a press INSIDE the
+-- timing zone still failed — dump_fishing 2026-07-03), so the platform-standard
+-- order is the primary source (this game renders Xbox glyphs, PLAT_X, on the
+-- user's pad) and the asset pairing is only a fallback for exotic devices.
+local FACE_TOKEN = { [0] = "A", [1] = "B", [2] = "X", [3] = "Y" }
+
+-- Canonical Btn_ token for a raw EATPlatBtnId value: semantic ids directly; the
+-- indexed face buttons (Btn00..03) via the standard layout, then the asset pairing.
+local function platbtn_id_token(id)
     if id == nil then return nil end
     local tok = PLATBTN_TOKEN[id]
-    if tok then return I18n.button(tok) end
+    if tok then return tok end
     if id >= 0 and id <= 3 then
+        if FACE_TOKEN[id] then return FACE_TOKEN[id] end
         if not bindings then bindings = build_bindings() end
         local ctrl = bindings and bindings.idxToCtrl[id]
-        return ctrl and A.button_name(ctrl) or nil
+        return ctrl and ctrl:match("Btn_(.+)$") or nil
     end
     return nil
 end
 
--- Spoken names from an EATPlatBtnId TArray; first resolvable wins.
-local function ids_name(arr)
-    local name
-    pcall(function()
-        for i = 1, #arr do
-            local n = A.platbtn_id(tonumber(arr[i]))
-            if n then name = n return end
-        end
-    end)
-    return name
+-- Spoken name for a raw EATPlatBtnId value.
+function A.platbtn_id(id)
+    local tok = platbtn_id_token(id)
+    return tok and I18n.button(tok) or nil
 end
 
-function A.platbtn_name(plat)
+-- Raw token form, for time-critical prompts that speak the bare letter.
+A.platbtn_id_token = platbtn_id_token
+
+-- Tokens from an EATPlatBtnId TArray; first resolvable wins.
+local function ids_token(arr)
+    local tok
+    pcall(function()
+        for i = 1, #arr do
+            local t = platbtn_id_token(tonumber(arr[i]))
+            if t then tok = t return end
+        end
+    end)
+    return tok
+end
+
+-- Canonical (Xbox-style) button token for a live UAT_UIXcmnPlatBtn glyph widget —
+-- e.g. "A", "B", "RB". Use this raw for time-critical prompts (a bare letter is much
+-- faster to hear than "botón A"); platbtn_name below gives the full spoken form.
+function A.platbtn_token(plat)
     if not Core.valid(plat) then return nil end
-    local name
+    local tok
     pcall(function()
         local arr = plat.CurrentDynamicAssignInputControllerId
         for i = 1, #arr do
             local s = arr[i]:ToString()
-            if s and s ~= "" and s ~= "None" then
-                local n = A.button_name(s)
-                if n then name = n return end
-            end
+            local t = s and s:match("Btn_(.+)$")
+            if t then tok = t return end
         end
     end)
-    if name then return name end
+    if tok then return tok end
     pcall(function()
         local act = plat.CurrentActionID:ToString()
-        if act and act ~= "" and act ~= "None" then name = A.keyconfig_button(act) end
+        if act and act ~= "" and act ~= "None" then
+            local ctrl = resolve_ctrl(act) or act
+            tok = ctrl:match("Btn_(.+)$")
+        end
     end)
-    if name then return name end
+    if tok then return tok end
     -- The pad id lists (KeyIdsForPad is the controller set; CurrentKeyIds may hold the
     -- keyboard set when playing with KB) — indexed face buttons resolve via the asset.
-    pcall(function() name = ids_name(plat.KeyIdsForPad) end)
-    if name then return name end
-    pcall(function() name = ids_name(plat.CurrentKeyIds) end)
-    if name then return name end
+    pcall(function() tok = ids_token(plat.KeyIdsForPad) end)
+    if tok then return tok end
+    pcall(function() tok = ids_token(plat.CurrentKeyIds) end)
+    if tok then return tok end
     -- Last resort: the glyph texture actually displayed (indexed too -> same resolver).
     pcall(function()
         local imgs = plat.Image_List
@@ -246,14 +266,19 @@ function A.platbtn_name(plat)
                 if ro and ro:IsValid() then
                     local idx = ro:GetFullName():match("Btn_?(%d+)%.[%w_]+$")
                     if idx then
-                        local n = A.platbtn_id(tonumber(idx))
-                        if n then name = n return end
+                        local t = platbtn_id_token(tonumber(idx))
+                        if t then tok = t return end
                     end
                 end
             end
         end
     end)
-    return name
+    return tok
+end
+
+function A.platbtn_name(plat)
+    local tok = A.platbtn_token(plat)
+    return tok and I18n.button(tok) or nil
 end
 
 -- Turn CFramework rich-text markup into speakable text: resolve <inputicon> tags to
