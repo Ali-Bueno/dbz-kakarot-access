@@ -63,6 +63,22 @@ return {
         cursorIndex = 0x420,     -- int32, selected party row (fallback if reflection fails)
     },
 
+    -- Fishing minigame: UAT_UIMgameFishing (Mgame_Fishing_C). "Press the button inside
+    -- the red outline": a cursor sweeps back and forth and must be pressed inside a
+    -- random target zone. All live state is non-reflected tail (0x508..0x528).
+    -- CONFIRMED by runtime sampling (dump_fishing.txt, 2026-07-03, two sessions):
+    --   cursor 0x518 sweeps ~52..124 as a triangle wave (~127 units/s);
+    --   zone [0x520, 0x524] is static per attempt (width 37, random position) — both
+    --   FAILED presses froze the cursor OUTSIDE [zoneLow, zoneHigh], confirming the rule;
+    --   0x51C counts cursor bounces (vs the reflected CursorLapLimit);
+    --   0x514 ticks slowly down (timer-like; unused).
+    fishing = {
+        cursor   = 0x518,    -- float, sweeping cursor position  (CONFIRMED)
+        zoneLow  = 0x520,    -- float, red-outline zone lower edge  (CONFIRMED)
+        zoneHigh = 0x524,    -- float, red-outline zone upper edge  (CONFIRMED)
+        bounces  = 0x51C,    -- int32, cursor bounce count  (CONFIRMED)
+    },
+
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named
     -- UFunction). ListBarArray is the reflected TArray at 0x3a8 (data) / 0x3b0 (count).

@@ -4,6 +4,48 @@ _Session handoff, last updated 2026-07-03._
 
 ---
 
+## UPDATE (2026-07-03, later): radar verified in-game + fishing + stability
+
+The radar WORKS in-game (auto-tracks quest markers, arrival cue confirmed, F5 answers).
+Iteration findings, all live-verified with the user:
+
+- **Player position**: `PlayerController.Pawn` is UNRELIABLE in the overworld (a stale
+  `TwinFootBP_C` at the origin) — use `AT_UIMiniMapRadar.PlayerIns` (the game's own field
+  character pointer); camera via `.CameraMng`.
+- **Target sources**: navi icons first (`AT_UIMiniMapNaviIcon.TargetActor`, filter by
+  `icon_in_use` = one of its widgets on_screen); fallback = quest-typed `MapIconList`
+  entries. Auto-retarget per quest step confirmed working.
+- **Companions (Shift+F5)**: cycle nearby `AT_Character` actors (exclude the player by
+  address AND the game's parked preload pool — ~100 characters sit at one distant spot).
+- **CRASH lesson (return to title, crashed twice)**: level teardown happens BEHIND the
+  confirm dialog + loading screen. The minimap lives under the PER-LEVEL HUD (unlike the
+  pooled GameInstance menus), so even probing it during teardown is an uncatchable abort.
+  FIX: when any muting adapter owns the screen (`ui_muted`, pure Lua), the nav loop
+  touches ZERO engine objects; world gate (minimap hidden) second; actors last.
+- **PERF lessons**: never FindAllOf while loading (stretched a 15 s save load past 1 min
+  — nav's minimap acquisition now backs off + never scans while a screen owns the
+  display); radar tick 100 ms (50 ms cost visible lag); per-cursor-move dev_log writes
+  caused menu lag spikes (now behind DEBUG flags); ui_core cache refreshes raised
+  (ABSENT_BACKOFF 40, REFRESH_EVERY 100). `Ctrl+F5` dump now includes step-time telemetry.
+- **FISHING minigame accessibilized** (`screen_fishing.lua` + `native_offsets.fishing`):
+  reads instructions/popups/mash-QTE, announces the action button (resolved semantically;
+  face buttons via the KeyConfig asset's IconName↔ControllerId pairing, asset LoadAsset'd
+  on demand), and sonifies the timing: cursor state lives in the NON-reflected tail
+  (cursor 0x518 sweeps ~52..124; zone [0x520,0x524] width 37 random per attempt; both
+  user failures froze OUTSIDE the zone = model confirmed). Continuous soft sine tone
+  (new `audio_bridge.tone(vol,pitch)`, seamless 220 Hz loop): pitch rises approaching
+  the zone, jumps high inside = press now. New attempt detected by zone change.
+- **Registry**: `active_adapter()`/`active_index()` accessors; adapters can opt OUT of
+  muting the radar with `nav_mute = false` (chatter, resident controls guide); the
+  dialogue reader yields while the shared menu header `Xcmn_Header_C` is up (menus were
+  shadowed by lingering talk windows).
+
+**PENDING VERIFY after next restart:** fishing tone + button announce (Ctrl+F5's
+`keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
+menu lag gone (check `ui step ms` in the dump).
+
+---
+
 ## NEW (2026-07-03): Quest navigation radar — built, PENDING in-game verify
 
 Audio radar that guides to the active quest objective, ported from the XV2 mod (same sounds,

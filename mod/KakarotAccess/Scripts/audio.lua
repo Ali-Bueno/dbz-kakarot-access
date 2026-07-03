@@ -46,6 +46,16 @@ function Audio.arrival()
     if loaded then bridge.arrival() end
 end
 
+-- Continuous soft sine tone (seamless loop): call repeatedly to reshape volume 0..1
+-- and pitch 0.5..2 (110..440 Hz) — no retrigger, gentle on the ears. Stop when done.
+function Audio.tone(volume, pitch)
+    if loaded and bridge.tone then bridge.tone(volume, pitch) end
+end
+
+function Audio.tone_stop()
+    if loaded and bridge.tone_stop then bridge.tone_stop() end
+end
+
 -- Silence all cues immediately.
 function Audio.stop()
     if loaded then bridge.stop() end

@@ -17,6 +17,12 @@ local A = require("ui_archetypes")
 
 local Tutorial = {}
 
+-- The tutorial/controls guide widget stays RESIDENT (HitTestInvisible) in the open
+-- world, keeping this adapter "active" without pausing anything — it must not mute
+-- the navigation radar (real battle tutorials are already muted by the hidden
+-- minimap gate). See nav_tracker's gated().
+Tutorial.nav_mute = false
+
 local ROW_COUNT = 9    -- Battle_Tips_List_00..08
 local SCAN_EVERY = 3
 

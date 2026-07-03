@@ -108,7 +108,9 @@ end
 -- when the cached ref is gone, and when a class isn't present yet we back off (a screen
 -- that hasn't appeared shouldn't cost a full scan every tick).
 local live_cache, live_backoff = {}, {}
-local ABSENT_BACKOFF = 20   -- ticks (~2s at 100ms) between scans for a not-yet-present class
+local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-present class
+                            -- (raised from 20: the periodic absent-class FindAllOf scans
+                            -- were the main source of gameplay lag spikes, 2026-07-03)
 
 function Core.cached_live(cls_name, tick)
     local c = live_cache[cls_name]
@@ -127,7 +129,8 @@ end
 -- pick up any newly-created pooled instances. Callers still validity/visibility-check each
 -- returned widget, so stale entries are harmless. Returns the cached Lua array.
 local all_cache, all_next = {}, {}
-local REFRESH_EVERY = 30   -- ticks (~3s) between full re-scans of a class list
+local REFRESH_EVERY = 100  -- ticks (~10s) between full re-scans of a class list (pools
+                           -- are ~static; raised from 30 to cut periodic lag spikes)
 
 function Core.cached_all(cls_name, tick)
     local c = all_cache[cls_name]
@@ -245,7 +248,16 @@ function Core.loop(step)
         if not busy then
             busy = true
             ExecuteInGameThread(function()
+                -- Step timing telemetry (read via Ctrl+F5's nav dump): the max/avg
+                -- game-thread cost of one reader tick, to pin lag spikes with data.
+                local t0 = os.clock()
                 local ok, err = pcall(step)
+                local dt = (os.clock() - t0) * 1000
+                local st = _G.__KakarotStepStats
+                if not st then st = { max = 0, n = 0, sum = 0 } _G.__KakarotStepStats = st end
+                if dt > st.max then st.max = dt end
+                st.n = st.n + 1
+                st.sum = st.sum + dt
                 busy = false
                 if not ok then print("[KakarotAccess] UI step error: " .. tostring(err) .. "\n") end
             end)

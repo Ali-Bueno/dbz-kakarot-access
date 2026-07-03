@@ -69,6 +69,15 @@ function Registry.is_enabled() return enabled end
 -- gates its audio cues on this: a menu/dialog owning the screen silences the radar.
 function Registry.active_adapter() return active end
 
+-- Registration-order index of the active adapter (nil if none) — for diagnostics
+-- (adapters are anonymous tables; the index maps back to the app.lua register order).
+function Registry.active_index()
+    for i, a in ipairs(adapters) do
+        if a == active then return i end
+    end
+    return nil
+end
+
 function Registry.toggle()
     if enabled then Registry.stop() else Registry.start() end
     return enabled

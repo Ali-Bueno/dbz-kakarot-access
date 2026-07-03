@@ -31,6 +31,9 @@ local Nav = require("nav_tracker")
 Registry.register(require("screen_choicelist"))
 Registry.register(require("screen_dialog"))
 Registry.register(require("screen_pause"))
+-- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
+-- are time-critical and a subtitle line must not shadow them.
+Registry.register(require("screen_fishing"))
 Registry.register(require("screen_dialogue"))
 Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
@@ -69,6 +72,7 @@ function App.repeat_current() Registry.repeat_current() end
 function App.nav_toggle() Nav.toggle() end
 function App.nav_route_toggle() Nav.toggle_route() end
 function App.nav_where() Nav.where() end
+function App.nav_companion() Nav.cycle_companion() end
 function App.nav_dump() Nav.dump() end
 
 -- Toggle the menu reader and announce the new state in the game's language. Announced

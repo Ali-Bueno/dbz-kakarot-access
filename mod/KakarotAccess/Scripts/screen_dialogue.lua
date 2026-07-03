@@ -20,6 +20,11 @@ local A = require("ui_archetypes")
 
 local Dialogue = {}
 
+-- Overworld chatter/subtitles do NOT pause the game, so they must not silence the
+-- navigation radar (menus.md: keep cues running when the game doesn't pause). The
+-- nav tracker checks this flag; every other adapter (menus, dialogs) keeps muting.
+Dialogue.nav_mute = false
+
 local ann = Core.make_announcer()
 local tick = 0
 local subs, talk = nil, nil
@@ -56,6 +61,14 @@ end
 
 function Dialogue.is_active()
     tick = tick + 1
+    -- An OPEN overworld menu owns the screen. Every field menu shows the shared
+    -- Xcmn_Header_C section header; meanwhile a paused/ambient talk window keeps
+    -- reporting on_screen underneath and would shadow the whole menu family
+    -- (registered below us) — seen live 2026-07-03: the field menu was unreadable
+    -- while an NPC dialogue was paused behind it. Yield while the header is up.
+    local hdr = Core.cached_live("Xcmn_Header_C", tick)
+    if Core.on_screen(hdr) then cached = nil return false end
+
     subs = Core.cached_live("Xcmn_Subtitles_C", tick)   -- cheap: cached refs, no per-tick scan
     talk = Core.cached_live("Field_Talk_Win_C", tick)
     cached = line_from(subs, "Txt_Name", "Txt_Selif")

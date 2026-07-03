@@ -98,8 +98,12 @@ function Field.is_active()
 
     local screen, name, dbg = resolve()
 
-    -- Diagnostic (one line per change) so the ring/submenu index->name mapping is verifiable.
-    if dbg ~= last_dbg then
+    -- Diagnostic (one line per change) so the ring/submenu index->name mapping is
+    -- verifiable. DISABLED by default: the file append runs on the GAME THREAD per
+    -- cursor move, and wrapping the ring quickly caused visible lag spikes
+    -- (2026-07-03). The mapping is long since verified; re-enable only to re-map.
+    local DEBUG_LOG = false
+    if DEBUG_LOG and dbg ~= last_dbg then
         last_dbg = dbg
         pcall(function()
             require("dev_log").write("[field] " .. dbg .. " name=" .. tostring(name))

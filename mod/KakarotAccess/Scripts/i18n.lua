@@ -95,6 +95,12 @@ local S = {
         nav_behind = "detrás",
         nav_left = "izquierda",
         nav_right = "derecha",
+        nav_companion = "compañero %d de %d",
+        nav_no_companion = "Sin compañeros cerca",
+        nav_quest_mode = "Objetivo de misión",
+        fish_press = "pulsa %s",
+        fish_mash = "machaca %s",
+        fish_button = "el botón",
         -- Overworld menu section names, keyed by EXCmnHeaderFontType enum value (the shared
         -- UAT_UIXCmnHeader shows these as image fonts, so the mod supplies the spoken name).
         header = {
@@ -165,6 +171,12 @@ local S = {
         nav_behind = "behind",
         nav_left = "left",
         nav_right = "right",
+        nav_companion = "companion %d of %d",
+        nav_no_companion = "No companions nearby",
+        nav_quest_mode = "Quest objective",
+        fish_press = "press %s",
+        fish_mash = "mash %s",
+        fish_button = "the button",
         header = {
             [0] = "Community", [1] = "Community board", [2] = "Items",
             [3] = "Options", [4] = "Save", [5] = "Soul Emblems", [6] = "Result",

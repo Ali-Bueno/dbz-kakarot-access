@@ -69,6 +69,9 @@ RegisterKeyBind(Key.F3, { ModifierKey.SHIFT }, function() App.nav_route_toggle()
 -- F5: announce the tracked objective on demand (type, distance, clock direction).
 RegisterKeyBind(Key.F5, function() App.nav_where() end)
 
+-- Shift+F5: cycle companion tracking (nearest party member -> next -> quest objective).
+RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, function() App.nav_companion() end)
+
 -- Ctrl+F5: dev-only — dump the guidance candidates + a NavMesh probe to
 -- Scripts/dumps/dump_nav_targets.txt for offline diagnosis.
 RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)

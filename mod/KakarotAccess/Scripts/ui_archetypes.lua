@@ -65,10 +65,20 @@ local function struct_str(e, field)
     return tostring(v)
 end
 
+-- Returns nil (NOT an empty map) while the icon-data asset isn't loaded yet, so the
+-- cache retries later — StaticFindObject only sees LOADED assets, and caching an
+-- empty build made every button resolution silently fail for the whole session
+-- (seen live 2026-07-03: the fishing button spoke in one session and not another).
 local function build_bindings()
-    local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {} }
+    local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {}, idxToCtrl = {} }
     local ico = StaticFindObject(ICON_DATA)
-    if not Core.valid(ico) then return m end
+    if not Core.valid(ico) then
+        -- The asset may simply not be loaded yet this session (StaticFindObject only
+        -- sees LOADED objects) — load it ourselves; all callers run on the game thread.
+        pcall(function() LoadAsset(ICON_DATA) end)
+        ico = StaticFindObject(ICON_DATA)
+    end
+    if not Core.valid(ico) then return nil end
     local arr = ico.KeyConfigList
     local n = 0
     pcall(function() n = #arr end)
@@ -78,9 +88,17 @@ local function build_bindings()
             local cn = struct_str(e, "ConfigName")
             local dyn = struct_str(e, "DynamicAssignInputId")
             local ctrl = struct_str(e, "DynamicAssignInputControllerId")
+            local icon = struct_str(e, "IconName")
             if cn ~= "" and ctrl ~= "" then m.configToCtrl[cn] = ctrl end
             if cn ~= "" and dyn ~= "" then m.configToDyn[cn] = dyn end
             if dyn ~= "" and ctrl ~= "" and not m.dynToCtrl[dyn] then m.dynToCtrl[dyn] = ctrl end
+            -- Face buttons are device-INDEXED everywhere (glyph "Btn_N", EATPlatBtnId
+            -- Btn00..03); the asset pairs that index with the semantic button — the
+            -- only data-driven index->button mapping in the game.
+            local idx = icon:match("^Btn_?(%d+)$")
+            if idx and ctrl ~= "" and not m.idxToCtrl[tonumber(idx)] then
+                m.idxToCtrl[tonumber(idx)] = ctrl
+            end
         end
     end
     return m
@@ -90,10 +108,23 @@ end
 -- since rebinding a controller button changes the mapping).
 function A.clear_binding_cache() bindings = nil end
 
+-- Diagnostic: state of the KeyConfig resolver ("not built" / entry counts + the
+-- face-button index map). Reported in the Ctrl+F5 nav dump.
+function A.bindings_status()
+    if not bindings then bindings = build_bindings() end
+    if not bindings then return "NOT BUILT (asset not loaded)" end
+    local n = 0
+    for _ in pairs(bindings.configToCtrl) do n = n + 1 end
+    local idx = {}
+    for i = 0, 3 do idx[#idx + 1] = i .. "=" .. tostring(bindings.idxToCtrl[i]) end
+    return string.format("ctrl entries=%d, face map: %s", n, table.concat(idx, " "))
+end
+
 -- The controller button (e.g. "Controller_Btn_L3") an action-alias KeyConfigId maps to,
 -- or nil. Direct button ids are handled by button_name, not here.
 local function resolve_ctrl(configId)
     if not bindings then bindings = build_bindings() end
+    if not bindings then return nil end
     local ctrl = bindings.configToCtrl[configId]
     if ctrl then return ctrl end
     -- The id may already BE a dynamic-input id (tutorials / HUD guides use the raw dyn id,
@@ -139,6 +170,90 @@ end
 -- (dialogs, tutorials, prompts) where we just want the button name. nil if unresolvable.
 function A.keyconfig_button(kc)
     return A.button_name(kc) or (resolve_ctrl(kc) and A.button_name(resolve_ctrl(kc))) or nil
+end
+
+-- The spoken button for a live UAT_UIXcmnPlatBtn glyph widget (QTE / minigame / prompt
+-- glyphs). Semantic sources, most authoritative first:
+--   1. CurrentDynamicAssignInputControllerId ("Controller_Btn_B" -> "botón B");
+--   2. CurrentActionID resolved through the KeyConfig asset (action alias -> button);
+--   3. the semantic EATPlatBtnId entries in CurrentKeyIds (bumpers/triggers/d-pad —
+--      the indexed face buttons Btn00..03 are device-dependent and stay unmapped).
+-- nil if none resolves (caller speaks its label alone rather than fabricate a button).
+local PLATBTN_TOKEN = {  -- EATPlatBtnId -> canonical Btn_ token (AT_enums.hpp)
+    [4] = "RB", [5] = "RT", [6] = "R3", [7] = "LB", [8] = "LT", [9] = "L3",
+    [11] = "Left", [12] = "Up", [13] = "Right", [14] = "Down",
+    [19] = "Start", [20] = "Back",
+}
+-- Spoken name for a raw EATPlatBtnId value: semantic ids directly; the indexed face
+-- buttons (Btn00..03) resolved through the KeyConfig asset's IconName pairing. nil
+-- if unresolvable.
+function A.platbtn_id(id)
+    if id == nil then return nil end
+    local tok = PLATBTN_TOKEN[id]
+    if tok then return I18n.button(tok) end
+    if id >= 0 and id <= 3 then
+        if not bindings then bindings = build_bindings() end
+        local ctrl = bindings and bindings.idxToCtrl[id]
+        return ctrl and A.button_name(ctrl) or nil
+    end
+    return nil
+end
+
+-- Spoken names from an EATPlatBtnId TArray; first resolvable wins.
+local function ids_name(arr)
+    local name
+    pcall(function()
+        for i = 1, #arr do
+            local n = A.platbtn_id(tonumber(arr[i]))
+            if n then name = n return end
+        end
+    end)
+    return name
+end
+
+function A.platbtn_name(plat)
+    if not Core.valid(plat) then return nil end
+    local name
+    pcall(function()
+        local arr = plat.CurrentDynamicAssignInputControllerId
+        for i = 1, #arr do
+            local s = arr[i]:ToString()
+            if s and s ~= "" and s ~= "None" then
+                local n = A.button_name(s)
+                if n then name = n return end
+            end
+        end
+    end)
+    if name then return name end
+    pcall(function()
+        local act = plat.CurrentActionID:ToString()
+        if act and act ~= "" and act ~= "None" then name = A.keyconfig_button(act) end
+    end)
+    if name then return name end
+    -- The pad id lists (KeyIdsForPad is the controller set; CurrentKeyIds may hold the
+    -- keyboard set when playing with KB) — indexed face buttons resolve via the asset.
+    pcall(function() name = ids_name(plat.KeyIdsForPad) end)
+    if name then return name end
+    pcall(function() name = ids_name(plat.CurrentKeyIds) end)
+    if name then return name end
+    -- Last resort: the glyph texture actually displayed (indexed too -> same resolver).
+    pcall(function()
+        local imgs = plat.Image_List
+        for i = 1, #imgs do
+            local img = imgs[i]
+            if Core.is_visible(img) then
+                local ro = img.Brush.ResourceObject
+                if ro and ro:IsValid() then
+                    local idx = ro:GetFullName():match("Btn_?(%d+)%.[%w_]+$")
+                    if idx then
+                        local n = A.platbtn_id(tonumber(idx))
+                        if n then name = n return end
+                    end
+                end
+            end
+        end
+    end)
+    return name
 end
 
 -- Turn CFramework rich-text markup into speakable text: resolve <inputicon> tags to

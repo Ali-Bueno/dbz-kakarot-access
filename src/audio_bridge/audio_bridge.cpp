@@ -55,6 +55,12 @@ struct Cue {
 };
 static Cue g_beacon = {0};
 static Cue g_arrival = {0};
+/* Synthesized continuous tone (a seamless 1 s sine loop; frequency via
+ * SetFrequencyRatio, so pitch 0.5..2.0 spans 110..440 Hz on the 220 Hz base).
+ * Used for smooth "closing in" feedback (fishing timing) — gentler on the ears
+ * than retriggered pings. */
+static Cue g_tone = {0};
+static bool g_toneOn = false;
 
 /* ---- WAV loading (PCM only, same constraint as the XV2 player) ------------ */
 
@@ -198,6 +204,28 @@ static const char *do_init(void) {
     if (FAILED(g_engine->CreateSourceVoice(&g_arrival.voice, &g_arrival.fmt)))
         return "CreateSourceVoice(arrival) failed";
 
+    /* Generate the sine loop: 220 Hz over exactly 1 s = 220 whole cycles, so the
+     * loop point is click-free. Soft amplitude; the caller shapes loudness. */
+    {
+        const UINT32 rate = 44100;
+        const float freq = 220.0f;
+        const float amp = 0.35f;
+        g_tone.fmt.wFormatTag = WAVE_FORMAT_PCM;
+        g_tone.fmt.nChannels = 1;
+        g_tone.fmt.nSamplesPerSec = rate;
+        g_tone.fmt.wBitsPerSample = 16;
+        g_tone.fmt.nBlockAlign = 2;
+        g_tone.fmt.nAvgBytesPerSec = rate * 2;
+        g_tone.bytes = rate * 2;
+        g_tone.pcm = (BYTE *)malloc(g_tone.bytes);
+        if (!g_tone.pcm) return "tone buffer alloc failed";
+        int16_t *p = (int16_t *)g_tone.pcm;
+        for (UINT32 i = 0; i < rate; i++)
+            p[i] = (int16_t)(sinf(6.2831853f * freq * (float)i / (float)rate) * amp * 32767.0f);
+        if (FAILED(g_engine->CreateSourceVoice(&g_tone.voice, &g_tone.fmt)))
+            return "CreateSourceVoice(tone) failed";
+    }
+
     g_ready = true;
     return NULL;
 }
@@ -234,11 +262,49 @@ static int l_arrival(lua_State *L) {
     return 1;
 }
 
+/* tone(volume, pitch) — start (if needed) and shape the continuous sine loop.
+ * Call repeatedly with new values; it updates in place, no retrigger. */
+static int l_tone(lua_State *L) {
+    float vol = clampf((float)luaL_optnumber(L, 1, 0.3), 0.0f, 1.0f);
+    float pitch = clampf((float)luaL_optnumber(L, 2, 1.0), 0.5f, 2.0f);
+    if (!g_ready || !g_tone.voice) { lua_pushboolean(L, 0); return 1; }
+    g_tone.voice->SetVolume(vol);
+    g_tone.voice->SetFrequencyRatio(pitch);
+    if (!g_toneOn) {
+        XAUDIO2_BUFFER xb = {0};
+        xb.AudioBytes = g_tone.bytes;
+        xb.pAudioData = g_tone.pcm;
+        xb.LoopCount = XAUDIO2_LOOP_INFINITE;
+        if (FAILED(g_tone.voice->SubmitSourceBuffer(&xb)) || FAILED(g_tone.voice->Start(0))) {
+            lua_pushboolean(L, 0);
+            return 1;
+        }
+        g_toneOn = true;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_tone_stop(lua_State *L) {
+    (void)L;
+    if (g_ready && g_toneOn && g_tone.voice) {
+        g_tone.voice->Stop(0);
+        g_tone.voice->FlushSourceBuffers();
+        g_toneOn = false;
+    }
+    return 0;
+}
+
 static int l_stop(lua_State *L) {
     (void)L;
     if (g_ready) {
         if (g_beacon.voice) { g_beacon.voice->Stop(0); g_beacon.voice->FlushSourceBuffers(); }
         if (g_arrival.voice) { g_arrival.voice->Stop(0); g_arrival.voice->FlushSourceBuffers(); }
+        if (g_toneOn && g_tone.voice) {
+            g_tone.voice->Stop(0);
+            g_tone.voice->FlushSourceBuffers();
+            g_toneOn = false;
+        }
     }
     return 0;
 }
@@ -252,6 +318,8 @@ static const luaL_Reg audio_funcs[] = {
     {"init", l_init},
     {"ping", l_ping},
     {"arrival", l_arrival},
+    {"tone", l_tone},
+    {"tone_stop", l_tone_stop},
     {"stop", l_stop},
     {"ready", l_ready},
     {NULL, NULL}
