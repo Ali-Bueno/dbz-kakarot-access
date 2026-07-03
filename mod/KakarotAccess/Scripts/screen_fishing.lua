@@ -34,10 +34,9 @@ local Fishing = {}
 Fishing.confirm_ticks = 1
 
 -- Re-enable to append tail samples + button internals to dumps/dump_fishing.txt
--- (how the fishing offsets in native_offsets.lua were found).
--- ON while mapping the second minigame phase ("aim for the center"), whose live
--- state is NOT at the phase-1 offsets.
-local DEBUG = true
+-- (how the fishing offsets in native_offsets.lua were found). OFF since the full
+-- flow was verified end-to-end in-game (user landed a fish, 2026-07-03).
+local DEBUG = false
 
 -- ACCESSIBILITY ASSIST (user request): the hook window is brutally short for
 -- ear-driven play — the bar appears the instant the fish bites and allows only a

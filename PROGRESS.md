@@ -44,7 +44,16 @@ Iteration findings, all live-verified with the user:
 `keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
 menu lag gone (check `ui step ms` in the dump).
 
-### Fishing minigame — FULLY DECODED (2026-07-03, iterated live with the user)
+### NEXT TASK (2026-07-03, user request): accessibilize the COOKING menu
+
+Known starting points (ui-map-and-roadmap.md §3): `Shop_Cook_C -> UAT_UICookingMenu`
+(`SetSelectTab`); header enum 13 = "Cooking". Likely hosts a `MenuListBase00/01/03`
+list -> the generic `A.list_selected_row` reader (GetSelectValue + ListPlateCtn)
+should cover the recipe list, like the shop. Recipes have have/needed ingredient
+counts -> follow reference/ui-accessibility/inventories.md (crafting rules). Start
+with an F7 discover dump inside the cooking screen to confirm widget names.
+
+### Fishing minigame — VERIFIED WORKING END-TO-END (2026-07-03, user landed a fish)
 
 Flow (see the fishing review link in the session): attract (wiggle stick, free) ->
 HOOK (phase 1: bar + sweeping arrow, press inside the red zone) -> REEL (phase 2:
