@@ -74,6 +74,9 @@ local S = {
         shop = "Tienda",
         paused = "Pausa",
         page = "página %s de %s",
+        pos = "%d de %d",
+        not_acquired = "No conseguido",
+        new_label = "Nuevo",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
         -- Navigation radar (nav_tracker.lua).
@@ -152,6 +155,9 @@ local S = {
         shop = "Shop",
         paused = "Paused",
         page = "page %s of %s",
+        pos = "%d of %d",
+        not_acquired = "Not acquired",
+        new_label = "New",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
         -- Navigation radar (nav_tracker.lua).

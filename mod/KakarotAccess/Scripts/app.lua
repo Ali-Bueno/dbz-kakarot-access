@@ -53,6 +53,7 @@ Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
 Registry.register(require("screen_characters"))                    -- Characters
 Registry.register(require("screen_party"))                         -- Party
 Registry.register(require("screen_tutorials"))                     -- System > Tutorials list
+Registry.register(require("screen_community"))                     -- Community / Soul Emblems
 Registry.register(require("screen_field"))
 Registry.register(require("screen_title"))
 

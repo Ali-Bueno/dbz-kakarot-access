@@ -38,6 +38,64 @@ local function message(w)
     return text ~= "" and text or nil
 end
 
+-- Like node_speech but via Core.read_text (reflected GetText() fallback), for nodes that
+-- may be native CFUIXcmnMultiLineText rather than the blueprint wrapper.
+local function node_rt(node)
+    if not Core.on_screen(node) then return nil end
+    return A.markup_to_speech(Core.read_text(node))
+end
+
+-- Content rows of the window's typed pools (native UAT_UIGameWindow, Xcmn_Win01_C's
+-- base class): item plates (name + count), community/soul-emblem rows (character name +
+-- "Community Level" title + level numbers), link-bonus rows, check rows, and the single
+-- detail-reward line. Reward/notice windows ("Soul Emblems Received", quest "Rewards")
+-- show these BELOW the prompt — without reading them only the title+body spoke. Each
+-- pool is pcall-guarded, so Xcmn_Win00_C (which has none of these members) skips
+-- harmlessly. WL_TextPlateCtn is NOT here: those rows are selectable choices, handled
+-- with selection semantics in choices() below.
+local POOLS = {
+    { arr = "WL_ItemPlateCtn",     texts = { "ItemName", "ItemNum" } },
+    { arr = "WL_TextCmuCtn",       texts = { "WL_CharName", "WL_LevelTitle" }, fixed = "WL_LvTextList" },
+    { arr = "WL_LinkListPlateCtn", texts = { "LinkNameText" } },
+    { arr = "WL_CheckPlateCtn",    texts = { "TxtList" } },
+}
+
+local function plates(w)
+    if not Core.valid(w) then return nil end
+    local parts = {}
+    for _, pool in ipairs(POOLS) do
+        pcall(function()
+            local arr = w[pool.arr]
+            for i = 1, #arr do
+                local row = arr[i]
+                if Core.valid(row) and Core.on_screen(row) then
+                    local p = {}
+                    for _, m in ipairs(pool.texts) do
+                        p[#p + 1] = node_rt(row[m])
+                    end
+                    -- fixed-size text array (per-community level numbers on emblem rows)
+                    if pool.fixed then
+                        pcall(function()
+                            local fx = row[pool.fixed]
+                            for j = 1, #fx do p[#p + 1] = node_rt(fx[j]) end
+                        end)
+                    end
+                    if #p > 0 then parts[#parts + 1] = table.concat(p, ", ") end
+                end
+            end
+        end)
+    end
+    pcall(function()
+        local dr = w.WL_DetailReward
+        if Core.valid(dr) and Core.on_screen(dr) then
+            local s = Core.phrase(node_rt(dr.TxtReward), node_rt(dr.TxtName), node_rt(dr.TxtNum))
+            if s ~= "" then parts[#parts + 1] = s end
+        end
+    end)
+    if #parts == 0 then return nil end
+    return table.concat(parts, ", ")
+end
+
 -- The active Yes/No confirmation options + the currently selected one. Active options
 -- are the TOP-LEVEL Xcmn_Win00_Choice_C (direct GameInstance children) that are actually
 -- on screen (on_screen, not just IsVisible — the pool keeps stale "Yes/No" choices whose
@@ -55,6 +113,22 @@ local function choices()
             end
         end
     end
+    -- A choice list OWNED by the window (WL_TextPlateCtn — e.g. the Soul Emblems "Sort"
+    -- popup) uses the same Xcmn_Win00_Choice_C rows but NESTED under the window's tree,
+    -- so the top-level filter above never sees them. Same highlight rule.
+    pcall(function()
+        local arr = win.WL_TextPlateCtn
+        for i = 1, #arr do
+            local ch = arr[i]
+            if Core.valid(ch) and Core.on_screen(ch) then
+                local label = A.markup_to_speech(Core.read_text(ch.Txt_Choice))
+                if label then
+                    labels[#labels + 1] = label
+                    if Core.is_visible(ch.Img_Xwin01_List) then sel = label end
+                end
+            end
+        end
+    end)
     return labels, sel
 end
 
@@ -97,8 +171,10 @@ function Dialog.update()
         -- the focused item (re-announced when you move between Yes/No).
         ann:focus(s.msg, nil, s.sel or s.labels[1], nil, nil)
     else
-        -- Plain message: the prompt is the item; a text change re-announces.
-        ann:focus(nil, nil, s.msg, nil, nil)
+        -- Plain message: the prompt is the item; a text change re-announces. Content
+        -- rows (rewards, received soul emblems, …) read as the tooltip, so a list that
+        -- pops in a few ticks after the title is still spoken on its own.
+        ann:focus(nil, nil, s.msg, nil, function() return plates(win) end)
     end
 end
 

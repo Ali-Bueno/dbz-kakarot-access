@@ -44,6 +44,38 @@ Iteration findings, all live-verified with the user:
 `keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
 menu lag gone (check `ui step ms` in the dump).
 
+### COMMUNITY / SOUL EMBLEMS — BUILT (2026-07-03), PENDING in-game verify
+
+User request: the "Soul Emblems Received" notice read only title+body (no emblem rows),
+and the Soul Emblems GRID (screenshots: LB/RB pages 6/7, yellow cursor frame, "?" =
+unacquired) read nothing. Three changes:
+
+- **`screen_dialog`**: the notice/reward windows are `Xcmn_Win01_C` whose native base
+  `UAT_UIGameWindow` exposes typed CONTENT POOLS — now read as the message's tooltip:
+  `WL_ItemPlateCtn` (ItemName+ItemNum), `WL_TextCmuCtn` (**soul-emblem rows**:
+  WL_CharName + WL_LevelTitle + WL_LvTextList levels), `WL_LinkListPlateCtn`,
+  `WL_CheckPlateCtn`, `WL_DetailReward`. Also `choices()` now includes the
+  window-owned `WL_TextPlateCtn` rows (nested Xcmn_Win00_Choice_C — e.g. the Sort
+  popup), same Img_Xwin01_List highlight rule.
+- **`screen_community.lua`** (NEW, registered before screen_field): GRID mode — host
+  `AT_UICommunityStart` (native find), slots `EmbList.EmbAry`
+  (UAT_UIXCmnEmb_Cursor); the selection signal is unverified, so 4 candidates
+  (Ins_Frame_Set / CanvasEffectA/B / AnimLoop playing) are probed and the first that
+  singles out EXACTLY ONE slot wins (sticky once found; wrong candidate = silence,
+  never a wrong read). Speaks slot text (Txt_Commu), "not acquired"
+  (UIXCmnEmb.ImageUnacquired = the "?"), "new", and "i of N". DETAIL mode — 
+  `Start_Commu_Detail_C` (blueprint in CXX dump): Txt_Name as name; tooltip =
+  Txt_Commu_Lv, Txt_Popular00, Txt_Link, Txt_Link_Detail, Txt_Char_Detail,
+  Reward_Bar00..02 (Txt_Reward + Txt_Num + Txt_Max00).
+- `DEBUG = true` in screen_community appends per-slot signal samples to
+  `dumps/dump_community.txt` (which visual marks the cursor, per-slot texts, face
+  textures) — if the grid stays silent, that file is the ground truth. i18n keys
+  added: pos / not_acquired / new_label; screen name = I18n.header(5).
+
+**To verify**: notice with emblems → full readout incl. names; Soul Emblems grid →
+move cursor speaks slot + position; A on emblem → detail readout; X → Sort options
+read with selection. Then read dump_community.txt, pin the cursor signal, DEBUG off.
+
 ### COOKING menu — REVISED (2026-07-03, after first live test), PENDING re-verify
 
 First live test: **entry spoke the full readout (recipe + effects + ingredients +
