@@ -44,6 +44,16 @@ return {
         labelAlt  = 0x460,   -- FString: alternate slot seen in SetFontType (fallback)
     },
 
+    -- Tips / tutorial book: UAT_UITips (Tips_C). The 2-page book keeps both windows loaded and
+    -- only one is the visible FRONT page; which one is a non-reflected member. CONFIRMED by F4:
+    -- 0x420 = front window index (0 = Tips_Win00, 1 = Tips_Win01), 0x424 = current page index
+    -- (0-based). Both update immediately on navigation (no lag), unlike the widgets' own page
+    -- numbers. We read the front window directly, so no two-window heuristic is needed.
+    tips = {
+        frontWindow = 0x420,     -- int32, 0 = Tips_Win00 is front, 1 = Tips_Win01  (CONFIRMED)
+        pageIndex   = 0x424,     -- int32, current page (0-based)  (CONFIRMED, unused for now)
+    },
+
     -- Overworld Party menu: UAT_UIStartParty. The selection is the plain struct field
     -- partySelectData.cursorIndex (FStartpartyPartySelectData). From the CXX header dump the
     -- struct sits at container +0x420 and cursorIndex is its first int32 -> abs 0x420. Tried

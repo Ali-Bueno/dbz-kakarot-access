@@ -232,16 +232,26 @@ function A.list_select_index(list)
 end
 
 -- The selected row's { name, num } from a MenuListBase list: GetSelectValue() indexes
--- ListPlateCtn (a TArray — 1-based in UE4SS Lua, so engine index + 1). name = row.TxtName,
--- num = row.TxtNum (count/price/level, nil if the row has none). nil if unreadable.
+-- ListPlateCtn (a TArray — 1-based in UE4SS Lua, so engine index + 1). Row label is TxtName
+-- on List00/01 rows and Txt_List on List03 rows (tutorials), so try both; num = TxtNum
+-- (count/price/level, nil if the row has none). nil if unreadable.
 function A.list_selected_row(list)
     local idx = A.list_select_index(list)
     if not idx then return nil end
     local plates
     if not pcall(function() plates = list.ListPlateCtn end) or plates == nil then return nil end
+    -- Bounds-check against the live array count BEFORE indexing. When a list rebuilds (e.g. a
+    -- tutorials tab switch), GetSelectValue can momentarily exceed the repopulated ListPlateCtn,
+    -- and an out-of-range index into a TArray ABORTS UNCATCHABLY (pcall can't save it).
+    local num
+    if not pcall(function() num = plates:GetArrayNum() end) then return nil end
+    if type(num) ~= "number" or idx < 0 or idx >= num then return nil end
     local row
     if not pcall(function() row = plates[idx + 1] end) or not Core.valid(row) then return nil end
-    return { name = Core.text_of(row.TxtName), num = Core.text_of(row.TxtNum) }
+    return {
+        name = Core.read_text(row.TxtName) or Core.read_text(row.Txt_List),
+        num  = Core.read_text(row.TxtNum),
+    }
 end
 
 -- A confirm button (e.g. "Guardar cambios") is a phantom overflow row at the last

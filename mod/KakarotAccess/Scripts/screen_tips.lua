@@ -1,32 +1,32 @@
 -- Screen adapter: tutorial / tip pages (Tips_C -> UAT_UITips).
 --
--- Tips_C is the game's multi-page tutorial widget (loading screens, the intro tutorial
--- fight, pause "View Controls"). Reverse-engineered behaviour (CXX headers + runtime dumps):
---   * It holds TWO windows (Tips_Win00/01) shown together like a 2-page book; a 3-page
---     tutorial fills them across navigations. CRUCIALLY, consecutive pages are BYTE-IDENTICAL
---     in every readable widget property (enum/opacity/slot/Z-order/canvas) — only which one is
---     drawn on top changes — so which page is "current" CANNOT be detected by polling, and the
---     game exposes no page index (verified in the object dump: AT_UITips has only
---     MouseClickTabLeft/Right + anims, no CurrentPage).
---   * So instead of picking the current window, we read BOTH on-screen windows and speak each
---     UNIQUE page ONCE (dedup by content) for as long as Tips_C stays up — no page goes mute,
---     and a stale window (a previous page still loaded) is never re-read. The dedup set clears
---     when Tips_C closes.
+-- Tips_C is the game's multi-page tutorial widget (loading screens, the intro tutorial fight,
+-- pause "View Controls", the System > Tutorials viewer). It is a 2-page book: BOTH windows
+-- (Tips_Win00/01) stay loaded, and which one is the visible FRONT page is a non-reflected C++
+-- member. The widgets' own page numbers / canvases lag by a navigation step, so instead we read
+-- the native front-window index (UAT_UITips + 0x420: 0 = Tips_Win00, 1 = Tips_Win01, CONFIRMED
+-- by F4) and read THAT window directly — correct immediately on both forward and back navigation.
 --
--- Per window (UTips_Win_C): header Txt_Title/Subtitle/Page, then EITHER the command list
--- (Tips_List00_* -> Txt_Detail name + Txt_Btn glyph) when the controls canvas Canvas_KeyTips
--- is the shown layout, OR the explanation prose (Txt_Detail00/01/03/04) on the text layouts —
--- so a text page reads its explanation, not the persistent Guard/Burst/Charge footer. All text
--- goes through A.markup_to_speech (strips <span>, resolves <inputicon> glyphs to button names).
+-- Within a window, each page uses ONE layout shown via its own canvas; the matching native
+-- TextBox holds that page's text (inactive layouts keep stale text), so we read only the layout
+-- whose canvas is on. Header Txt_Title/Subtitle/Page; the controls layout reads its command rows
+-- as "name: button". All text goes through A.markup_to_speech (strips <span>, resolves glyphs).
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
+local Mem = require("mem")
+local OFF = require("native_offsets")
 local Speech = require("speech")
 
 local Tips = {}
 
 local WINDOWS = { "Tips_Win00", "Tips_Win01" }
-local DETAILS = { "Txt_Detail00", "Txt_Detail01", "Txt_Detail03", "Txt_Detail04" }  -- (no 02 in the widget)
+local LAYOUTS = {
+    { canvas = "Canvas_TextOnly",     box = "TextBox_TextOnly" },
+    { canvas = "Canvas_TextAndImage", box = "TextBox_TextAndImage" },
+    { canvas = "Canvas_BNID",         box = "TextBox_BNID" },
+    { canvas = "Canvas_BigImage",     box = "TextBox_Detail03" },
+}
 local LIST_ITEMS = {
     "Tips_List00_L00_00", "Tips_List00_L00_01", "Tips_List00_L00_02",
     "Tips_List00_L01_00", "Tips_List00_L01_01", "Tips_List00_L01_02",
@@ -36,25 +36,52 @@ local LIST_ITEMS = {
 
 local tips = nil
 local tick = 0
-local announced = {}   -- page-content strings already spoken while Tips_C has been on screen
-local current = nil    -- on-screen window contents collected this tick
+-- The native front-window index gives the current page directly, so we track a single "spoken"
+-- content: navigating BACK to an already-seen page reads it again (front content changes), while
+-- sitting on a page doesn't repeat it. A short debounce absorbs the 1-tick page-turn transition.
+local STABLE_TICKS = 2
+local spoken = nil     -- last announced front-page content
+local pend = nil       -- { c = candidate content, n = consecutive ticks seen }
+local current = nil    -- the front window's content this tick
 
--- Speakable text of an Xcmn_MultiLineText_C node: its full markup (plain label OR inline
--- glyph) via reflected GetText(), run through markup_to_speech. nil if empty.
+-- Speakable text of an Xcmn_MultiLineText node: its full markup via reflected GetText(), run
+-- through markup_to_speech. nil if empty.
 local function node(n)
     if not Core.valid(n) then return nil end
     local ok, s = pcall(function() return n:GetText():ToString() end)
     return (ok and s and A.markup_to_speech(s)) or nil
 end
 
--- One window's speakable content: header + EITHER the command list (controls layout) OR the
--- explanation prose (text layouts) — never both, so the prose isn't buried under the footer.
-local function read_window(w)
+-- The window's "X/Y" page line, but ONLY when it is fresh: single-page tutorials leave a stale
+-- count (e.g. "3/3") from the previous tutorial, so we keep it only when its page X matches the
+-- native current-page index (0-based) + 1. nil when stale or a 1-page tutorial.
+local function page_line(w, pidx)
+    local s = node(w.TextBox_Page)
+    if not s then return nil end
+    if not pidx then return s end
+    local x = tonumber(s:match("^(%d+)"))
+    if x and (x - 1) == pidx then return s end
+    return nil
+end
+
+-- One window's speakable content: header + ONLY the currently-active layout (the controls list,
+-- or the one text box whose canvas is on) so stale text from other layouts is never mixed in.
+-- pidx = native current-page index (0-based) used to drop a stale page count.
+local function read_window(w, pidx)
+    if not Core.valid(w) then return nil end
+    local controls = Core.on_screen(w.Canvas_KeyTips)
+    local body = nil
+    if not controls then
+        for _, L in ipairs(LAYOUTS) do
+            if Core.on_screen(w[L.canvas]) then body = node(w[L.box]); break end
+        end
+    end
+
     local parts = {}
     local function add(s) if s and s ~= "" then parts[#parts + 1] = s end end
-    add(node(w.Txt_Title)); add(node(w.Txt_Subtitle)); add(node(w.Txt_Page))
+    add(node(w.TextBox_Title)); add(node(w.TextBox_SubTitle)); add(page_line(w, pidx))
 
-    if Core.on_screen(w.Canvas_KeyTips) then
+    if controls then
         -- Controls-reference layout: read the command rows as "name: button".
         for _, it in ipairs(LIST_ITEMS) do
             local item = w[it]
@@ -65,9 +92,7 @@ local function read_window(w)
             end
         end
     else
-        -- Text layout: the explanation only (the Guard/Burst/Charge footer is a persistent
-        -- reference on every page and would just repeat, so it's skipped here).
-        for _, d in ipairs(DETAILS) do add(node(w[d])) end
+        add(body)
     end
     return #parts > 0 and table.concat(parts, ", ") or nil
 end
@@ -75,28 +100,33 @@ end
 function Tips.is_active()
     tick = tick + 1
     tips = Core.cached_live("Tips_C", tick)   -- cheap: cached ref, no per-tick scan
-    if not Core.on_screen(tips) then announced, current = {}, nil return false end
-    current = {}
-    for _, wn in ipairs(WINDOWS) do
+    if not Core.on_screen(tips) then spoken, pend, current = nil, nil, nil return false end
+    current = nil
+    -- Native front-window index (0x420): 0 = Tips_Win00, 1 = Tips_Win01. Read that window; the
+    -- native page index (0x424) drops a stale page count on single-page tutorials.
+    local fw = Mem.i32(tips, OFF.tips.frontWindow)
+    local pidx = Mem.i32(tips, OFF.tips.pageIndex)
+    local wn = WINDOWS[(fw or 0) + 1]
+    if wn then
         local w = tips[wn]
-        if Core.on_screen(w) then
-            local c = read_window(w)
-            if c then current[#current + 1] = c end
-        end
+        if Core.on_screen(w) then current = read_window(w, pidx) end
     end
-    return #current > 0
+    return current ~= nil
 end
 
--- Dedup set persists across focus switches (only cleared when Tips_C closes, in is_active), so
--- a brief interruption (a subtitle over the tutorial) doesn't make it re-read every page.
 function Tips.reset() end
 
 function Tips.update()
-    local new = {}
-    for _, c in ipairs(current or {}) do
-        if not announced[c] then announced[c] = true; new[#new + 1] = c end
+    if not current then return end
+    if current == spoken then pend = nil return end
+    -- New front page: require it stable across a couple of ticks (absorbs the page-turn
+    -- transition), then speak it once.
+    if pend and pend.c == current then
+        pend.n = pend.n + 1
+        if pend.n >= STABLE_TICKS then spoken = current; pend = nil; Speech.say(current, true) end
+    else
+        pend = { c = current, n = 1 }
     end
-    if #new > 0 then Speech.say(table.concat(new, ". "), true) end
 end
 
 return Tips

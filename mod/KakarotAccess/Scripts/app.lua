@@ -45,6 +45,7 @@ Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters
 Registry.register(require("screen_party"))                         -- Party
+Registry.register(require("screen_tutorials"))                     -- System > Tutorials list
 Registry.register(require("screen_field"))
 Registry.register(require("screen_title"))
 
