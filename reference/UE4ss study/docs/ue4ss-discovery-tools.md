@@ -92,3 +92,63 @@ state won't appear.
    write a throwaway dumper, guard **every** deref with `IsValid` and avoid `RenderTransform`/nested-struct
    reads (they can abort uncatchably; see [accessibility-patterns](accessibility-patterns.md)).
 5. Iterate with **hot reload** (`Ctrl+R`).
+
+---
+
+## 4. Reading state that reflection CANNOT see (two proven techniques)
+
+Some menu state is a **non-`UPROPERTY` C++ member** — a private selection/page/window index the game never
+exposed to reflection. It's absent from the object dump and the Live View, and the CXX header shows it only
+as an unnamed tail gap. Two techniques recover it. Both were used to accessibilize DBZ Kakarot menus that
+were otherwise dead ends (battle pause, overworld menu, party slots, the Tips book).
+
+### 4a. Native memory diff — find a hidden index by watching raw memory (the "F4 probe")
+When Live View shows nothing flipping as you navigate, the index still lives in the object's memory tail.
+Find its offset by **diffing raw bytes as you move the cursor** — the memory-level equivalent of a Live
+View watch:
+
+1. A tiny **separate** in-process Lua C module (`mem_bridge.dll`) does **SEH-guarded** reads
+   (`read_i32/u8/ptr/bytes` at `obj:GetAddress() + off`; a bad address returns `nil`, never crashes). Keep
+   it apart from the screen-reader bridge.
+2. A dev keybind (we use **F4**) snapshots a broad tail window (e.g. `0x398..0x518`) of every candidate
+   on-screen object, and on the next press reports each `int32` that changed to a small value
+   (`0 ≤ v < 64`) — filtering out pointers/floats. Open a menu → press (baseline) → move the cursor →
+   press again: the offset whose value **steps `0→1→2…` and wraps** is the selection/page index.
+3. Read it at runtime via the same bridge and use it directly. A game patch → re-run the probe, edit one
+   offsets data file (no recompile).
+
+**Confirmed finds (DBZ Kakarot):** battle-pause row (`UAT_UIXCmnPause+0x43C`), overworld ring index
+(`UAT_UIStartTop+0x4E4`) + submenu depth flag (`+0x4DC`) + sub-cursor (`+0x4EC`), Tips book front-window
+index (`UAT_UITips+0x420`) + current-page index (`+0x424`). Each took ONE probe session. **This is the
+go-to whenever a "current selection / page / tab / window" isn't reflected** — faster and more reliable
+than any highlight-image heuristic. (For a purely static offset — e.g. a total-page count that doesn't
+change as you navigate — the diff won't catch it; read it from the CXX header gap instead.)
+
+### 4b. Fixed-array UPROPERTY collapse → `RegisterCustomProperty`
+A widget member declared as a **fixed C array** — `SomeType* Name; // (size: 0xNN)` where `NN > 8` (so it's
+`Name[NN/8]` inline pointers, not a `TArray`, whose size is `0x10`) — is **collapsed by UE4SS reflection to
+element 0 only**. `host.Name` yields element 0; `host.Name[i]` yields garbage/nil; and array methods
+(`:GetArrayNum()` / `#`) **abort uncatchably**. This hides every row of a multi-slot list (party slots,
+standby lists, character bars…).
+
+Recover the other elements with UE4SS's own **`RegisterCustomProperty`** — register each hidden pointer at
+`base + i*8` as an `ObjectProperty`, and UE4SS then exposes it as a normal reflected property:
+```lua
+RegisterCustomProperty({
+    ["Name"] = "Slot1",
+    ["Type"] = PropertyTypes.ObjectProperty,
+    ["BelongsToClass"] = "/Game/…/Start_Party_List.Start_Party_List_C",  -- runtime blueprint class path
+    ["OffsetInternal"] = 0x3A0,                                          -- base (0x398) + 1*8
+})
+-- then: host.Slot1  ->  the element-1 UObject, read normally
+```
+Register lazily **once** (guarded) when the screen first appears. Get `BelongsToClass` from a live instance
+(`obj:GetClass():GetFullName()` minus the `WidgetBlueprintGeneratedClass ` prefix), and confirm the offset
+with a one-shot probe: `Mem.ptr(host, base)` must equal `Mem.addr(host.Name)` (element 0), and
+`base + i*8` are the sibling pointers. **This unlocks any fixed-array row menu that reflection flattens.**
+
+### Related helper — pooled instances whose active copy alternates
+Unrelated to the above but a common "found but silent" cause: some screens have **several pooled instances**
+(`Start_Char_C_3`/`_4`) and only one is on-screen at a time, alternating. Caching a single instance
+(`cached_live`) locks onto one and goes mute when the other is live. Pick the on-screen one each tick
+instead (`Core.first_on_screen` = `cached_all` + `on_screen` filter).
