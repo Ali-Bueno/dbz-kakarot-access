@@ -36,6 +36,15 @@ Registry.register(require("screen_loading"))
 Registry.register(require("screen_tutorial"))
 Registry.register(require("screen_options"))
 Registry.register(require("screen_shop"))
+-- Overworld ring submenus that open their own screen (native class, no _C). The two list
+-- screens share the generic MenuListBase factory; Characters/Party use their own getter/field.
+local ListScreen = require("screen_list")
+Registry.register(ListScreen.new("AT_UIItemMenu", "Xmenu_List00",
+    function() return I18n.startlist(2) end))                       -- Items / Inventory
+Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
+    function() return I18n.startlist(1) end))                       -- Dragon Balls
+Registry.register(require("screen_characters"))                    -- Characters
+Registry.register(require("screen_party"))                         -- Party
 Registry.register(require("screen_field"))
 Registry.register(require("screen_title"))
 

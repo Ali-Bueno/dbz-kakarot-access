@@ -65,6 +65,18 @@ function Core.text_of(node)
     return nil
 end
 
+-- Robust text read: the plain mainTxt (Core.text_of), else the reflected GetText() on the
+-- node itself — some CFUIXcmnMultiLineText nodes render their value only through the parent
+-- FText, not through the inner mainTxt box. Returns nil if both are empty/unreadable.
+function Core.read_text(node)
+    local t = Core.text_of(node)
+    if t then return t end
+    if not Core.valid(node) then return nil end
+    local ok, s = pcall(function() return node:GetText():ToString() end)
+    if ok and s and s ~= "" then return s end
+    return nil
+end
+
 -- First live (runtime, not archetype/CDO) instance of a class. PREFERS the shared
 -- top-level widget — a DIRECT child of the GameInstance (…BP_ATGameInstance_C_0.<Name>) —
 -- over a nested/pooled copy inside another screen's WidgetTree. This matters for classes
@@ -125,6 +137,18 @@ function Core.cached_all(cls_name, tick)
         if tick then all_next[cls_name] = tick + REFRESH_EVERY end
     end
     return c
+end
+
+-- First currently on-screen instance of a class, or nil. Use this instead of cached_live
+-- when a class has SEVERAL pooled instances and the active (visible) one ALTERNATES between
+-- them (e.g. Start_Char_C exists as _3 and _4; only one is on_screen at a time). cached_live
+-- would lock onto one and go silent whenever the OTHER is the live one; this picks the live
+-- one each tick from the cached list (still cheap — the list is cached, not re-scanned).
+function Core.first_on_screen(cls_name, tick)
+    for _, o in ipairs(Core.cached_all(cls_name, tick)) do
+        if Core.on_screen(o) then return o end
+    end
+    return nil
 end
 
 -- Join non-empty parts with commas, skipping nils in ANY position.

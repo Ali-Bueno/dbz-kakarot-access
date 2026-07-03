@@ -44,6 +44,15 @@ return {
         labelAlt  = 0x460,   -- FString: alternate slot seen in SetFontType (fallback)
     },
 
+    -- Overworld Party menu: UAT_UIStartParty. The selection is the plain struct field
+    -- partySelectData.cursorIndex (FStartpartyPartySelectData). From the CXX header dump the
+    -- struct sits at container +0x420 and cursorIndex is its first int32 -> abs 0x420. Tried
+    -- via reflection first (host.partySelectData.cursorIndex); this native offset is the
+    -- fallback. UNVERIFIED at runtime -> if wrong the reader stays inactive (harmless).
+    startParty = {
+        cursorIndex = 0x420,     -- int32, selected party row (fallback if reflection fails)
+    },
+
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named
     -- UFunction). ListBarArray is the reflected TArray at 0x3a8 (data) / 0x3b0 (count).
