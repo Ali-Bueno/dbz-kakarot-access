@@ -1,40 +1,57 @@
--- Screen adapter: Community — Soul Emblems (grid + per-character detail).
+-- Screen adapter: Community — Soul Emblems (grid + per-character detail) and the
+-- Community Board (the 2D emblem-placement editor).
 --
--- Two screens (verified against the user's screenshots, 2026-07-03):
---   * Soul Emblem GRID — native `AT_UICommunityStart` (no blueprint in the CXX dump
---     session): LB/RB pages of emblem slots in `EmbList.EmbAry`
---     (`UAT_UIXCmnEmb_Cursor` each; the emblem itself is its `UIXCmnEmb`).
---     LIVE-VERIFIED (dump_community.txt 2026-07-03): the selected slot is the one
---     whose AnimLoop is PLAYING (transient — fires while the cursor moves, so the
---     last resolved index is held while idle); Txt_Commu is the emblem's COMMUNITY
---     LEVEL; acquisition comes from the face brush (acquired = MaterialInstanceDynamic
---     whose texture parameter is the character icon → the CHAR_TOKENS name;
---     unacquired = the constant "?" mask) — ImageUnacquired is never visible.
+-- Screens (user screenshots + live dumps, 2026-07-03):
 --   * Emblem DETAIL — `Start_Commu_Detail_C` (blueprint known from the CXX dump):
 --     character name (Txt_Name), community level (Txt_Commu_Lv), popularity
 --     (Txt_Popular00), link bonus (Txt_Link + Txt_Link_Detail), description
 --     (Txt_Char_Detail) and the reward bars (Xlist_Reward_Commu rows, have/max).
+--   * Soul Emblem GRID — native `AT_UICommunityStart`: LB/RB pages of emblem slots
+--     in `EmbList.EmbAry` (`UAT_UIXCmnEmb_Cursor` each; the emblem is its
+--     `UIXCmnEmb`). LIVE-VERIFIED (dump_community.txt): selected slot = the one
+--     whose AnimLoop is PLAYING (transient — the last resolved index is held while
+--     the cursor idles); Txt_Commu = the emblem's COMMUNITY LEVEL; acquisition =
+--     face brush is a MaterialInstanceDynamic (its texture parameter is the
+--     character icon → CHAR_TOKENS name) vs the constant "?" mask — CAUTION: the
+--     MID is ALSO named "Ins_Emb_Mask"; ImageUnacquired is never visible.
+--   * COMMUNITY BOARD — native `AT_UICommunityBoard`: LB/RB boards (Z Warrior,
+--     Cooking, …), a free cursor over emblem SOCKETS (`WL_BrdFrame.WL_PanelTbl`,
+--     `UAT_UICommunityBoard_Panel` each: `WL_Emblem` → same face-texture name read,
+--     `WL_Lv` level, leader pedestal) and the right-hand summary
+--     (`WL_CommuBrdDetail`: title, overall level, rank, active skills). Hovered
+--     socket: a panel's ActiveAnim if it singles one out, else the NEAREST socket
+--     to the cursor widget by canvas-slot position (unverified live — DEBUG dumps
+--     what's needed to pin them).
 --
--- The header logo is an image font, so the mod supplies the screen name
--- (I18n.header(5) = "Soul Emblems", the game's own EXCmnHeaderFontType id).
+-- The header logos are image fonts, so the mod supplies the screen names from the
+-- game's own EXCmnHeaderFontType ids (I18n.header 5 = Soul Emblems, 1 = board).
+--
+-- PERF: the user hit real input lag here. Rules: ONE reflected-anim scan per tick,
+-- the focused label CACHED (recomputed on index change or ~1 s — fresh reads cost
+-- GetFullName + texture-parameter walks per 100 ms), socket positions cached per
+-- board, and file I/O only behind DEBUG on selection changes.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
 local I18n = require("i18n")
+local Speech = require("speech")
 
 local Commu = {}
 
--- Appends grid-slot signal samples to dumps/dump_community.txt. OFF since selection,
--- acquisition and character names were all pinned live (2026-07-03); re-enable if the
--- grid misbehaves again.
+-- Appends selection samples to dumps/dump_community.txt (grid pinned live 2026-07-03;
+-- the BOARD cursor/socket mapping is still unverified — re-enable for one board visit
+-- if the board reads wrong sockets or none).
 local DEBUG = false
 
 local ann = Core.make_announcer()
 local tick = 0
-local grid, det = nil, nil
-local mode = nil            -- "detail" | "grid"; announcer resets on change
-local sticky_sig = nil      -- once a signal proved unique, test only that one (perf)
-local last_idx = nil        -- selection held between cursor moves (the signal is transient)
+local det, grid, board = nil, nil, nil
+local mode = nil            -- "detail" | "grid" | "board"; announcer resets on change
+local last_idx = nil        -- selection held between cursor moves (signals are transient)
+local label_cache, label_idx, label_tick = nil, nil, 0
+local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same slot's label
+local last_title = nil      -- board title, gates the spoken board summary
+local panel_cache = nil     -- { key, list = {panel...}, xy = {{x,y}...} } per board
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -46,44 +63,16 @@ local function read(node)
     return clean(Core.read_text(node))
 end
 
--- ---- grid: slots + selection ------------------------------------------------
-
--- The grid's emblem slots (on-screen entries of EmbList.EmbAry, in array order —
--- matches the visual left-to-right, top-to-bottom layout).
-local function slots()
-    local out = {}
-    pcall(function()
-        local arr = grid.EmbList.EmbAry
-        for i = 1, #arr do
-            local s = arr[i]
-            if Core.valid(s) and Core.is_visible(s) then out[#out + 1] = s end
-        end
-    end)
-    return out
+local function anim_playing(w, anim)
+    local ok, p = pcall(function() return w:IsAnimationPlaying(anim) end)
+    return ok and p == true
 end
 
--- Cursor signals (live-verified in dump_community.txt, 2026-07-03): the selected slot
--- is the one whose AnimLoop is PLAYING. It's transient (stops when the cursor idles),
--- so update() holds on to the last resolved index while the grid stays up. The
--- visibility candidates were useless live (Ins_Frame_Set false everywhere, the effect
--- canvases true everywhere), so they're gone; AnimEnter kept as a fallback.
-local SIGNALS = {
-    { key = "anim",  test = function(s)
-        local ok, p = pcall(function() return s:IsAnimationPlaying(s.AnimLoop) end)
-        return ok and p == true
-    end },
-    { key = "enter", test = function(s)
-        local ok, p = pcall(function() return s:IsAnimationPlaying(s.AnimEnter) end)
-        return ok and p == true
-    end },
-}
-
--- Index of the slot a signal singles out, or nil if it matches zero or several.
-local function unique_match(list, sig)
+-- Index of the item a predicate singles out, or nil if it matches zero or several.
+local function unique_match(list, test)
     local hit, n = nil, 0
     for i, s in ipairs(list) do
-        local ok, v = pcall(sig.test, s)
-        if ok and v then
+        if test(s) then
             n = n + 1
             if n > 1 then return nil end
             hit = i
@@ -92,26 +81,11 @@ local function unique_match(list, sig)
     return n == 1 and hit or nil
 end
 
--- The selected slot's index: the sticky signal first (fast path), else probe all
--- candidates and remember whichever one is unique this tick.
-local function selected(list)
-    if sticky_sig then
-        local hit = unique_match(list, sticky_sig)
-        if hit then return hit, sticky_sig.key end
-    end
-    for _, sig in ipairs(SIGNALS) do
-        local hit = unique_match(list, sig)
-        if hit then sticky_sig = sig return hit, sig.key end
-    end
-    return nil, nil
-end
+-- ---- character identity from the emblem face --------------------------------
 
--- The emblem face's brush resource full name. Live-verified (dump_community.txt):
--- an ACQUIRED slot swaps the face brush to a MaterialInstanceDynamic carrying the
--- character icon as a texture parameter; an unacquired one keeps the constant "?"
--- mask material. CAUTION: the MID is confusingly ALSO named "Ins_Emb_Mask", so
--- acquisition is decided by the MaterialInstanceDynamic part of the name, never by
--- the mask name (that bug made every emblem read "not acquired").
+-- The emblem face's brush resource full name. An ACQUIRED emblem swaps the face
+-- brush to a MaterialInstanceDynamic carrying the character icon as a texture
+-- parameter; an unacquired one keeps the constant "?" mask material.
 local function face_resource(emb)
     local name
     pcall(function()
@@ -161,9 +135,24 @@ local function face_char(emb)
     return tok and (CHAR_TOKENS[tok] or tok) or nil
 end
 
--- What a slot sounds like: character name (acquired), "not acquired" ("?" mask),
--- labeled community level (Txt_Commu is the bare level number — live-verified),
--- the new marker, and the position in the visible grid.
+-- ---- grid: slots + labels -----------------------------------------------------
+
+-- The grid's emblem slots (on-screen entries of EmbList.EmbAry, in array order —
+-- matches the visual left-to-right, top-to-bottom layout).
+local function slots()
+    local out = {}
+    pcall(function()
+        local arr = grid.EmbList.EmbAry
+        for i = 1, #arr do
+            local s = arr[i]
+            if Core.valid(s) and Core.is_visible(s) then out[#out + 1] = s end
+        end
+    end)
+    return out
+end
+
+-- What a grid slot sounds like: character name (acquired), "not acquired" ("?"
+-- mask), labeled community level, the new marker, and the grid position.
 local function slot_label(s, idx, count)
     local emb
     pcall(function() emb = s.UIXCmnEmb end)
@@ -183,7 +172,131 @@ local function slot_label(s, idx, count)
         string.format(I18n.t("pos"), idx, count))
 end
 
--- ---- grid: DEBUG dump ---------------------------------------------------------
+-- ---- board: sockets, cursor, summary -------------------------------------------
+
+-- Canvas-slot position of a widget (Left/Top of its CanvasPanelSlot offsets), or nil.
+-- Plain reflected data — NEVER read RenderTransform here (uncatchable abort, seen on
+-- the pause menu 2026-07-01).
+local function slot_xy(w)
+    local x, y
+    pcall(function()
+        local off = w.Slot.LayoutData.Offsets
+        x, y = off.Left + 0.0, off.Top + 0.0
+    end)
+    return x, y
+end
+
+-- The board's sockets + their positions, cached per board (they only change when
+-- the board itself changes; re-scanning canvas slots per tick is wasted cost).
+local function board_panels(frame, key)
+    if panel_cache and panel_cache.key == key then return panel_cache end
+    local c = { key = key, list = {}, xy = {} }
+    pcall(function()
+        local arr = frame.WL_PanelTbl
+        for i = 1, #arr do
+            local p = arr[i]
+            if Core.valid(p) and Core.is_visible(p) then
+                local x, y = slot_xy(p)
+                c.list[#c.list + 1] = p
+                c.xy[#c.list] = { x = x, y = y }
+            end
+        end
+    end)
+    panel_cache = c
+    return c
+end
+
+-- The board cursor's position, from the first cursor widget with a readable slot.
+local CURSOR_MEMBERS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_EmbCursorFrame" }
+local function cursor_xy(frame)
+    for _, m in ipairs(CURSOR_MEMBERS) do
+        local w
+        pcall(function() w = frame[m] end)
+        if Core.valid(w) then
+            local x, y = slot_xy(w)
+            if x then return x, y, m end
+        end
+    end
+end
+
+-- The hovered socket: a panel's ActiveAnim when it singles one out, else the
+-- nearest socket to the cursor position.
+local function board_selected(frame, pc)
+    local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
+    if idx then return idx, "anim" end
+    local cx, cy = cursor_xy(frame)
+    if not cx then return nil, nil end
+    local best, bd
+    for i, xy in ipairs(pc.xy) do
+        if xy.x then
+            local d = (xy.x - cx) ^ 2 + (xy.y - cy) ^ 2
+            if not bd or d < bd then bd, best = d, i end
+        end
+    end
+    return best, "near"
+end
+
+-- What a socket sounds like: its emblem's character + level (+ leader pedestal),
+-- or "empty socket", plus the socket position.
+local function panel_label(p, idx, count)
+    local name
+    local embr
+    pcall(function() embr = p.WL_Emblem end)
+    if Core.valid(embr) and Core.is_visible(embr) then
+        pcall(function() name = face_char(embr.UIXCmnEmb) end)
+    end
+    local lv = read(p.WL_Lv)
+    local plus = read(p.WL_Plus_Lv)
+    local leader = false
+    pcall(function()
+        leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
+    end)
+    return Core.phrase(
+        name or I18n.t("empty_socket"),
+        lv and string.format(I18n.t("lvl"), lv) or nil,
+        plus,
+        leader and I18n.t("leader") or nil,
+        string.format(I18n.t("pos"), idx, count))
+end
+
+-- The right-hand pane: board title (used as the announcer tab) and the summary
+-- (overall level, to-next-rank, rank, active skills) spoken when the board changes.
+local function board_detail()
+    local d
+    pcall(function() d = board.WL_CommuBrdDetail end)
+    return Core.valid(d) and d or nil
+end
+
+local function board_title()
+    local d = board_detail()
+    return d and read(d.WL_Txt_Titl00) or nil
+end
+
+local function board_summary()
+    local d = board_detail()
+    if not d then return nil end
+    local parts = {}
+    local function pair(a, b)
+        local t = Core.phrase(read(d[a]), read(d[b]))
+        if t ~= "" then parts[#parts + 1] = t end
+    end
+    pair("WL_Txt_Level00", "WL_Txt_Level_Num00")   -- overall level caption + value
+    pair("WL_Txt_Level01", "WL_Txt_Level_Num01")   -- to-next-rank caption + value
+    pair("WL_Txt_Rank", "WL_Txt_Rank_Num00_00")    -- rank caption + value
+    pcall(function()
+        for i = 0, 2 do
+            local sk = d[string.format("WL_Brd_Activ_Skill%02d", i)]
+            if Core.valid(sk) and Core.is_visible(sk) then
+                local t = read(sk.WL_Txt_Activ_Skill)
+                if t then parts[#parts + 1] = t end
+            end
+        end
+    end)
+    if #parts == 0 then return nil end
+    return table.concat(parts, ", ")
+end
+
+-- ---- DEBUG dumps ----------------------------------------------------------------
 
 local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
@@ -191,45 +304,24 @@ local function dump_path()
     return dir .. "\\dumps\\dump_community.txt"
 end
 
--- The face material's texture parameters (acquired slots use a MaterialInstanceDynamic;
--- its texture full names should identify the CHARACTER — the missing piece for speaking
--- names in the grid). Also its parent material, in case the id lives there.
-local function face_debug(emb)
-    local out = "-"
-    pcall(function()
-        local ro = emb.ImageFace.Brush.ResourceObject
-        if not (ro and ro:IsValid()) then return end
-        out = ro:GetFullName():match("([%w_%.]+)$") or "?"
-        pcall(function()
-            local p = ro.Parent
-            if p and p:IsValid() then out = out .. " parent=" .. (p:GetFullName():match("([%w_%.]+)$") or "?") end
-        end)
-        pcall(function()
-            local tp = ro.TextureParameterValues
-            for j = 1, #tp do
-                local tex = tp[j].ParameterValue
-                if tex and tex:IsValid() then out = out .. " tex=" .. tex:GetFullName() end
-            end
-        end)
-    end)
-    return out
-end
-
-local function dump_grid(list, sel_idx, sig_key)
+local function dump_board(frame, pc, idx, how)
     local f = io.open(dump_path(), "a")
     if not f then return end
-    f:write(string.format("[%d] grid slots=%d sel=%s sig=%s\n",
-        os.time(), #list, tostring(sel_idx), tostring(sig_key)))
-    for i, s in ipairs(list) do
-        local emb; pcall(function() emb = s.UIXCmnEmb end)
-        f:write(string.format("  %02d commu=%s face: %s\n", i,
-            tostring(Core.read_text(s.Txt_Commu)),
-            Core.valid(emb) and face_debug(emb) or "-"))
+    local cx, cy, src = cursor_xy(frame)
+    f:write(string.format("[%d] board sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
+        os.time(), #pc.list, tostring(idx), tostring(how),
+        tostring(cx), tostring(cy), tostring(src)))
+    for i, p in ipairs(pc.list) do
+        local xy = pc.xy[i]
+        f:write(string.format("  %02d xy=%s,%s active=%s label=%s\n", i,
+            tostring(xy.x), tostring(xy.y),
+            tostring(anim_playing(p, p.ActiveAnim)),
+            panel_label(p, i, #pc.list)))
     end
     f:close()
 end
 
--- ---- detail readout -----------------------------------------------------------
+-- ---- detail readout --------------------------------------------------------------
 
 -- The detail pane's reward bars (Xlist_Reward_Commu: reward text + have/max numbers).
 local function reward_parts()
@@ -262,16 +354,23 @@ local function detail_text()
     return table.concat(parts, ", ")
 end
 
--- ---- adapter protocol ----------------------------------------------------------
+-- ---- adapter protocol -------------------------------------------------------------
+
+local function clear_state()
+    last_idx, label_cache, label_idx = nil, nil, nil
+    last_title, panel_cache = nil, nil
+end
 
 function Commu.is_active()
     tick = tick + 1
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     grid = det == nil and Core.first_on_screen("AT_UICommunityStart", tick) or nil
-    local m = (det and "detail") or (grid and "grid") or nil
+    board = (det == nil and grid == nil)
+        and Core.first_on_screen("AT_UICommunityBoard", tick) or nil
+    local m = (det and "detail") or (grid and "grid") or (board and "board") or nil
     if m ~= mode then
         ann:reset()
-        sticky_sig, last_idx = nil, nil
+        clear_state()
     end
     mode = m
     return m ~= nil
@@ -279,7 +378,58 @@ end
 
 function Commu.reset()
     ann:reset()
-    mode, sticky_sig, last_idx = nil, nil, nil
+    mode = nil
+    clear_state()
+end
+
+-- The focused label, cached: recomputed only when the index changes or every
+-- LABEL_REFRESH ticks (a fresh read per tick was a real input-lag source here).
+local function cached_label(idx, make)
+    if idx ~= label_idx or tick - label_tick >= LABEL_REFRESH then
+        label_idx, label_tick = idx, tick
+        label_cache = make()
+    end
+    return label_cache
+end
+
+local function grid_update()
+    local list = slots()
+    if #list == 0 then return end
+    -- The AnimLoop signal only fires while the cursor MOVES — hold the last resolved
+    -- slot while idle so the state stays stable (and F1 repeat keeps working).
+    local idx = unique_match(list, function(s) return anim_playing(s, s.AnimLoop) end)
+    if idx then last_idx = idx else idx = last_idx end
+    if not idx or not list[idx] then return end
+    local label = cached_label(idx, function() return slot_label(list[idx], idx, #list) end)
+    ann:focus(I18n.header(5), nil, label, nil, nil)
+end
+
+local function board_update()
+    local frame
+    pcall(function() frame = board.WL_BrdFrame end)
+    if not Core.valid(frame) then return end
+    local title = board_title()
+    local pc = board_panels(frame, title or "?")
+    local idx, how
+    if #pc.list > 0 then idx, how = board_selected(frame, pc) end
+    if idx then
+        if DEBUG and idx ~= last_idx then dump_board(frame, pc, idx, how) end
+        last_idx = idx
+    else
+        idx = last_idx
+    end
+    local label = (idx and pc.list[idx])
+        and cached_label(idx, function() return panel_label(pc.list[idx], idx, #pc.list) end)
+        or nil
+    -- Screen name spoken on entry; the board title is the tab (LB/RB announces it);
+    -- the summary (level/rank/active skills) queues after whenever the board changes.
+    ann:focus(I18n.header(1), title, label, nil, nil)
+    if title and title ~= last_title then
+        last_title = title
+        panel_cache = nil                    -- socket layout changes with the board
+        local s = board_summary()
+        if s then Speech.say(s, false) end
+    end
 end
 
 function Commu.update()
@@ -287,21 +437,11 @@ function Commu.update()
         local name = read(det.Txt_Name)
         if not name then return end
         ann:focus(I18n.header(5), nil, name, nil, detail_text)
-        return
+    elseif mode == "grid" then
+        grid_update()
+    elseif mode == "board" then
+        board_update()
     end
-    local list = slots()
-    if #list == 0 then return end
-    local idx, sig = selected(list)
-    -- The anim signal only fires while the cursor MOVES — keep the last resolved slot
-    -- while idle so the state stays stable (and F1 repeat keeps working).
-    if idx then
-        if DEBUG and idx ~= last_idx then dump_grid(list, idx, sig) end
-        last_idx = idx
-    else
-        idx = last_idx
-    end
-    if not idx or not list[idx] then return end
-    ann:focus(I18n.header(5), nil, slot_label(list[idx], idx, #list), nil, nil)
 end
 
 return Commu

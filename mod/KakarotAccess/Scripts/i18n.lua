@@ -78,6 +78,9 @@ local S = {
         not_acquired = "No conseguido",
         new_label = "Nuevo",
         commu_lv = "nivel de comunidad %s",
+        lvl = "nivel %s",
+        empty_socket = "Hueco vacío",
+        leader = "líder",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
         -- Navigation radar (nav_tracker.lua).
@@ -160,6 +163,9 @@ local S = {
         not_acquired = "Not acquired",
         new_label = "New",
         commu_lv = "community level %s",
+        lvl = "level %s",
+        empty_socket = "Empty socket",
+        leader = "leader",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
         -- Navigation radar (nav_tracker.lua).

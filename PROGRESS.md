@@ -85,6 +85,32 @@ DEBUG off. **Verify**: grid reads "Goku, community level 3, 1 of 21" / "Not
 acquired, 8 of 21"; detail on A; Sort options on X; the received-emblems notice
 rows.
 
+### COMMUNITY BOARD + perf fix + dialogue choices + telops (2026-07-03, evening) — PENDING verify
+
+- **GRID INPUT LAG FIXED** (user: "omega delay" on the emblem grid). Causes: the old
+  build probed 2 anim signals × 21 slots + rebuilt the spoken label (GetFullName +
+  texture-parameter walks) EVERY 100 ms tick. Now: ONE AnimLoop scan per tick and the
+  label is cached (recomputed on index change or ~1 s, `cached_label` in
+  screen_community). Same rule was the old dev_log lesson: no per-tick heavy reads.
+  Verify with Ctrl+F5 `ui step ms` if it still feels slow.
+- **COMMUNITY BOARD mode** in screen_community (`AT_UICommunityBoard`): sockets =
+  `WL_BrdFrame.WL_PanelTbl` (each `WL_Emblem` face → same CHAR_TOKENS name read,
+  `WL_Lv` level, leader pedestal, else "empty socket"); hovered socket = a panel's
+  ActiveAnim if unique, else NEAREST socket to the cursor widget by canvas-slot
+  position (`WL_PanelCursor`/`WL_Img_Curs_Fing00`/`WL_EmbCursorFrame` — positions via
+  Slot.LayoutData.Offsets, NEVER RenderTransform which abort-crashes); board title
+  (`WL_CommuBrdDetail.WL_Txt_Titl00`) = the announcer tab (LB/RB), and the summary
+  (overall level / to-next-rank / rank / active skills) queues on board change.
+  Socket positions cached per board. UNVERIFIED live: the cursor/socket mapping —
+  if wrong, set DEBUG=true in screen_community and visit the board once.
+- **`screen_choice.lua`** (NEW, above dialogue): dialogue/quest choices —
+  `Choice_Cmd_C` rows on screen, label `Txt_Choice`, selected = `Dmy_Choice_Hover` /
+  native `HoverImage` visible; prompt = `Choice_Win_C` message or the sub-story
+  accept window's `Quest_Sub_C.TextBox_Title+Detail`, spoken once as the screen.
+- **`screen_telop.lua`** (NEW, below dialogue, nav_mute=false): quest banners —
+  `Quest_Main_Telop_C`'s 12 `Telop_Txt_*` slots (Txt_Caption + Txt_Name), each
+  unique text spoken once (queued) and re-armed when the banner leaves the screen.
+
 ### COOKING menu — REVISED (2026-07-03, after first live test), PENDING re-verify
 
 First live test: **entry spoke the full readout (recipe + effects + ingredients +

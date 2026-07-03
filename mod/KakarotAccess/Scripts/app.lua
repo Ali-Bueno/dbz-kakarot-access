@@ -34,7 +34,13 @@ Registry.register(require("screen_pause"))
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
 -- are time-critical and a subtitle line must not shadow them.
 Registry.register(require("screen_fishing"))
+-- Dialogue choices sit ABOVE the line reader: when an NPC question shows options,
+-- the choice (prompt + hovered option) must win over the lingering talk line.
+Registry.register(require("screen_choice"))
 Registry.register(require("screen_dialogue"))
+-- Telop banners sit BELOW dialogue: a subtitle wins the tick and the banner (still
+-- pending while on screen) speaks right after it, queued.
+Registry.register(require("screen_telop"))
 Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
 Registry.register(require("screen_tutorial"))
