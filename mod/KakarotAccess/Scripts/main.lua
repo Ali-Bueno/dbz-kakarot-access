@@ -10,6 +10,7 @@
 
 local Speech = require("speech")
 local Mem = require("mem")
+local Audio = require("audio")
 
 local MOD = "KakarotAccess"
 print("[" .. MOD .. "] Lua loading...\n")
@@ -19,6 +20,9 @@ Speech.init()
 -- Loaded here (before the protected snapshot) so it survives Ctrl+Shift+R like the
 -- speech bridge. Kept SEPARATE from prism_bridge (screen reader only).
 Mem.init()
+-- Native audio-cue player (audio_bridge.dll, XAudio2) for the navigation radar.
+-- Same lifecycle as the other bridges: loaded once, survives hot reloads.
+Audio.init()
 
 -- Snapshot everything loaded so far (stdlib + speech + prism_bridge + mem_bridge). These must
 -- survive a reload; anything required AFTER this point is our own logic and is
@@ -55,6 +59,19 @@ end)
 
 -- F1: repeat the currently focused menu item.
 RegisterKeyBind(Key.F1, function() App.repeat_current() end)
+
+-- F3: toggle the quest navigation radar (off = immediate silence).
+RegisterKeyBind(Key.F3, function() App.nav_toggle() end)
+
+-- Shift+F3: toggle NavMesh route guidance (beacon follows path corners vs straight line).
+RegisterKeyBind(Key.F3, { ModifierKey.SHIFT }, function() App.nav_route_toggle() end)
+
+-- F5: announce the tracked objective on demand (type, distance, clock direction).
+RegisterKeyBind(Key.F5, function() App.nav_where() end)
+
+-- Ctrl+F5: dev-only — dump the guidance candidates + a NavMesh probe to
+-- Scripts/dumps/dump_nav_targets.txt for offline diagnosis.
+RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)
 
 -- F2: read the on-screen button prompts (the contextual keyhelp bar).
 RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)

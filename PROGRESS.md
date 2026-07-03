@@ -1,6 +1,33 @@
 # DBZ Kakarot Accessibility — Progress & Next Steps
 
-_Session handoff, last updated 2026-07-02._
+_Session handoff, last updated 2026-07-03._
+
+---
+
+## NEW (2026-07-03): Quest navigation radar — built, PENDING in-game verify
+
+Audio radar that guides to the active quest objective, ported from the XV2 mod (same sounds,
+same by-ear-validated formulas) and improved with NavMesh route guidance. Everything compiled
+and the audio path is verified end-to-end outside the game (test harness: pan/pitch/arrival OK).
+
+- **`src/audio_bridge/`** → `audio_bridge.dll` (3rd Lua-C bridge, XAudio2): `ping(pan,vol,pitch)`,
+  `arrival()`, `stop()`. Sounds copied from XV2 into `Scripts/sounds/` (beacon.wav, arrived.wav).
+  Needed `CoInitializeEx` + `ole32.lib` (XAudio2 2.9 enumerates devices via COM).
+- **`Scripts/nav_tracker.lua`** — its own 50 ms loop (generation+busy guarded). Target = the game's
+  own guidance markers: `FindAllOf("AT_UIMiniMapNaviIcon")` → `.TargetActor` (verified reflected),
+  classified by the actor's `ATMapIconComponent.MapIconType` (EMapIcon 24/71 main, 26/40/47/53/59/72
+  sub). Auto-tracks a new marker (quest accept), retargets on step change, drops after 3 missed
+  scans. Cadence 120–850 ms over 5–200 m (3D dist), vol `1−0.6t`, behind-pitch `1+fb·0.3` (min 0.6),
+  equal-power pan vs CAMERA forward. Arrival at 8 m (3D) → arrived.wav + "Objetivo alcanzado".
+  Route mode (default ON): `NavigationSystemV1.FindPathToLocationSynchronously` (verified reflected)
+  → beacon points at the next path corner, cadence still tracks the final objective; auto-fallback
+  to straight line. Gated silent when a screen adapter is active OR the minimap is hidden.
+- **Keys:** **F3** radar on/off (off = instant silence) · **Shift+F3** route mode · **F5** speak
+  target (type, meters, clock, above/below) · **Ctrl+F5** dev dump → `Scripts/dumps/dump_nav_targets.txt`.
+- **To verify in game:** (1) F8 pipeline OK; (2) accept a quest → should auto-announce "Rastreando…"
+  and start beeping; (3) pan left/right correct (XV2 needed a by-ear sign flip — if mirrored, negate
+  `pan` in nav_tracker.lua step()); (4) walk to the marker → arrival at ~8 m; (5) Ctrl+F5 dump if the
+  scan finds nothing (check `in_use`/`pri` per icon and the navmesh probe line).
 
 This is the "where did we leave off" doc. It captures what works, how the native side was
 built, the key lessons, and exactly what to do next.

@@ -22,6 +22,10 @@ dragon ball kakarot access/            ← this repo
 ├── src/prism_bridge/                  ← the Lua C module (built once, rarely changes)
 │   ├── prism_bridge.c                 ← static Lua 5.4.4 + dynamic prism.dll; exposes the prism table
 │   └── build.ps1                      ← compiles lua54.lib + prism_bridge.dll, deploys to the game
+├── src/mem_bridge/                    ← guarded native memory reads (non-reflected members)
+├── src/audio_bridge/                  ← XAudio2 cue player for the navigation radar
+│   ├── audio_bridge.cpp               ← ping (pan/volume/pitch) + arrival cues; sounds from Scripts/sounds/
+│   └── build.ps1                      ← same pattern; deploys audio_bridge.dll
 ├── mod/KakarotAccess/Scripts/         ← Lua mod + runtime DLLs (junctioned into the game)
 │   ├── main.lua                       ← entry: F8 speech test, F9 read position, Ctrl+F8 silence
 │   ├── speech.lua                     ← speech sink over the prism_bridge module
@@ -45,7 +49,9 @@ dragon ball kakarot access/            ← this repo
 ## Build
 
 ```sh
-pwsh -File src\prism_bridge\build.ps1
+pwsh -File src\prism_bridge\build.ps1     # screen reader bridge
+pwsh -File src\mem_bridge\build.ps1       # native memory reader
+pwsh -File src\audio_bridge\build.ps1     # navigation radar cue player
 ```
 
 `build.ps1` is self-contained:

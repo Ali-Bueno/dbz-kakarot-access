@@ -65,6 +65,10 @@ end
 
 function Registry.is_enabled() return enabled end
 
+-- The currently active screen adapter (nil while free-roaming). The nav tracker
+-- gates its audio cues on this: a menu/dialog owning the screen silences the radar.
+function Registry.active_adapter() return active end
+
 function Registry.toggle()
     if enabled then Registry.stop() else Registry.start() end
     return enabled

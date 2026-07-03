@@ -10,6 +10,8 @@ mod/KakarotAccess/Scripts/prism.dll
 mod/KakarotAccess/Scripts/tolk.dll
 # Native memory-reader module (rebuilt by src/mem_bridge/build.ps1)
 mod/KakarotAccess/Scripts/mem_bridge.dll
+# Navigation-radar cue player (rebuilt by src/audio_bridge/build.ps1)
+mod/KakarotAccess/Scripts/audio_bridge.dll
 # Lua syntax-validator (built from libs/lua54/src/luac.c)
 libs/lua54/luac.exe
 

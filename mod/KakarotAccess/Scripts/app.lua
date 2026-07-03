@@ -13,6 +13,7 @@ local Keyhelp = require("keyhelp")
 local HeaderReader = require("header_reader")
 local Speech = require("speech")
 local I18n = require("i18n")
+local Nav = require("nav_tracker")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
@@ -51,9 +52,24 @@ Registry.register(require("screen_title"))
 
 local App = {}
 
-function App.start() Registry.start() end
-function App.stop() Registry.stop() end
+function App.start()
+    Registry.start()
+    Nav.start()
+end
+
+function App.stop()
+    Registry.stop()
+    Nav.stop()
+end
+
 function App.repeat_current() Registry.repeat_current() end
+
+-- Navigation radar (nav_tracker.lua) — keybinds in main.lua delegate here so the
+-- whole tracker stays hot-reloadable.
+function App.nav_toggle() Nav.toggle() end
+function App.nav_route_toggle() Nav.toggle_route() end
+function App.nav_where() Nav.where() end
+function App.nav_dump() Nav.dump() end
 
 -- Toggle the menu reader and announce the new state in the game's language. Announced
 -- here (not in main.lua) so the i18n layer stays reloadable.
