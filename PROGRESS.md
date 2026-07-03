@@ -44,14 +44,32 @@ Iteration findings, all live-verified with the user:
 `keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
 menu lag gone (check `ui step ms` in the dump).
 
-### NEXT TASK (2026-07-03, user request): accessibilize the COOKING menu
+### COOKING menu — BUILT (2026-07-03), PENDING in-game verify
 
-Known starting points (ui-map-and-roadmap.md §3): `Shop_Cook_C -> UAT_UICookingMenu`
-(`SetSelectTab`); header enum 13 = "Cooking". Likely hosts a `MenuListBase00/01/03`
-list -> the generic `A.list_selected_row` reader (GetSelectValue + ListPlateCtn)
-should cover the recipe list, like the shop. Recipes have have/needed ingredient
-counts -> follow reference/ui-accessibility/inventories.md (crafting rules). Start
-with an F7 discover dump inside the cooking screen to confirm widget names.
+`screen_cooking.lua`, registered BEFORE screen_shop (the cooking menu embeds a
+`UAT_UIShopTop` via `WL_CookingTop`, which could make the shop adapter latch).
+Structure mined from the CXX dump (Shop_Cook.hpp + AT.hpp), NOT yet verified live:
+
+- **Recipe list**: `Shop_Cook_C.CookMenuList` (`UAT_UICookingMenuShopList`, plain
+  UObject) `.WL_Shop_Cmn_List` = `UAT_UICmn00MenuList9 -> UAT_UIMenuListBase00` →
+  generic `A.list_selected_row` (GetSelectValue + ListPlateCtn TxtName/TxtNum).
+  Name = recipe, num = count; num is the announcer VALUE so post-cook count
+  changes speak just the number.
+- **Genre/category** (`LB/RB` tabs): `CookMenuList.WL_Txt_GenreTitle` text as the
+  announcer tab.
+- **Detail pane = tooltip** (inventories.md crafting rules), read on selection
+  change, blueprint members on the host: effects `Txt_Detail00_01..03`, perpetual
+  buff `Txt_Detail01_01..03`, duration `Txt_Detail02`, ingredients
+  `Shop_Cmn_Bar_01_00..` (`Xlist_Bar00_C`: `Txt_List` + `Txt_Num`, probed until
+  missing), description `Txt_Detail03` last.
+- **Overlays**: complete banner `WL_CookingComp.WL_Text` and result window
+  `WL_CookingResult.TextBoxCtn[]` spoken diff-gated; they keep the adapter active
+  even if the menu body collapses during the cook demo.
+
+**To verify in game** (campfire or cook NPC): entry says "Cocina, <receta>"; arrows
+move → recipe + detail; LB/RB → genre title; cook → complete/result read; check
+whether `Txt_Num` on ingredient bars really is have/needed and whether the detail
+order matches the screen (fix order with an F7 dump if it reads jumbled).
 
 ### Fishing minigame — VERIFIED WORKING END-TO-END (2026-07-03, user landed a fish)
 

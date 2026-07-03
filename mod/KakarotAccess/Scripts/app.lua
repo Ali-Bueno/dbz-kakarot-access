@@ -39,6 +39,9 @@ Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
 Registry.register(require("screen_tutorial"))
 Registry.register(require("screen_options"))
+-- Cooking precedes the shop: the cooking menu embeds a UAT_UIShopTop (WL_CookingTop),
+-- so the shop adapter could latch onto it while the cooking screen is the real context.
+Registry.register(require("screen_cooking"))
 Registry.register(require("screen_shop"))
 -- Overworld ring submenus that open their own screen (native class, no _C). The two list
 -- screens share the generic MenuListBase factory; Characters/Party use their own getter/field.
