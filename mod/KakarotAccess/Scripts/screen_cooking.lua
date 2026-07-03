@@ -1,23 +1,30 @@
 -- Screen adapter: cooking menu (Shop_Cook_C -> UAT_UICookingMenu; campfire / cook NPCs).
 --
--- The recipe list is CookMenuList.WL_Shop_Cmn_List, a UAT_UICmn00MenuList9 ->
--- UAT_UIMenuListBase00 exposing the reflected GetSelectValue() index — so the recipe
--- rows go through the generic A.list_selected_row reader (TxtName + TxtNum), same as
--- the shop. The detail pane lives on the blueprint itself and is read as the recipe's
--- "tooltip" following the crafting rules in reference/ui-accessibility/inventories.md:
---   * effect lines        Txt_Detail00_01..03 (and perpetual buff Txt_Detail01_01..03)
---   * effect time         Txt_Detail02
---   * ingredients         Shop_Cmn_Bar_01_00.. (Xlist_Bar00_C rows: Txt_List name +
---                         Txt_Num count — the have/needed readout)
---   * description         Txt_Detail03 (long text, spoken last)
--- The genre/category title (CookMenuList.WL_Txt_GenreTitle) is the announcer's tab, so
--- switching category (LB/RB) speaks the new genre. The cooking-complete banner and the
--- result window (WL_CookingComp.WL_Text / WL_CookingResult.TextBoxCtn) are spoken
--- diff-gated when they appear over the menu.
---
--- Additive + fully guarded: member names come from the CXX header dump (Shop_Cook.hpp /
--- AT.hpp, not yet verified live) — a wrong name reads nil and that part is skipped;
--- if the list itself differs the adapter simply stays inactive.
+-- SELECTION (revised after the 2026-07-03 live test): the recipe list
+-- (CookMenuList.WL_Shop_Cmn_List -> UAT_UIMenuListBase00) exposes a reflected
+-- GetSelectValue(), but in-game it FROZE after entry (the entry recipe spoke, cursor
+-- moves spoke nothing) — like the pause/overworld menus, the live cursor apparently
+-- sits in the class's non-reflected tail (0x450..0x4A0). So the selected recipe is
+-- read from the DETAIL PANE instead, which the game repopulates on every cursor move:
+--   * name    CookMenuList.WL_CookWin_Cap_Title (the dish title of the right-hand
+--             window; its sibling members are that window's icon/rarity, while the
+--             static captions "Meal Effect"/"Status Boost"/... have their own Cap_*
+--             members — confirmed in dump_1782938804_003). Falls back to the
+--             ListPlateCtn row if unreadable.
+--   * a selection SIGNATURE (title + first effect + description) invalidates the
+--             announcer whenever the pane is rewritten without the spoken name
+--             changing, so a stale name source can never silence the reader.
+-- Detail pane (the recipe's "tooltip", crafting rules in
+-- reference/ui-accessibility/inventories.md): effect lines Txt_Detail00_01..03,
+-- perpetual buff Txt_Detail01_01..03, duration Txt_Detail02, ingredients
+-- Shop_Cmn_Bar_01_00.. (Xlist_Bar00_C rows: Txt_List + Txt_Num = have/needed),
+-- description Txt_Detail03 last. All spoken text goes through A.markup_to_speech:
+-- the reflected GetText() returns RAW markup ('<span color="#…">Ki ATK</>') that the
+-- screen reader would otherwise read out loud.
+-- The genre/category title (CookMenuList.WL_Txt_GenreTitle) is the announcer's tab
+-- (LB/RB speaks the new genre). The cooking-complete banner and the result window
+-- (WL_CookingComp.WL_Text / WL_CookingResult.TextBoxCtn) are spoken diff-gated when
+-- they appear over the menu.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -26,10 +33,18 @@ local Speech = require("speech")
 
 local Cooking = {}
 
+-- Appends a line per selection change to dumps/dump_cooking.txt (GetSelectValue vs
+-- the detail-pane title) — ground truth for the frozen-index diagnosis. Turn OFF
+-- once the user confirms cursor moves are spoken.
+local DEBUG = true
+
 local ann = Core.make_announcer()
-local host, list, overlay = nil, nil, nil
-local last_overlay = nil
+local host, shoplist, list, overlay = nil, nil, nil, nil
+local last_overlay, last_sig = nil, nil
 local tick = 0
+
+-- Rich text -> speech (drop <span color=…>/</>, resolve <inputicon>); nil if empty.
+local function clean(t) return t and A.markup_to_speech(t) or nil end
 
 -- Detail-pane text members in on-screen (top-to-bottom) order; description handled
 -- separately so the long text always comes last.
@@ -48,7 +63,8 @@ local function ingredient_parts()
         local bar = host[string.format("Shop_Cmn_Bar_01_%02d", i)]
         if not Core.valid(bar) then break end
         if Core.on_screen(bar) then
-            local p = Core.phrase(Core.read_text(bar.Txt_List), Core.read_text(bar.Txt_Num))
+            local p = Core.phrase(clean(Core.read_text(bar.Txt_List)),
+                                  clean(Core.read_text(bar.Txt_Num)))
             if p ~= "" then parts[#parts + 1] = p end
         end
         i = i + 1
@@ -63,31 +79,48 @@ local function detail()
     for _, m in ipairs(DETAIL_MEMBERS) do
         local node = host[m]
         if Core.on_screen(node) then
-            local t = Core.read_text(node)
+            local t = clean(Core.read_text(node))
             if t then parts[#parts + 1] = t end
         end
     end
     for _, p in ipairs(ingredient_parts()) do parts[#parts + 1] = p end
     local desc = host[DESCRIPTION_MEMBER]
     if Core.on_screen(desc) then
-        local t = Core.read_text(desc)
+        local t = clean(Core.read_text(desc))
         if t then parts[#parts + 1] = t end
     end
     if #parts == 0 then return nil end
     return table.concat(parts, ", ")
 end
 
--- The current genre/category title, used as the announcer's tab (spoken on change).
-local function genre()
-    local cml
-    pcall(function() cml = host.CookMenuList end)
-    if not Core.valid(cml) then return nil end
+-- A text member of the CookMenuList controller (a plain UObject, so member access is
+-- pcall-guarded), on-screen gated, raw (uncleaned). nil if unreadable.
+local function shoplist_text(member)
+    if not Core.valid(shoplist) then return nil end
     local t
     pcall(function()
-        local node = cml.WL_Txt_GenreTitle
+        local node = shoplist[member]
         if Core.on_screen(node) then t = Core.read_text(node) end
     end)
     return t
+end
+
+-- The selected dish's name from the detail pane — follows the cursor even while the
+-- list's GetSelectValue stays frozen.
+local function title() return clean(shoplist_text("WL_CookWin_Cap_Title")) end
+
+-- The current genre/category title, used as the announcer's tab (spoken on change).
+local function genre() return clean(shoplist_text("WL_Txt_GenreTitle")) end
+
+-- Signature of the current selection: texts the game rewrites on every cursor move.
+-- Raw (uncleaned) — only compared, never spoken.
+local function selection_sig()
+    local parts = { shoplist_text("WL_CookWin_Cap_Title") }
+    if Core.valid(host) then
+        parts[#parts + 1] = Core.read_text(host.Txt_Detail00_01)
+        parts[#parts + 1] = Core.read_text(host[DESCRIPTION_MEMBER])
+    end
+    return Core.phrase(table.unpack(parts))
 end
 
 -- Text of whichever cooking overlay is up (complete banner / result window), or nil.
@@ -95,7 +128,7 @@ local function overlay_text()
     local comp
     pcall(function() comp = host.WL_CookingComp end)
     if Core.valid(comp) and Core.on_screen(comp) then
-        local t = Core.read_text(comp.WL_Text)
+        local t = clean(Core.read_text(comp.WL_Text))
         if t then return t end
     end
     local res
@@ -107,7 +140,7 @@ local function overlay_text()
             for i = 1, #boxes do
                 local b = boxes[i]
                 if Core.on_screen(b) then
-                    local t = Core.read_text(b)
+                    local t = clean(Core.read_text(b))
                     if t then parts[#parts + 1] = t end
                 end
             end
@@ -115,6 +148,22 @@ local function overlay_text()
         if #parts > 0 then return table.concat(parts, ", ") end
     end
     return nil
+end
+
+local function dump_path()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    return dir .. "\\dumps\\dump_cooking.txt"
+end
+
+local function dump_sample(sig, row)
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    f:write(string.format("[%d] idx=%s row=%s title=%s sig=%s\n",
+        os.time(), tostring(A.list_select_index(list)),
+        tostring(row and row.name), tostring(shoplist_text("WL_CookWin_Cap_Title")),
+        (sig or ""):sub(1, 160)))
+    f:close()
 end
 
 function Cooking.is_active()
@@ -126,15 +175,14 @@ function Cooking.is_active()
     overlay = overlay_text()
     if overlay then return true end
     if not Core.on_screen(host) then return false end
-    local cml
-    pcall(function() cml = host.CookMenuList end)
-    list = Core.valid(cml) and cml.WL_Shop_Cmn_List or nil
+    pcall(function() shoplist = host.CookMenuList end)
+    list = Core.valid(shoplist) and shoplist.WL_Shop_Cmn_List or nil
     return A.list_select_index(list) ~= nil
 end
 
 function Cooking.reset()
     ann:reset()
-    last_overlay = nil
+    last_overlay, last_sig = nil, nil
 end
 
 function Cooking.update()
@@ -147,10 +195,20 @@ function Cooking.update()
     end
     last_overlay = nil
     local row = A.list_selected_row(list)
-    if not row then return end
+    -- Detail-pane title first (live), list row as fallback (frozen index).
+    local name = title() or (row and clean(row.name)) or nil
+    if not name then return end
+    -- Selection moved but the spoken name key didn't (stale name source) → force the
+    -- announcer to re-speak name + value + detail anyway.
+    local sig = selection_sig()
+    if sig ~= last_sig then
+        if last_sig ~= nil then ann:invalidate() end
+        last_sig = sig
+        if DEBUG then dump_sample(sig, row) end
+    end
     -- "Cooking" on entry; genre as the tab; recipe name; its count as the value (so a
     -- post-cook count change speaks just the number); full detail as the tooltip.
-    ann:focus(I18n.header(13), genre(), row.name, row.num, detail)
+    ann:focus(I18n.header(13), genre(), name, row and clean(row.num) or nil, detail)
 end
 
 return Cooking

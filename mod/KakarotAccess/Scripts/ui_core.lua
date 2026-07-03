@@ -188,6 +188,14 @@ function Announcer:reset()
     self.pending = false
 end
 
+-- Force the next focus() to treat the focused name as changed (re-announce name +
+-- value + tooltip, without the screen prefix). For screens whose SELECTION can move
+-- while the readable name text stays the same — e.g. a stale list index with a live
+-- detail pane (screen_cooking).
+function Announcer:invalidate()
+    if self.open then self.name = {} end   -- sentinel: never equal to any string
+end
+
 -- screen = the menu's own name, spoken ONLY when entering the screen (context
 -- change), before the focused item. tab = the current tab/section, spoken on tab
 -- change. Either may be nil.

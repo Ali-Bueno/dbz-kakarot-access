@@ -44,32 +44,38 @@ Iteration findings, all live-verified with the user:
 `keyconfig bindings` line shows the resolver state), return-to-title no longer crashes,
 menu lag gone (check `ui step ms` in the dump).
 
-### COOKING menu — BUILT (2026-07-03), PENDING in-game verify
+### COOKING menu — REVISED (2026-07-03, after first live test), PENDING re-verify
 
-`screen_cooking.lua`, registered BEFORE screen_shop (the cooking menu embeds a
-`UAT_UIShopTop` via `WL_CookingTop`, which could make the shop adapter latch).
-Structure mined from the CXX dump (Shop_Cook.hpp + AT.hpp), NOT yet verified live:
+First live test: **entry spoke the full readout (recipe + effects + ingredients +
+description), cursor moves spoke NOTHING, and the raw `<span color=…>` markup was
+read out loud.** Diagnosis and fixes in `screen_cooking.lua`:
 
-- **Recipe list**: `Shop_Cook_C.CookMenuList` (`UAT_UICookingMenuShopList`, plain
-  UObject) `.WL_Shop_Cmn_List` = `UAT_UICmn00MenuList9 -> UAT_UIMenuListBase00` →
-  generic `A.list_selected_row` (GetSelectValue + ListPlateCtn TxtName/TxtNum).
-  Name = recipe, num = count; num is the announcer VALUE so post-cook count
-  changes speak just the number.
-- **Genre/category** (`LB/RB` tabs): `CookMenuList.WL_Txt_GenreTitle` text as the
-  announcer tab.
-- **Detail pane = tooltip** (inventories.md crafting rules), read on selection
-  change, blueprint members on the host: effects `Txt_Detail00_01..03`, perpetual
-  buff `Txt_Detail01_01..03`, duration `Txt_Detail02`, ingredients
-  `Shop_Cmn_Bar_01_00..` (`Xlist_Bar00_C`: `Txt_List` + `Txt_Num`, probed until
-  missing), description `Txt_Detail03` last.
-- **Overlays**: complete banner `WL_CookingComp.WL_Text` and result window
-  `WL_CookingResult.TextBoxCtn[]` spoken diff-gated; they keep the adapter active
-  even if the menu body collapses during the cook demo.
+- **`GetSelectValue()` froze after entry** — like the pause/overworld menus, the
+  live cursor of `UAT_UIMenuListBase00` apparently sits in its NON-reflected tail
+  (0x450..0x4A0, class size 0x4A0, last reflected member ends 0x450). The selected
+  recipe is now read from the **detail pane**, which the game repopulates per move:
+  name = `CookMenuList.WL_CookWin_Cap_Title` (the right-hand window's dish title;
+  the static captions — "Meal Effect", "Status Boost", "Materials Needed", "Have /
+  Need" — live in separate `Cap_*` members, confirmed in dump_1782938804_003),
+  falling back to the `ListPlateCtn` row. A **selection signature** (raw title +
+  first effect + description) calls the new `Announcer:invalidate()` (ui_core) when
+  the pane is rewritten without the spoken name changing, so a stale name source
+  can never silence the reader again.
+- **Markup stripped**: every spoken text now goes through `A.markup_to_speech`
+  (the reflected `GetText()` returns raw `<span color="#…">Ki ATK</>` tags).
+- `DEBUG = true` appends one line per selection change to `dumps/dump_cooking.txt`
+  (`idx=` GetSelectValue vs `title=` pane title) — if moves still don't speak, that
+  file is the ground truth (does idx really freeze? is Cap_Title really the dish?).
+  Turn it OFF once verified.
+- Unchanged: genre tab (`WL_Txt_GenreTitle`, LB/RB), detail order (effects
+  `Txt_Detail00_01..03`, perpetual `Txt_Detail01_01..03`, duration `Txt_Detail02`,
+  ingredients `Shop_Cmn_Bar_01_00..` have/needed, description `Txt_Detail03` last),
+  overlays (`WL_CookingComp.WL_Text` / `WL_CookingResult.TextBoxCtn[]`), registered
+  BEFORE screen_shop (the menu embeds a `UAT_UIShopTop` via `WL_CookingTop`).
 
-**To verify in game** (campfire or cook NPC): entry says "Cocina, <receta>"; arrows
-move → recipe + detail; LB/RB → genre title; cook → complete/result read; check
-whether `Txt_Num` on ingredient bars really is have/needed and whether the detail
-order matches the screen (fix order with an F7 dump if it reads jumbled).
+**To re-verify in game** (Ctrl+Shift+R reload is enough): arrows → each recipe +
+detail, no `<span>` junk; LB/RB → genre; cook → complete/result read. Then read
+`dumps/dump_cooking.txt` to confirm the frozen-index diagnosis and set DEBUG=false.
 
 ### Fishing minigame — VERIFIED WORKING END-TO-END (2026-07-03, user landed a fish)
 
