@@ -31,6 +31,28 @@ local function le_i32(s, i)
     return v
 end
 
+-- Labeled snapshot of Start_Top's candidate "menu depth" fields, so we can compare exact
+-- values between ring vs inside-a-submenu (cleaner than the byte-diff, which overlaps).
+local function dump_starttop(DevLog)
+    local list = FindAllOf("Start_Top_C")
+    if not list then return end
+    for _, o in ipairs(list) do
+        if o and o:IsValid() then
+            local ok, fn = pcall(function() return o:GetFullName() end)
+            if ok and fn and fn:match("BP_ATGameInstance_C_%d+%.[%w_]+$") then
+                local parts = {}
+                for off = 0x4b0, 0x4fc, 4 do
+                    parts[#parts + 1] = string.format("%X=%s", off, tostring(Mem.i32(o, off)))
+                end
+                local p = Mem.ptr(o, 0x4d8)
+                parts[#parts + 1] = "ptr4d8=" .. tostring(p and p ~= 0)
+                DevLog.write("[fields] " .. table.concat(parts, " "))
+                return
+            end
+        end
+    end
+end
+
 function M.run()
     local Speech = require("speech")
     local DevLog = require("dev_log")
@@ -38,6 +60,7 @@ function M.run()
         local store = _G.__memdiff
         if not store then store = { snaps = {} }; _G.__memdiff = store end
 
+        dump_starttop(DevLog)
         local reads, changes = 0, {}
         for _, cls in ipairs(CANDIDATES) do
             local list = FindAllOf(cls)

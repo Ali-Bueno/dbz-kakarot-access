@@ -13,6 +13,12 @@ return {
     -- and UIStartTopList is the reflected TArray at 0x428 (data) / 0x430 (count).
     startTop = {
         selectedIndex = 0x4e4,   -- int32, the highlighted ring item  (CONFIRMED)
+        subIndex      = 0x4ec,   -- int32, selected row of an OPEN submenu (System/Story)  (CONFIRMED
+                                 -- via F4: stepped 0->1->2 in the System submenu; sibling of 0x4e4)
+        depthFlag     = 0x4dc,   -- int32 nav-depth flag  (CONFIRMED via labeled F4 snapshot):
+                                 --   1 = browsing the RING (top level); 0 = INSIDE a submenu.
+                                 -- The reliable ring-vs-submenu discriminator (the _Sub arrays and
+                                 -- on_screen both lie — they retain/mirror stale items on the ring).
         listData      = 0x428,   -- TArray<UAT_UIStartTopList*> data ptr (reflected, cross-check)
         listCount     = 0x430,   -- int32 count
     },
