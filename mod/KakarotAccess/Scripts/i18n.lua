@@ -77,6 +77,7 @@ local S = {
         pos = "%d de %d",
         not_acquired = "No conseguido",
         new_label = "Nuevo",
+        commu_lv = "nivel de comunidad %s",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
         -- Navigation radar (nav_tracker.lua).
@@ -158,6 +159,7 @@ local S = {
         pos = "%d of %d",
         not_acquired = "Not acquired",
         new_label = "New",
+        commu_lv = "community level %s",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
         -- Navigation radar (nav_tracker.lua).

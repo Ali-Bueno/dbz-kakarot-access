@@ -3,13 +3,14 @@
 -- Two screens (verified against the user's screenshots, 2026-07-03):
 --   * Soul Emblem GRID — native `AT_UICommunityStart` (no blueprint in the CXX dump
 --     session): LB/RB pages of emblem slots in `EmbList.EmbAry`
---     (`UAT_UIXCmnEmb_Cursor` each; the emblem itself is its `UIXCmnEmb`, whose
---     `ImageUnacquired` is the "?" overlay). The yellow selection frame's exact live
---     signal is UNVERIFIED — several candidates (Ins_Frame_Set / effect canvases /
---     the loop anim) are evaluated across all slots and the first one that singles
---     out EXACTLY ONE slot wins, so a wrong candidate yields silence, never a wrong
---     announcement. A DEBUG dump records every slot's signals to
---     dumps/dump_community.txt to pin the real one.
+--     (`UAT_UIXCmnEmb_Cursor` each; the emblem itself is its `UIXCmnEmb`).
+--     LIVE-VERIFIED (dump_community.txt 2026-07-03): the selected slot is the one
+--     whose AnimLoop is PLAYING (transient — fires while the cursor moves, so the
+--     last resolved index is held while idle); Txt_Commu is the emblem's COMMUNITY
+--     LEVEL; "not acquired" comes from the face material ("?" mask …Ins_Emb_Mask00
+--     vs a MaterialInstanceDynamic face) — ImageUnacquired is never visible. The
+--     character NAME is not in the slot (face is an image); the DEBUG dump records
+--     the face material's texture params to map names in the next round.
 --   * Emblem DETAIL — `Start_Commu_Detail_C` (blueprint known from the CXX dump):
 --     character name (Txt_Name), community level (Txt_Commu_Lv), popularity
 --     (Txt_Popular00), link bonus (Txt_Link + Txt_Link_Detail), description
@@ -33,7 +34,7 @@ local tick = 0
 local grid, det = nil, nil
 local mode = nil            -- "detail" | "grid"; announcer resets on change
 local sticky_sig = nil      -- once a signal proved unique, test only that one (perf)
-local last_idx, last_dump = nil, 0
+local last_idx = nil        -- selection held between cursor moves (the signal is transient)
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -61,14 +62,18 @@ local function slots()
     return out
 end
 
--- Candidate cursor signals, most-likely first (cheap visibility probes before the
--- reflected anim call).
+-- Cursor signals (live-verified in dump_community.txt, 2026-07-03): the selected slot
+-- is the one whose AnimLoop is PLAYING. It's transient (stops when the cursor idles),
+-- so update() holds on to the last resolved index while the grid stays up. The
+-- visibility candidates were useless live (Ins_Frame_Set false everywhere, the effect
+-- canvases true everywhere), so they're gone; AnimEnter kept as a fallback.
 local SIGNALS = {
-    { key = "frame", test = function(s) return Core.is_visible(s.Ins_Frame_Set) end },
-    { key = "effA",  test = function(s) return Core.is_visible(s.CanvasEffectA) end },
-    { key = "effB",  test = function(s) return Core.is_visible(s.CanvasEffectB) end },
     { key = "anim",  test = function(s)
         local ok, p = pcall(function() return s:IsAnimationPlaying(s.AnimLoop) end)
+        return ok and p == true
+    end },
+    { key = "enter", test = function(s)
+        local ok, p = pcall(function() return s:IsAnimationPlaying(s.AnimEnter) end)
         return ok and p == true
     end },
 }
@@ -101,20 +106,34 @@ local function selected(list)
     return nil, nil
 end
 
--- What a slot sounds like: its own text if any (Txt_Commu), "not acquired" when the
--- emblem shows the "?" overlay, the new marker, and its position in the visible grid.
+-- The emblem face's brush resource full name. Live-verified: unacquired slots show
+-- the "?" MASK material (…Ins_Emb_Mask00), acquired ones a MaterialInstanceDynamic
+-- with the character's face (ImageUnacquired is never visible — it's NOT the "?").
+local function face_resource(emb)
+    local name
+    pcall(function()
+        local ro = emb.ImageFace.Brush.ResourceObject
+        if ro and ro:IsValid() then name = ro:GetFullName() end
+    end)
+    return name
+end
+
+-- What a slot sounds like. Live-verified: Txt_Commu is the emblem's COMMUNITY LEVEL
+-- number (labeled so a bare "3" isn't spoken), acquisition comes from the face
+-- material. The character NAME isn't in the slot's texts — the face is an image;
+-- the DEBUG dump records its material texture parameters to map names next round.
 local function slot_label(s, idx, count)
     local emb
     pcall(function() emb = s.UIXCmnEmb end)
-    local unacq, new = false, false
-    if Core.valid(emb) then
-        unacq = Core.is_visible(emb.ImageUnacquired)
-        new = Core.is_visible(emb.ImageNew)
-    end
+    local face = Core.valid(emb) and face_resource(emb) or nil
+    local unacq = face ~= nil and face:find("Emb_Mask", 1, true) ~= nil
+    local new = false
+    if Core.valid(emb) then new = Core.is_visible(emb.ImageNew) end
     pcall(function() new = new or Core.is_visible(s.Icon_New) end)
+    local lv = not unacq and read(s.Txt_Commu) or nil
     return Core.phrase(
-        read(s.Txt_Commu),
         unacq and I18n.t("not_acquired") or nil,
+        lv and string.format(I18n.t("commu_lv"), lv) or nil,
         new and I18n.t("new_label") or nil,
         string.format(I18n.t("pos"), idx, count))
 end
@@ -127,27 +146,40 @@ local function dump_path()
     return dir .. "\\dumps\\dump_community.txt"
 end
 
+-- The face material's texture parameters (acquired slots use a MaterialInstanceDynamic;
+-- its texture full names should identify the CHARACTER — the missing piece for speaking
+-- names in the grid). Also its parent material, in case the id lives there.
+local function face_debug(emb)
+    local out = "-"
+    pcall(function()
+        local ro = emb.ImageFace.Brush.ResourceObject
+        if not (ro and ro:IsValid()) then return end
+        out = ro:GetFullName():match("([%w_%.]+)$") or "?"
+        pcall(function()
+            local p = ro.Parent
+            if p and p:IsValid() then out = out .. " parent=" .. (p:GetFullName():match("([%w_%.]+)$") or "?") end
+        end)
+        pcall(function()
+            local tp = ro.TextureParameterValues
+            for j = 1, #tp do
+                local tex = tp[j].ParameterValue
+                if tex and tex:IsValid() then out = out .. " tex=" .. tex:GetFullName() end
+            end
+        end)
+    end)
+    return out
+end
+
 local function dump_grid(list, sel_idx, sig_key)
     local f = io.open(dump_path(), "a")
     if not f then return end
     f:write(string.format("[%d] grid slots=%d sel=%s sig=%s\n",
         os.time(), #list, tostring(sel_idx), tostring(sig_key)))
     for i, s in ipairs(list) do
-        local flags = {}
-        for _, sg in ipairs(SIGNALS) do
-            local ok, v = pcall(sg.test, s)
-            flags[#flags + 1] = sg.key .. "=" .. tostring(ok and v == true)
-        end
         local emb; pcall(function() emb = s.UIXCmnEmb end)
-        local unacq = Core.valid(emb) and Core.is_visible(emb.ImageUnacquired)
-        local face = ""
-        pcall(function()
-            local ro = emb.ImageFace.Brush.ResourceObject
-            if ro and ro:IsValid() then face = ro:GetFullName():match("([%w_]+)$") or "" end
-        end)
-        f:write(string.format("  %02d %s unacq=%s commu=%s face=%s\n", i,
-            table.concat(flags, " "), tostring(unacq),
-            tostring(Core.read_text(s.Txt_Commu)), face))
+        f:write(string.format("  %02d commu=%s face: %s\n", i,
+            tostring(Core.read_text(s.Txt_Commu)),
+            Core.valid(emb) and face_debug(emb) or "-"))
     end
     f:close()
 end
@@ -215,12 +247,15 @@ function Commu.update()
     local list = slots()
     if #list == 0 then return end
     local idx, sig = selected(list)
-    if DEBUG and (idx ~= last_idx or tick - last_dump > 50) then
-        last_dump = tick
-        dump_grid(list, idx, sig)
+    -- The anim signal only fires while the cursor MOVES — keep the last resolved slot
+    -- while idle so the state stays stable (and F1 repeat keeps working).
+    if idx then
+        if DEBUG and idx ~= last_idx then dump_grid(list, idx, sig) end
+        last_idx = idx
+    else
+        idx = last_idx
     end
-    last_idx = idx
-    if not idx then return end
+    if not idx or not list[idx] then return end
     ann:focus(I18n.header(5), nil, slot_label(list[idx], idx, #list), nil, nil)
 end
 
