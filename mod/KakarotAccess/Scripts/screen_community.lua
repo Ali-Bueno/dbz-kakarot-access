@@ -39,9 +39,10 @@ local Speech = require("speech")
 local Commu = {}
 
 -- Appends selection samples to dumps/dump_community.txt (grid pinned live 2026-07-03;
--- the BOARD cursor/socket mapping is still unverified — re-enable for one board visit
--- if the board reads wrong sockets or none).
-local DEBUG = false
+-- the BOARD cursor/socket mapping is still unverified). ON while the board is being
+-- verified: dumps board state even when NO socket resolves (that silent case is
+-- exactly what needs diagnosing), throttled to one entry per ~3 s.
+local DEBUG = true
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -304,12 +305,12 @@ local function dump_path()
     return dir .. "\\dumps\\dump_community.txt"
 end
 
-local function dump_board(frame, pc, idx, how)
+local function dump_board(frame, pc, idx, how, title)
     local f = io.open(dump_path(), "a")
     if not f then return end
     local cx, cy, src = cursor_xy(frame)
-    f:write(string.format("[%d] board sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
-        os.time(), #pc.list, tostring(idx), tostring(how),
+    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
+        os.time(), tostring(title), #pc.list, tostring(idx), tostring(how),
         tostring(cx), tostring(cy), tostring(src)))
     for i, p in ipairs(pc.list) do
         local xy = pc.xy[i]
@@ -361,13 +362,28 @@ local function clear_state()
     last_title, panel_cache = nil, nil
 end
 
+-- Grid slots for this tick, computed in is_active and reused by update (the grid and
+-- the board ALTERNATE with the A "Switch" button and can both report on_screen — the
+-- grid only wins when it actually shows slots, otherwise the board would be shadowed
+-- into silence, which is exactly what happened live on the placement screen).
+local grid_slots = nil
+
 function Commu.is_active()
     tick = tick + 1
+    grid_slots = nil
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
-    grid = det == nil and Core.first_on_screen("AT_UICommunityStart", tick) or nil
-    board = (det == nil and grid == nil)
-        and Core.first_on_screen("AT_UICommunityBoard", tick) or nil
-    local m = (det and "detail") or (grid and "grid") or (board and "board") or nil
+    local m = det and "detail" or nil
+    if not m then
+        grid = Core.first_on_screen("AT_UICommunityStart", tick)
+        if grid then
+            grid_slots = slots()
+            if #grid_slots > 0 then m = "grid" end
+        end
+    end
+    if not m then
+        board = Core.first_on_screen("AT_UICommunityBoard", tick)
+        if board then m = "board" end
+    end
     if m ~= mode then
         ann:reset()
         clear_state()
@@ -393,7 +409,7 @@ local function cached_label(idx, make)
 end
 
 local function grid_update()
-    local list = slots()
+    local list = grid_slots or slots()
     if #list == 0 then return end
     -- The AnimLoop signal only fires while the cursor MOVES — hold the last resolved
     -- slot while idle so the state stays stable (and F1 repeat keeps working).
@@ -404,6 +420,8 @@ local function grid_update()
     ann:focus(I18n.header(5), nil, label, nil, nil)
 end
 
+local last_dump = 0
+
 local function board_update()
     local frame
     pcall(function() frame = board.WL_BrdFrame end)
@@ -412,8 +430,13 @@ local function board_update()
     local pc = board_panels(frame, title or "?")
     local idx, how
     if #pc.list > 0 then idx, how = board_selected(frame, pc) end
+    -- DEBUG must capture the FAILING case too (no socket resolves → silence): dump on
+    -- every selection change AND periodically while unresolved.
+    if DEBUG and (idx ~= last_idx or (idx == nil and tick - last_dump > 30)) then
+        last_dump = tick
+        dump_board(frame, pc, idx, how, title)
+    end
     if idx then
-        if DEBUG and idx ~= last_idx then dump_board(frame, pc, idx, how) end
         last_idx = idx
     else
         idx = last_idx
