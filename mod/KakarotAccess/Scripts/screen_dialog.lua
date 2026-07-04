@@ -32,10 +32,23 @@ local function node_speech(node)
 end
 
 -- The speakable prompt of a dialog window (title + body, markup resolved), or nil.
+-- Member sets differ per window class (Win00/01: Txt_Title + Txt_Detail; the Win02
+-- tutorial/notice box: TextBox_Caption + the old→new level numbers; item notices:
+-- Txt_Detail_Item), so each candidate is probed guarded and on_screen-gated.
+local MESSAGE_MEMBERS = {
+    "Txt_Title", "Txt_Detail", "TextBox_Caption", "Txt_Detail_Item",
+    "TextBox_OldNum", "TextBox_NewNum",
+}
 local function message(w)
     if not Core.valid(w) then return nil end
-    local text = Core.phrase(node_speech(w.Txt_Title), node_speech(w.Txt_Detail))
-    return text ~= "" and text or nil
+    local parts = {}
+    for _, m in ipairs(MESSAGE_MEMBERS) do
+        local t
+        pcall(function() t = node_speech(w[m]) end)
+        if t then parts[#parts + 1] = t end
+    end
+    if #parts == 0 then return nil end
+    return table.concat(parts, ", ")
 end
 
 -- Like node_speech but via Core.read_text (reflected GetText() fallback), for nodes that
@@ -113,29 +126,33 @@ local function choices()
             end
         end
     end
-    -- A choice list OWNED by the window (WL_TextPlateCtn — e.g. the Soul Emblems "Sort"
-    -- popup) uses the same Xcmn_Win00_Choice_C rows but NESTED under the window's tree,
-    -- so the top-level filter above never sees them. Same highlight rule.
-    pcall(function()
-        local arr = win.WL_TextPlateCtn
-        for i = 1, #arr do
-            local ch = arr[i]
-            if Core.valid(ch) and Core.on_screen(ch) then
-                local label = A.markup_to_speech(Core.read_text(ch.Txt_Choice))
-                if label then
-                    labels[#labels + 1] = label
-                    if Core.is_visible(ch.Img_Xwin01_List) then sel = label end
+    -- Choice lists OWNED by the window (Win01's WL_TextPlateCtn — e.g. the Soul
+    -- Emblems "Sort" popup — and Win02's UIChoice_List) use the same
+    -- Xcmn_Win00_Choice_C rows but NESTED under the window's tree, so the top-level
+    -- filter above never sees them. Same highlight rule.
+    for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
+        pcall(function()
+            local arr = win[pool]
+            for i = 1, #arr do
+                local ch = arr[i]
+                if Core.valid(ch) and Core.on_screen(ch) then
+                    local label = A.markup_to_speech(Core.read_text(ch.Txt_Choice))
+                    if label then
+                        labels[#labels + 1] = label
+                        if Core.is_visible(ch.Img_Xwin01_List) then sel = label end
+                    end
                 end
             end
-        end
-    end)
+        end)
+    end
     return labels, sel
 end
 
--- The shared message-window classes: Xcmn_Win01_C (dialogs/confirmations) and
+-- The shared message-window classes: Xcmn_Win01_C (dialogs/confirmations/notices),
 -- Xcmn_Win00_C (startup/loading system messages — autosave notice, "Checking system
--- data…", "Saving game…"). Both hold the prompt in Txt_Detail (+ Txt_Title).
-local WINDOW_CLASSES = { "Xcmn_Win01_C", "Xcmn_Win00_C" }
+-- data…", "Saving game…") and Xcmn_Win02_C (the brown tutorial/level-up box —
+-- TextBox_Caption + old/new numbers, choices in UIChoice_List).
+local WINDOW_CLASSES = { "Xcmn_Win01_C", "Xcmn_Win00_C", "Xcmn_Win02_C" }
 
 -- Find a live message window ACTUALLY on screen (on_screen, not IsVisible) showing text.
 -- Uses the persistent cache (these windows are pooled and persist), so this is a cheap
@@ -152,12 +169,26 @@ end
 -- top-level widgets, so we tie them to a shown window rather than trusting their own
 -- IsVisible — otherwise pooled stale confirmations (still IsVisible under a collapsed
 -- ancestor) would keep this adapter "active" over the pause menu / tutorials.
+-- The last fully-announced no-choice notice still on screen. NOT cleared by reset()
+-- (the registry resets adapters on every switch — clearing it there would make a
+-- released notice re-claim and re-announce in a loop).
+local spoken = nil
+
 function Dialog.is_active()
     tick = tick + 1
     if not Core.on_screen(win) then acquire() end   -- acquire is now cheap (cached refs)
     local msg = Core.on_screen(win) and message(win) or nil
-    if not msg then state = { msg = nil, labels = {}, sel = nil } return false end
+    if not msg then
+        spoken = nil
+        state = { msg = nil, labels = {}, sel = nil }
+        return false
+    end
     local labels, sel = choices()
+    -- A NOTICE (no choices) owns the screen only until it has been announced; then it
+    -- RELEASES the tick so an interactive screen underneath keeps reading — the
+    -- community board's tutorial popups PERSIST until the task is done and were muting
+    -- the whole board (the cursor moves under them). A new text re-claims once.
+    if #labels == 0 and msg == spoken then return false end
     state = { msg = msg, labels = labels, sel = sel }   -- reused by update() this tick
     return true
 end
@@ -175,6 +206,9 @@ function Dialog.update()
         -- rows (rewards, received soul emblems, …) read as the tooltip, so a list that
         -- pops in a few ticks after the title is still spoken on its own.
         ann:focus(nil, nil, s.msg, nil, function() return plates(win) end)
+        -- Mark announced only once the announcer has no pending tooltip, so late
+        -- reward rows still get their window before the notice releases the screen.
+        if not ann.pending then spoken = s.msg end
     end
 end
 

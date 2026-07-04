@@ -53,6 +53,7 @@ local label_cache, label_idx, label_tick = nil, nil, 0
 local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same slot's label
 local last_title = nil      -- board title, gates the spoken board summary
 local panel_cache = nil     -- { key, list = {panel...}, xy = {{x,y}...} } per board
+local last_detect_sig = nil -- DEBUG: last screen-classification signature dumped
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -389,6 +390,18 @@ function Commu.is_active()
         clear_state()
     end
     mode = m
+    -- DEBUG: record HOW the screen was classified whenever that changes — if the board
+    -- never activates, this line is the evidence (host not found vs shadowed vs silent).
+    if DEBUG then
+        local sig = string.format("mode=%s det=%s grid=%s slots=%s board=%s",
+            tostring(m), tostring(det ~= nil), tostring(grid ~= nil),
+            grid_slots and #grid_slots or "-", tostring(board ~= nil))
+        if sig ~= last_detect_sig then
+            last_detect_sig = sig
+            local f = io.open(dump_path(), "a")
+            if f then f:write(string.format("[%d] detect %s\n", os.time(), sig)) f:close() end
+        end
+    end
     return m ~= nil
 end
 
