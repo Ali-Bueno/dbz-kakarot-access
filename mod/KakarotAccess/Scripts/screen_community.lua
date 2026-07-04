@@ -14,36 +14,24 @@
 --     face brush is a MaterialInstanceDynamic (its texture parameter is the
 --     character icon → CHAR_TOKENS name) vs the constant "?" mask — CAUTION: the
 --     MID is ALSO named "Ins_Emb_Mask"; ImageUnacquired is never visible.
---   * COMMUNITY BOARD — native `AT_UICommunityBoard`: LB/RB boards (Z Warrior,
---     Cooking, …), a free cursor over emblem SOCKETS (`WL_BrdFrame.WL_PanelTbl`,
---     `UAT_UICommunityBoard_Panel` each: `WL_Emblem` → same face-texture name read,
---     `WL_Lv` level, leader pedestal) and the right-hand summary
---     (`WL_CommuBrdDetail`: title, overall level, rank, active skills). Hovered
---     socket: a panel's ActiveAnim if it singles one out, else the NEAREST socket
---     to the cursor widget by canvas-slot position (unverified live — DEBUG dumps
---     what's needed to pin them).
+--   * COMMUNITY BOARD — `Start_Commu_Brd_C` (blueprint of AT_UICommunityBoard; the
+--     native class is never a live instance). Its free analog cursor is UNREADABLE
+--     (verified 2026-07-04: WL_PanelCursor and 0x8C0 bytes of host+frame memory all
+--     stayed frozen across a full move pass — the state is in the native input
+--     system, like the battle pause). So the board is NOT cursor-tracked; on entry it
+--     reads the summary (`WL_CommuBrdDetail`: title, overall level, rank, active
+--     skills) + the emblems already placed (`WL_BrdFrame.WL_PanelTbl` → each
+--     `WL_Emblem` face) + a hint that confirm opens the accessible Soul Emblems grid.
 --
 -- The header logos are image fonts, so the mod supplies the screen names from the
 -- game's own EXCmnHeaderFontType ids (I18n.header 5 = Soul Emblems, 1 = board).
---
--- PERF: the user hit real input lag here. Rules: ONE reflected-anim scan per tick,
--- the focused label CACHED (recomputed on index change or ~1 s — fresh reads cost
--- GetFullName + texture-parameter walks per 100 ms), socket positions cached per
--- board, and file I/O only behind DEBUG on selection changes.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
 local I18n = require("i18n")
 local Speech = require("speech")
-local Mem = require("mem")
 
 local Commu = {}
-
--- Appends selection samples to dumps/dump_community.txt (grid pinned live 2026-07-03;
--- the BOARD cursor/socket mapping is still unverified). ON while the board is being
--- verified: dumps board state even when NO socket resolves (that silent case is
--- exactly what needs diagnosing), throttled to one entry per ~3 s.
-local DEBUG = true
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -53,10 +41,7 @@ local last_idx = nil        -- selection held between cursor moves (signals are 
 local label_cache, label_idx, label_tick = nil, nil, 0
 local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same slot's label
 local last_title = nil      -- board title, gates the spoken board summary
-local panel_cache = nil     -- { key, list = {panel...}, xy = {{x,y}...} } per board
-local last_detect_sig = nil -- DEBUG: last screen-classification signature dumped
-local board_found = false   -- DEBUG: Start_Commu_Brd_C host seen (even if frame hidden)
-local last_prof = nil       -- DEBUG: last panel-scale profile string
+local panel_cache = nil     -- { key, list = {panel...} } per board
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -199,57 +184,12 @@ local function board_panels(frame, key)
     return c
 end
 
--- RenderTransform.Scale.X of a widget (FWidgetTransform: Translation 0x90, Scale 0x98
--- per UMG.hpp) read raw. The selected socket is SCALED UP (live 2026-07-04: Goku's
--- pedestal read 1.46 while every empty socket read 1.00) — this is the game's own
--- selection highlight, and unlike the cursor widget it lives on the panel itself, in
--- the panels' own coordinate space. (The WL_PanelCursor sits in a DIFFERENT space —
--- 541,318 vs the panels' -400..300 — so nearest-neighbour to it was always wrong.)
-local RT_SCALE = 0x98
-
-local function panel_scale(p)
-    return Mem.float(p, RT_SCALE) or 1.0
-end
-
--- The hovered socket = the panel with the largest scale, when one is clearly enlarged
--- above the rest (margin guards against all-equal). ActiveAnim as the fallback.
-local SCALE_MARGIN = 0.08
-
-local function board_selected(frame, pc)
-    local best, top, second = nil, 1.0, 1.0
-    for i, p in ipairs(pc.list) do
-        local s = panel_scale(p)
-        if s > top then second = top; top, best = s, i
-        elseif s > second then second = s end
-    end
-    if best and top - second >= SCALE_MARGIN then return best, "scale" end
-    local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
-    if idx then return idx, "anim" end
-    return nil, nil
-end
-
--- What a socket sounds like: its emblem's character + level (+ leader pedestal),
--- or "empty socket", plus the socket position.
-local function panel_label(p, idx, count)
-    local name
-    local embr
-    pcall(function() embr = p.WL_Emblem end)
-    if Core.valid(embr) and Core.is_visible(embr) then
-        pcall(function() name = face_char(embr.UIXCmnEmb) end)
-    end
-    local lv = read(p.WL_Lv)
-    local plus = read(p.WL_Plus_Lv)
-    local leader = false
-    pcall(function()
-        leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
-    end)
-    return Core.phrase(
-        name or I18n.t("empty_socket"),
-        lv and string.format(I18n.t("lvl"), lv) or nil,
-        plus,
-        leader and I18n.t("leader") or nil,
-        string.format(I18n.t("pos"), idx, count))
-end
+-- CURSOR SELECTION IS UNREADABLE ON THIS BOARD (verified 2026-07-04): the free analog
+-- cursor's position is NOT in any widget (WL_PanelCursor stayed 542,319 across a full
+-- move pass) and NOT in the host/frame memory (0x8C0 bytes scanned, zero change while
+-- the pad moved). Like the battle pause, the state lives in the native input system,
+-- unrecoverable without RE of the exe. So the board does NOT track the cursor; it
+-- reads the board summary + the emblems already placed on entry (board_update).
 
 -- The right-hand pane: board title (used as the announcer tab) and the summary
 -- (overall level, to-next-rank, rank, active skills) spoken when the board changes.
@@ -286,120 +226,6 @@ local function board_summary()
     end)
     if #parts == 0 then return nil end
     return table.concat(parts, ", ")
-end
-
--- ---- DEBUG dumps ----------------------------------------------------------------
-
-local function dump_path()
-    local src = debug.getinfo(1, "S").source:sub(2)
-    local dir = src:match("^(.*)[/\\]") or "."
-    return dir .. "\\dumps\\dump_community.txt"
-end
-
-local function dump_board(frame, pc, idx, how, title)
-    local f = io.open(dump_path(), "a")
-    if not f then return end
-    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s\n",
-        os.time(), tostring(title), #pc.list, tostring(idx), tostring(how)))
-    for i, p in ipairs(pc.list) do
-        f:write(string.format("  %02d scale=%.2f active=%s label=%s\n", i,
-            panel_scale(p), tostring(anim_playing(p, p.ActiveAnim)),
-            panel_label(p, i, #pc.list)))
-    end
-    f:close()
-end
-
--- DECISIVE DIAGNOSTIC: the scale/position/native-index all froze while the user moved
--- the cursor — a strong sign we read a POOLED instance that ISN'T the one the pad
--- drives. So: enumerate EVERY Start_Commu_Brd_C instance (which is on_screen, its
--- address) and, for the one we use, WIDE-scan its memory (0x3F0..0x760) reporting any
--- int32/float that changes tick-to-tick. One user pass moving the cursor tells us the
--- real host + the selection offset at once.
-local wide_prev = nil
-
-local function le_i32(s, i)
-    local a, b, c, d = s:byte(i, i + 3)
-    if not d then return nil end
-    local v = a + b * 256 + c * 65536 + d * 16777216
-    if v >= 0x80000000 then v = v - 0x100000000 end
-    return v
-end
-
-local function dump_instances()
-    local f = io.open(dump_path(), "a")
-    if not f then return end
-    f:write(string.format("[%d] instances of Start_Commu_Brd_C:\n", os.time()))
-    local all = FindAllOf("Start_Commu_Brd_C") or {}
-    for _, o in pairs(all) do
-        if Core.valid(o) then
-            local fn = "?"
-            pcall(function() fn = o:GetFullName() end)
-            f:write(string.format("  on_screen=%s vis=%s %s\n",
-                tostring(Core.on_screen(o)), tostring(Core.is_visible(o)), fn))
-        end
-    end
-    f:close()
-end
-
--- Wide scan of BOTH the host AND the panel frame (the cursor + panel list live on the
--- frame, UAT_UICommunityBoard_PanelFrame, size 0x958 — 0 host changes ruled the host
--- out). Reports any int32/float that moves tick-to-tick.
-local WIDE = {
-    { key = "host",  from = 0x3F0, len = 0x370 },
-    { key = "frame", from = 0x430, len = 0x520 },
-}
-
-local function dump_wide_changes(frame)
-    local objs = { host = board, frame = frame }
-    local lines = {}
-    for _, w in ipairs(WIDE) do
-        local o = objs[w.key]
-        local cur = Core.valid(o) and Mem.bytes(o, w.from, w.len) or nil
-        if cur then
-            local prev = wide_prev and wide_prev[w.key]
-            if prev and prev ~= cur then
-                for off = 0, w.len - 4, 4 do
-                    local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
-                    if a and b and a ~= b then
-                        local fb = string.unpack("<f", cur, off + 1)
-                        local repr = (fb == fb and math.abs(fb) > 1e-4 and math.abs(fb) < 1e6)
-                            and string.format("%.1ff", fb) or tostring(b)
-                        lines[#lines + 1] = string.format("%s+0x%X=%s(was %d)", w.key, w.from + off, repr, a)
-                    end
-                end
-            end
-            wide_prev = wide_prev or {}
-            wide_prev[w.key] = cur
-        end
-    end
-    if #lines == 0 then return end
-    local f = io.open(dump_path(), "a")
-    if f then
-        f:write(string.format("[%d] wide %s\n", os.time(), table.concat(lines, " ")))
-        f:close()
-    end
-end
-
--- Periodic snapshot of every cursor widget's RenderTransform (0x90 translation,
--- 0x98 scale) — written even when unchanged, so we can SEE whether the pad moves the
--- cursor at all (a flat snapshot across a "moving" pass = the cursor isn't responding
--- to what the user presses, i.e. wrong input, not a read bug).
-local CURSORS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_Img_Curs_Fing01", "WL_EmbCursorFrame" }
-
-local function dump_cursors(frame)
-    local f = io.open(dump_path(), "a")
-    if not f then return end
-    local parts = {}
-    for _, m in ipairs(CURSORS) do
-        local w
-        pcall(function() w = frame[m] end)
-        if Core.valid(w) then
-            parts[#parts + 1] = string.format("%s=%.0f,%.0f s%.2f", m,
-                Mem.float(w, 0x90) or -999, Mem.float(w, 0x94) or -999, Mem.float(w, 0x98) or -999)
-        end
-    end
-    f:write(string.format("[%d] curs %s\n", os.time(), table.concat(parts, " ")))
-    f:close()
 end
 
 -- ---- detail readout --------------------------------------------------------------
@@ -439,7 +265,7 @@ end
 
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
-    last_title, panel_cache, last_prof, wide_prev = nil, nil, nil, nil
+    last_title, panel_cache = nil, nil
 end
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
@@ -461,7 +287,6 @@ function Commu.is_active()
         -- on the native AT_UICommunityBoard found NOTHING live. It only owns the
         -- screen while its panel frame is really rendered (pooled-closed collapses).
         board = Core.first_on_screen("Start_Commu_Brd_C", tick)
-        board_found = board ~= nil
         if board then
             local frame
             pcall(function() frame = board.WL_BrdFrame end)
@@ -484,18 +309,6 @@ function Commu.is_active()
         clear_state()
     end
     mode = m
-    -- DEBUG: record HOW the screen was classified whenever that changes — if the board
-    -- never activates, this line is the evidence (host not found vs shadowed vs silent).
-    if DEBUG then
-        local sig = string.format("mode=%s det=%s grid=%s slots=%s board=%s(found=%s)",
-            tostring(m), tostring(det ~= nil), tostring(grid ~= nil),
-            grid_slots and #grid_slots or "-", tostring(board ~= nil), tostring(board_found))
-        if sig ~= last_detect_sig then
-            last_detect_sig = sig
-            local f = io.open(dump_path(), "a")
-            if f then f:write(string.format("[%d] detect %s\n", os.time(), sig)) f:close() end
-        end
-    end
     return m ~= nil
 end
 
@@ -527,39 +340,54 @@ local function grid_update()
     ann:focus(I18n.header(5), nil, label, nil, nil)
 end
 
+-- The emblems already PLACED on the board, read on entry so the player knows the
+-- current layout without a live cursor (which is unreadable — see the note above).
+local function placed_emblems(pc)
+    local parts = {}
+    for i, p in ipairs(pc.list) do
+        local embr
+        pcall(function() embr = p.WL_Emblem end)
+        local name
+        if Core.valid(embr) and Core.is_visible(embr) then
+            pcall(function() name = face_char(embr.UIXCmnEmb) end)
+        end
+        if name then
+            local lv = read(p.WL_Lv)
+            local leader = false
+            pcall(function()
+                leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
+            end)
+            parts[#parts + 1] = Core.phrase(name,
+                lv and string.format(I18n.t("lvl"), lv) or nil,
+                leader and I18n.t("leader") or nil)
+        end
+    end
+    return parts
+end
+
 local function board_update()
     local frame
     pcall(function() frame = board.WL_BrdFrame end)
     if not Core.valid(frame) then return end
     local title = board_title()
     local pc = board_panels(frame, title or "?")
-    local idx, how
-    if #pc.list > 0 then idx, how = board_selected(frame, pc) end
-    -- DEBUG: enumerate instances once on entry, then wide-scan the host's memory every
-    -- tick — this is the decisive pass to find what the pad actually moves.
-    if DEBUG then
-        if not last_prof then dump_instances(); last_prof = "0" end
-        dump_wide_changes(frame)
-        local n = tonumber(last_prof) or 0          -- reuse last_prof as a tick counter
-        if n % 15 == 0 then dump_cursors(frame) end
-        last_prof = tostring(n + 1)
-    end
-    if idx then
-        last_idx = idx
-    else
-        idx = last_idx
-    end
-    local label = (idx and pc.list[idx])
-        and cached_label(idx, function() return panel_label(pc.list[idx], idx, #pc.list) end)
-        or nil
-    -- Screen name spoken on entry; the board title is the tab (LB/RB announces it);
-    -- the summary (level/rank/active skills) queues after whenever the board changes.
-    ann:focus(I18n.header(1), title, label, nil, nil)
+    -- The live cursor is unreadable on this board, so we don't track a focused socket.
+    -- Announce the board name on entry (tab = the board title, spoken on LB/RB change);
+    -- then queue the summary (level/rank/skills) + the placed emblems + a hint that A
+    -- opens the accessible Soul Emblems screen to set one.
+    ann:focus(I18n.header(1), title, title, nil, nil)
     if title and title ~= last_title then
         last_title = title
         panel_cache = nil                    -- socket layout changes with the board
+        local bits = {}
         local s = board_summary()
-        if s then Speech.say(s, false) end
+        if s then bits[#bits + 1] = s end
+        local placed = placed_emblems(pc)
+        if #placed > 0 then
+            bits[#bits + 1] = I18n.t("placed") .. " " .. table.concat(placed, ", ")
+        end
+        bits[#bits + 1] = string.format(I18n.t("board_hint"), #pc.list)
+        Speech.say(table.concat(bits, ". "), false)
     end
 end
 
