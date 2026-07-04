@@ -35,6 +35,7 @@ local Core = require("ui_core")
 local A = require("ui_archetypes")
 local I18n = require("i18n")
 local Speech = require("speech")
+local Mem = require("mem")
 
 local Commu = {}
 
@@ -210,6 +211,9 @@ local function board_panels(frame, key)
 end
 
 -- The board cursor's position, from the first cursor widget with a readable slot.
+-- 0,0 counts as UNSET (live 2026-07-03: every canvas slot on this screen reads 0,0 —
+-- the board positions everything via render transforms, unreadable by reflection),
+-- so a bogus "nearest to the origin" socket is never announced.
 local CURSOR_MEMBERS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_EmbCursorFrame" }
 local function cursor_xy(frame)
     for _, m in ipairs(CURSOR_MEMBERS) do
@@ -217,7 +221,7 @@ local function cursor_xy(frame)
         pcall(function() w = frame[m] end)
         if Core.valid(w) then
             local x, y = slot_xy(w)
-            if x then return x, y, m end
+            if x and not (x == 0 and y == 0) then return x, y, m end
         end
     end
 end
@@ -305,6 +309,58 @@ local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
     local dir = src:match("^(.*)[/\\]") or "."
     return dir .. "\\dumps\\dump_community.txt"
+end
+
+-- DEBUG: the hovered-socket index is NOT reflected anywhere (every canvas slot on
+-- this screen reads 0,0 — positions are render-transform driven), so it must live in
+-- the unreflected memory of the board host or its panel frame. Sample both windows
+-- and log whichever int32s change as the cursor moves (the F4-memdiff technique,
+-- in-place): one user pass over a few sockets pins the offset for native_offsets.
+local TAIL_WINDOWS = {
+    { key = "board", from = 0x3F0, len = 0x248 },   -- Start_Commu_Brd_C gaps (0x520..0x5E0 incl.)
+    { key = "frame", from = 0x520, len = 0x438 },   -- Brd frame: 0x618..0x868 gap + 0x8B8.. tail
+}
+local tail_prev = {}
+
+local function le_i32(s, i)
+    local a, b, c, d = s:byte(i, i + 3)
+    if not d then return nil end
+    local v = a + b * 256 + c * 65536 + d * 16777216
+    if v >= 0x80000000 then v = v - 0x100000000 end
+    return v
+end
+
+local function dump_tail_changes(frame)
+    local objs = { board = board, frame = frame }
+    local lines = {}
+    for _, w in ipairs(TAIL_WINDOWS) do
+        local o = objs[w.key]
+        local cur = Core.valid(o) and Mem.bytes(o, w.from, w.len) or nil
+        if cur then
+            local prev = tail_prev[w.key]
+            if prev and prev ~= cur then
+                local n = 0
+                for off = 0, w.len - 4, 4 do
+                    local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
+                    if a and b and a ~= b and b >= -1 and b <= 2000 then
+                        n = n + 1
+                        if n <= 16 then
+                            lines[#lines + 1] = string.format("%s+0x%X=%d(was %d)",
+                                w.key, w.from + off, b, a)
+                        end
+                    end
+                end
+            end
+            tail_prev[w.key] = cur
+        end
+    end
+    if #lines > 0 then
+        local f = io.open(dump_path(), "a")
+        if f then
+            f:write(string.format("[%d] tails %s\n", os.time(), table.concat(lines, " ")))
+            f:close()
+        end
+    end
 end
 
 local function dump_board(frame, pc, idx, how, title)
@@ -459,9 +515,10 @@ local function board_update()
     local pc = board_panels(frame, title or "?")
     local idx, how
     if #pc.list > 0 then idx, how = board_selected(frame, pc) end
+    if DEBUG then dump_tail_changes(frame) end
     -- DEBUG must capture the FAILING case too (no socket resolves → silence): dump on
     -- every selection change AND periodically while unresolved.
-    if DEBUG and (idx ~= last_idx or (idx == nil and tick - last_dump > 30)) then
+    if DEBUG and (idx ~= last_idx or (idx == nil and tick - last_dump > 300)) then
         last_dump = tick
         dump_board(frame, pc, idx, how, title)
     end
