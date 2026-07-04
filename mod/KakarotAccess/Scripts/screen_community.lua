@@ -56,6 +56,7 @@ local last_title = nil      -- board title, gates the spoken board summary
 local panel_cache = nil     -- { key, list = {panel...}, xy = {{x,y}...} } per board
 local last_detect_sig = nil -- DEBUG: last screen-classification signature dumped
 local board_found = false   -- DEBUG: Start_Commu_Brd_C host seen (even if frame hidden)
+local last_prof = nil       -- DEBUG: last panel-scale profile string
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -181,24 +182,9 @@ end
 -- Widget position for the board: RenderTransform.Translation read RAW via mem_bridge
 -- (REFLECTION on RenderTransform hard-aborts — pause lesson 2026-07-01 — but raw
 -- SEH-guarded reads are safe; UWidget.RenderTransform sits at 0x90 per the UMG.hpp
--- CXX dump: Translation.X 0x90, .Y 0x94). Canvas-slot offsets as fallback. 0,0 from
--- both counts as UNSET (live: every canvas slot on this screen reads 0,0).
-local RT_X, RT_Y = 0x90, 0x94
+-- CXX dump.)
 
-local function widget_xy(w)
-    if not Core.valid(w) then return nil end
-    local x, y = Mem.float(w, RT_X), Mem.float(w, RT_Y)
-    if x and y and (x ~= 0 or y ~= 0) then return x, y end
-    pcall(function()
-        local off = w.Slot.LayoutData.Offsets
-        x, y = off.Left + 0.0, off.Top + 0.0
-    end)
-    if x and y and (x ~= 0 or y ~= 0) then return x, y end
-    return nil
-end
-
--- The board's sockets, cached per board. Positions are NOT cached: the render
--- transforms move (board pans/zooms), and 11 × 2 raw float reads per tick is cheap.
+-- The board's sockets, cached per board.
 local function board_panels(frame, key)
     if panel_cache and panel_cache.key == key then return panel_cache end
     local c = { key = key, list = {} }
@@ -213,44 +199,30 @@ local function board_panels(frame, key)
     return c
 end
 
--- The board cursor's live position, from the first cursor widget with a real
--- transform/slot position.
-local CURSOR_MEMBERS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_EmbCursorFrame" }
-local function cursor_xy(frame)
-    for _, m in ipairs(CURSOR_MEMBERS) do
-        local w
-        pcall(function() w = frame[m] end)
-        local x, y = widget_xy(w)
-        if x then return x, y, m end
-    end
+-- RenderTransform.Scale.X of a widget (FWidgetTransform: Translation 0x90, Scale 0x98
+-- per UMG.hpp) read raw. The selected socket is SCALED UP (live 2026-07-04: Goku's
+-- pedestal read 1.46 while every empty socket read 1.00) — this is the game's own
+-- selection highlight, and unlike the cursor widget it lives on the panel itself, in
+-- the panels' own coordinate space. (The WL_PanelCursor sits in a DIFFERENT space —
+-- 541,318 vs the panels' -400..300 — so nearest-neighbour to it was always wrong.)
+local RT_SCALE = 0x98
+
+local function panel_scale(p)
+    return Mem.float(p, RT_SCALE) or 1.0
 end
 
--- The hovered socket: the NEAREST socket to the live cursor, both positioned via
--- raw RenderTransform reads. (The native tail guess +0x500 froze while moving —
--- see native_offsets history — so geometry is primary; a panel's ActiveAnim as the
--- no-cursor fallback.) The cursor reading is only TRUSTED once it has actually
--- moved since board entry: live 2026-07-04 the first sample (541,319) was a stale
--- init value in a different space than the sockets, and nearest-to-it announced a
--- bogus "11 of 11" on entry.
-local cursor_ref = nil
+-- The hovered socket = the panel with the largest scale, when one is clearly enlarged
+-- above the rest (margin guards against all-equal). ActiveAnim as the fallback.
+local SCALE_MARGIN = 0.08
 
 local function board_selected(frame, pc)
-    local cx, cy, src = cursor_xy(frame)
-    if cx then
-        if not cursor_ref then cursor_ref = { x = cx, y = cy } end
-        local moved = math.abs(cx - cursor_ref.x) + math.abs(cy - cursor_ref.y) > 1.0
-        if moved then
-            local best, bd
-            for i, p in ipairs(pc.list) do
-                local x, y = widget_xy(p)
-                if x then
-                    local d = (x - cx) ^ 2 + (y - cy) ^ 2
-                    if not bd or d < bd then bd, best = d, i end
-                end
-            end
-            if best then return best, "near:" .. src end
-        end
+    local best, top, second = nil, 1.0, 1.0
+    for i, p in ipairs(pc.list) do
+        local s = panel_scale(p)
+        if s > top then second = top; top, best = s, i
+        elseif s > second then second = s end
     end
+    if best and top - second >= SCALE_MARGIN then return best, "scale" end
     local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
     if idx then return idx, "anim" end
     return nil, nil
@@ -324,113 +296,14 @@ local function dump_path()
     return dir .. "\\dumps\\dump_community.txt"
 end
 
--- DEBUG: the hovered-socket index is NOT reflected anywhere (every canvas slot on
--- this screen reads 0,0 — positions are render-transform driven), so it must live in
--- the unreflected memory of the board host or its panel frame. Sample both windows
--- and log whichever int32s change as the cursor moves (the F4-memdiff technique,
--- in-place): one user pass over a few sockets pins the offset for native_offsets.
-local TAIL_WINDOWS = {
-    { key = "board", from = 0x3F0, len = 0x248 },   -- Start_Commu_Brd_C gaps (0x520..0x5E0 incl.)
-    { key = "frame", from = 0x520, len = 0x438 },   -- Brd frame: 0x618..0x868 gap + 0x8B8.. tail
-}
-local tail_prev = {}
-
-local function le_i32(s, i)
-    local a, b, c, d = s:byte(i, i + 3)
-    if not d then return nil end
-    local v = a + b * 256 + c * 65536 + d * 16777216
-    if v >= 0x80000000 then v = v - 0x100000000 end
-    return v
-end
-
-local function dump_tail_changes(frame)
-    local objs = { board = board, frame = frame }
-    local lines = {}
-    for _, w in ipairs(TAIL_WINDOWS) do
-        local o = objs[w.key]
-        local cur = Core.valid(o) and Mem.bytes(o, w.from, w.len) or nil
-        if cur then
-            local prev = tail_prev[w.key]
-            if prev and prev ~= cur then
-                local n = 0
-                for off = 0, w.len - 4, 4 do
-                    local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
-                    if a and b and a ~= b then
-                        -- log ints in index-like range, and float-looking values too
-                        -- (the cursor coordinates are floats — the int-only filter
-                        -- missed every movement on the first pass)
-                        local fa = string.unpack("<f", prev, off + 1)
-                        local fb = string.unpack("<f", cur, off + 1)
-                        local as_int = b >= -1 and b <= 2000
-                        local as_float = fb == fb and math.abs(fb) < 100000
-                            and (math.abs(fb) > 1e-3 or fb == 0)
-                        if as_int or as_float then
-                            n = n + 1
-                            if n <= 16 then
-                                lines[#lines + 1] = as_int
-                                    and string.format("%s+0x%X=%d(was %d)", w.key, w.from + off, b, a)
-                                    or string.format("%s+0x%X=%.1ff(was %.1f)", w.key, w.from + off, fb, fa)
-                            end
-                        end
-                    end
-                end
-            end
-            tail_prev[w.key] = cur
-        end
-    end
-    if #lines > 0 then
-        local f = io.open(dump_path(), "a")
-        if f then
-            f:write(string.format("[%d] tails %s\n", os.time(), table.concat(lines, " ")))
-            f:close()
-        end
-    end
-end
-
--- DEBUG: periodic probe of EVERY position candidate (cursor widgets, content canvases,
--- per-panel transform + scale), written even when nothing announces — the earlier
--- change-triggered dumps went blind exactly when the selection froze.
-local PROBE_WIDGETS = {
-    "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_Img_Curs_Fing01", "WL_EmbCursorFrame",
-    "WL_Pnl_Contents", "WL_Pnl_Contents_Parts",
-}
-local function dump_probe(frame, pc)
-    local f = io.open(dump_path(), "a")
-    if not f then return end
-    local parts = {}
-    for _, m in ipairs(PROBE_WIDGETS) do
-        local w
-        pcall(function() w = frame[m] end)
-        if Core.valid(w) then
-            local tx, ty = Mem.float(w, RT_X), Mem.float(w, RT_Y)
-            local sx = Mem.float(w, 0x98)
-            parts[#parts + 1] = string.format("%s t=%.1f,%.1f s=%.2f",
-                m, tx or -999, ty or -999, sx or -999)
-        end
-    end
-    f:write(string.format("[%d] probe %s\n", os.time(), table.concat(parts, " | ")))
-    local ps = {}
-    for i, p in ipairs(pc.list) do
-        local tx, ty = Mem.float(p, RT_X), Mem.float(p, RT_Y)
-        local sx = Mem.float(p, 0x98)
-        ps[#ps + 1] = string.format("%d:%.0f,%.0f s%.2f", i, tx or -999, ty or -999, sx or -999)
-    end
-    f:write("  panels " .. table.concat(ps, " ") .. "\n")
-    f:close()
-end
-
 local function dump_board(frame, pc, idx, how, title)
     local f = io.open(dump_path(), "a")
     if not f then return end
-    local cx, cy, src = cursor_xy(frame)
-    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
-        os.time(), tostring(title), #pc.list, tostring(idx), tostring(how),
-        tostring(cx), tostring(cy), tostring(src)))
+    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s\n",
+        os.time(), tostring(title), #pc.list, tostring(idx), tostring(how)))
     for i, p in ipairs(pc.list) do
-        local x, y = widget_xy(p)
-        f:write(string.format("  %02d xy=%s,%s active=%s label=%s\n", i,
-            tostring(x), tostring(y),
-            tostring(anim_playing(p, p.ActiveAnim)),
+        f:write(string.format("  %02d scale=%.2f active=%s label=%s\n", i,
+            panel_scale(p), tostring(anim_playing(p, p.ActiveAnim)),
             panel_label(p, i, #pc.list)))
     end
     f:close()
@@ -473,7 +346,7 @@ end
 
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
-    last_title, panel_cache, cursor_ref = nil, nil, nil
+    last_title, panel_cache = nil, nil
 end
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
@@ -561,8 +434,6 @@ local function grid_update()
     ann:focus(I18n.header(5), nil, label, nil, nil)
 end
 
-local last_dump = 0
-
 local function board_update()
     local frame
     pcall(function() frame = board.WL_BrdFrame end)
@@ -571,18 +442,16 @@ local function board_update()
     local pc = board_panels(frame, title or "?")
     local idx, how
     if #pc.list > 0 then idx, how = board_selected(frame, pc) end
+    -- DEBUG: log whenever the selection OR the panel-scale profile changes, so a live
+    -- pass confirms the scale really follows the cursor (and which socket).
     if DEBUG then
-        dump_tail_changes(frame)
-        if tick - last_dump > 20 then
-            last_dump = tick
-            dump_probe(frame, pc)
+        local prof = {}
+        for _, p in ipairs(pc.list) do prof[#prof + 1] = string.format("%.2f", panel_scale(p)) end
+        prof = table.concat(prof, ",")
+        if idx ~= last_idx or prof ~= last_prof then
+            last_prof = prof
+            dump_board(frame, pc, idx, how, title)
         end
-    end
-    -- DEBUG must capture the FAILING case too (no socket resolves → silence): dump on
-    -- every selection change AND periodically while unresolved.
-    if DEBUG and (idx ~= last_idx or (idx == nil and tick - last_dump > 300)) then
-        last_dump = tick
-        dump_board(frame, pc, idx, how, title)
     end
     if idx then
         last_idx = idx
