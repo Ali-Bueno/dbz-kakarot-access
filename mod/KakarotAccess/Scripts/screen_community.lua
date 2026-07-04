@@ -226,9 +226,16 @@ local function cursor_xy(frame)
     end
 end
 
--- The hovered socket: a panel's ActiveAnim when it singles one out, else the
--- nearest socket to the cursor position.
+-- The hovered socket. PRIMARY: the native hovered index in the board host's
+-- non-reflected tail (pinned live via the tail diff, see native_offsets.commuBoard);
+-- bounds-checked against the socket list, so a wrong read means silence, never a
+-- wrong socket. Fallbacks: a panel's ActiveAnim when it singles one out, else the
+-- nearest socket to the cursor position (dead as long as slots read 0,0).
+local OFF = require("native_offsets")
+
 local function board_selected(frame, pc)
+    local hov = Mem.i32(board, OFF.commuBoard.hoverIndex)
+    if hov and hov >= 0 and hov < #pc.list then return hov + 1, "native" end
     local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
     if idx then return idx, "anim" end
     local cx, cy = cursor_xy(frame)
@@ -367,8 +374,10 @@ local function dump_board(frame, pc, idx, how, title)
     local f = io.open(dump_path(), "a")
     if not f then return end
     local cx, cy, src = cursor_xy(frame)
-    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
+    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s hov=%s flag=%s cursor=%s,%s via %s\n",
         os.time(), tostring(title), #pc.list, tostring(idx), tostring(how),
+        tostring(Mem.i32(board, OFF.commuBoard.hoverIndex)),
+        tostring(Mem.i32(board, OFF.commuBoard.hoverFlag)),
         tostring(cx), tostring(cy), tostring(src)))
     for i, p in ipairs(pc.list) do
         local xy = pc.xy[i]
