@@ -105,7 +105,13 @@ WHY the cursor is unread (all verified live 2026-07-04, dump_community.txt):
   widget memory — like battle pause, it's in the native input/logic layer.
 
 **NEXT-SESSION ATTACK PLAN (in priority order):**
-1. **CONFIRM THE INPUT FIRST (cheap, do before any RE):** the user was in the COMMUNITY
+0. **INPUT DEVICE (test THIS first — likely the whole cause):** the user was moving the
+   cursor with the **D-PAD**, but this board's cursor is a FREE pointer driven by the
+   **LEFT STICK** (the help bar shows "Move Cursor" with the stick glyph). If so, the
+   cursor never moved and EVERY frozen diagnostic below is meaningless. Re-test with the
+   LEFT STICK before concluding anything — the `hunt` scan (commit 753eabd, cursor widget
+   + slot memory) should then light up and hand us the cursor position immediately.
+1. **CONFIRM THE INPUT (cheap, do before any RE):** also the user was in the COMMUNITY
    TUTORIAL, whose popups persist and may FREEZE the cursor. Re-test on a NORMAL board
    (tutorial done) and re-run the wide diff. If something changes now, the whole "native"
    conclusion was a tutorial artifact. If still frozen, continue below.
