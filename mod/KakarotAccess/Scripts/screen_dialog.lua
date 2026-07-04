@@ -117,7 +117,7 @@ end
 -- collapsed ancestor IsVisible ignores); selection is the one whose Img_Xwin01_List
 -- highlight is visible.
 local function choices()
-    local labels, sel = {}, nil
+    local labels, sel, items = {}, nil, false
     for _, ch in pairs(Core.cached_all("Xcmn_Win00_Choice_C", tick)) do
         if Core.on_screen(ch)
            and ch:GetFullName():match("BP_ATGameInstance_C_%d+%.Xcmn_Win00_Choice_C_%d+$") then
@@ -147,7 +147,47 @@ local function choices()
             end
         end)
     end
-    return labels, sel
+    -- SELECTABLE ITEM lists (the community GIFT picker, and any other window whose
+    -- WL_ItemPlateCtn rows carry the cursor): each UAT_UIGameWindowChoice row is
+    -- ItemName + ItemNum with the same Xwin01List highlight (native member name has
+    -- no underscores). Only engage when SOME row is highlighted — reward/notice
+    -- windows show the same rows with NO cursor, and those must keep the read-once
+    -- notice behavior (plates() reads them as content).
+    pcall(function()
+        local arr = win.WL_ItemPlateCtn
+        local ilabels, isel = {}, nil
+        for i = 1, #arr do
+            local row = arr[i]
+            if Core.valid(row) and Core.on_screen(row) then
+                local label = Core.phrase(
+                    A.markup_to_speech(Core.read_text(row.ItemName)),
+                    A.markup_to_speech(Core.read_text(row.ItemNum)))
+                if label ~= "" then
+                    ilabels[#ilabels + 1] = label
+                    local hi = false
+                    pcall(function() hi = Core.is_visible(row.ImgXwin01List) end)
+                    if not hi then
+                        pcall(function() hi = Core.is_visible(row.Img_Xwin01_List) end)
+                    end
+                    if hi then isel = label end
+                end
+            end
+        end
+        if isel then
+            for _, l in ipairs(ilabels) do labels[#labels + 1] = l end
+            sel = isel
+            items = true
+        end
+    end)
+    return labels, sel, items
+end
+
+-- Live description of the selected item row (the pane under the list — the gift
+-- picker repopulates it per cursor move). Tooltip in item-list mode only.
+local function item_detail()
+    local t
+    pcall(function() t = node_rt(win.WL_TxtDetailItem) end)
+    return t
 end
 
 -- The shared message-window classes: Xcmn_Win01_C (dialogs/confirmations/notices),
@@ -236,7 +276,7 @@ function Dialog.is_active()
         state = { msg = nil, labels = {}, sel = nil }
         return false
     end
-    local labels, sel = choices()
+    local labels, sel, items = choices()
     if DEBUG and msg ~= last_dumped then
         last_dumped = msg
         dump_window(msg)
@@ -246,7 +286,7 @@ function Dialog.is_active()
     -- community board's tutorial popups PERSIST until the task is done and were muting
     -- the whole board (the cursor moves under them). A new text re-claims once.
     if #labels == 0 and msg == spoken then return false end
-    state = { msg = msg, labels = labels, sel = sel }   -- reused by update() this tick
+    state = { msg = msg, labels = labels, sel = sel, items = items }
     return true
 end
 
@@ -255,9 +295,11 @@ function Dialog.reset() ann:reset() end
 function Dialog.update()
     local s = state or {}
     if s.labels and #s.labels > 0 then
-        -- Confirmation: prompt spoken once (as the screen), the highlighted option as
-        -- the focused item (re-announced when you move between Yes/No).
-        ann:focus(s.msg, nil, s.sel or s.labels[1], nil, nil)
+        -- Confirmation / selectable list: prompt spoken once (as the screen), the
+        -- highlighted option as the focused item (re-announced as you move). Item
+        -- lists (gift picker) add the live per-item description as the tooltip.
+        ann:focus(s.msg, nil, s.sel or s.labels[1], nil,
+            s.items and item_detail or nil)
     else
         -- Plain message: the prompt is the item; a text change re-announces. Content
         -- rows (rewards, received soul emblems, …) read as the tooltip, so a list that

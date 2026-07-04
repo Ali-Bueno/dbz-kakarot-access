@@ -93,7 +93,7 @@ the user picked Gohan from the grid, heard "Emblem in hand…", placed him in so
 next to Goku (dump: held→false, cache=2, mode→16 link-bonus demo) and **completed the
 tutorial that blocked story progress**. The frozen-cursor mystery was exactly the
 tutorial-mode gate described below. DEBUG is now OFF in screen_community.
-Added right after the verify (both additive+guarded, PENDING verify):
+Added right after the verify (all additive+guarded, PENDING verify):
 - **Link-bonus subtitles**: the registry gives the screen to ONE adapter, so the
   dialogue reader never runs while the board owns it → `board_subtitles()` reads
   `host.LinkBonusSubtitles` (UATUISubtitles TextName/TextSelif) diff-gated.
@@ -101,6 +101,16 @@ Added right after the verify (both additive+guarded, PENDING verify):
   is a FIXED array of 10 (detail+0x470, UE4SS collapses to elem 0) → elements 1..9
   via RegisterCustomProperty on the runtime class (screen_party technique); each row
   speaks name+threshold, active variant preferred; appended to the entry summary.
+- **GIFT picker** (user request): the emblem detail's PresentBtn (blueprint
+  Start_Commu_Pr_Btn) opens a shared game window whose `WL_ItemPlateCtn` rows
+  (UAT_UIGameWindowChoice: ItemName+ItemNum) are SELECTABLE — same Xwin01List
+  highlight as Yes/No (native member `ImgXwin01List`, no underscores).
+  `screen_dialog.choices()` now engages item rows as a navigable list WHEN one is
+  highlighted (no highlight → unchanged notice behavior, so reward windows don't
+  regress), speaking "item, count" per move + the live `WL_TxtDetailItem`
+  description as tooltip. screen_dialog DEBUG left ON one more pass: if the gift
+  window reads wrong/silent, dumps/dump_dialog.txt shows its pools; if NOTHING
+  reads (not a message window at all), take an F7 discovery dump inside it.
 
 Original static solution write-up:
 
