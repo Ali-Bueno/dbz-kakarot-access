@@ -24,7 +24,7 @@ local Choice = {}
 -- Diagnostics: if the NPC response menu still reads wrong/silent, this writes what it
 -- found (window class + message, each row's class/label/hover) to dumps/dump_choice.txt
 -- on every prompt change. Turn OFF once confirmed working in-game.
-local DEBUG = true
+local DEBUG = false
 
 local ann = Core.make_announcer()
 local tick = 0

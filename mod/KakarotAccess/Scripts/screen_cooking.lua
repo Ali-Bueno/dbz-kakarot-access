@@ -36,7 +36,7 @@ local Cooking = {}
 -- Appends a line per selection change to dumps/dump_cooking.txt (GetSelectValue vs
 -- the detail-pane title) — ground truth for the frozen-index diagnosis. Turn OFF
 -- once the user confirms cursor moves are spoken.
-local DEBUG = true
+local DEBUG = false
 
 local ann = Core.make_announcer()
 local host, shoplist, list, overlay = nil, nil, nil, nil

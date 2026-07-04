@@ -155,6 +155,59 @@ function Discover.run()
             return #parts > 0 and table.concat(parts, " | ") or "(no text)"
         end
 
+        -- 0) ALL VISIBLE ON-SCREEN TEXT — runs FIRST and flushes, because the later
+        -- Start_Top ring reflection can abort UNCATCHABLY and truncate the dump. Each
+        -- line shows the text and the OWNING widget path (…OwnerWidget.mainTxt), which is
+        -- how we identify an unread screen (e.g. the cooking "Make a dish" course-select).
+        -- Owning widget of a text node: walk up to the nearest ancestor whose class name
+        -- ends in "_C" (a blueprint widget) or starts with "UAT_"/"AT_" (native UI), so an
+        -- unread screen is named by its real widget class, not the generic WidgetTree path.
+        local function owner_widget(o)
+            local cur, depth = o, 0
+            while depth < 12 do
+                local ok, p = pcall(function() return cur:GetParent() end)
+                if not ok or not valid(p) then break end
+                local c = cname(p)
+                if c:match("_C$") or c:match("^UAT_") or c:match("^AT_") then
+                    return c .. "  [" .. short(p:GetFullName()) .. "]"
+                end
+                cur, depth = p, depth + 1
+            end
+            return short(o:GetFullName())
+        end
+
+        out[#out + 1] = "==== all visible on-screen text (plain) ===="
+        flush()
+        for _, o in pairs(ALLTEXT) do
+            if valid(o) then
+                local okv = pcall(function() return o:IsVisible() end)
+                if okv and o:IsVisible() == true then
+                    local ok2, s = pcall(function() return o.Text:ToString() end)
+                    if ok2 and s and s ~= "" then
+                        out[#out + 1] = string.format("  %q\n        <- %s\n        <- %s",
+                            s, owner_widget(o), o:GetFullName())
+                    end
+                end
+            end
+        end
+        flush()
+        out[#out + 1] = ""
+        out[#out + 1] = "==== all visible RICH text (CFExtendRichTextBlock, raw markup) ===="
+        flush()
+        for _, o in pairs(FindAllOf("CFExtendRichTextBlock") or {}) do
+            if valid(o) then
+                local okv = pcall(function() return o:IsVisible() end)
+                if okv and o:IsVisible() == true then
+                    local ok2, s = pcall(function() return o.Text:ToString() end)
+                    if ok2 and s and s ~= "" then
+                        out[#out + 1] = string.format("  %q  <- %s", s, short(o:GetFullName()))
+                    end
+                end
+            end
+        end
+        flush()
+        out[#out + 1] = ""
+
         -- 1) CONTAINER DIAGNOSTICS ---------------------------------------------------
         out[#out + 1] = "==== container on-screen signals ===="
         out[#out + 1] = "  IsVisible | GetVisibility | RenderOpacity | ColorA | InViewport | parents"
@@ -370,41 +423,6 @@ function Discover.run()
             flush()
         end
 
-        -- 3) all visible on-screen text ----------------------------------------------
-        out[#out + 1] = ""
-        out[#out + 1] = "==== all visible on-screen text ===="
-        flush()
-        for _, o in pairs(ALLTEXT) do
-            if valid(o) then
-                local okv = pcall(function() return o:IsVisible() end)
-                if okv and o:IsVisible() == true then
-                    local ok2, s = pcall(function() return o.Text:ToString() end)
-                    if ok2 and s and s ~= "" then
-                        out[#out + 1] = string.format("  %q  <- %s", s, short(o:GetFullName()))
-                    end
-                end
-            end
-        end
-        flush()
-
-        -- 4) all visible RICH text (CFExtendRichTextBlock) — where <inputicon> glyph markup
-        --    lives. The control tutorials show a button glyph per line; this reveals whether
-        --    it's inline markup (resolvable to a button name) and in which widget subtree.
-        out[#out + 1] = ""
-        out[#out + 1] = "==== all visible RICH text (CFExtendRichTextBlock, raw markup) ===="
-        flush()
-        for _, o in pairs(FindAllOf("CFExtendRichTextBlock") or {}) do
-            if valid(o) then
-                local okv = pcall(function() return o:IsVisible() end)
-                if okv and o:IsVisible() == true then
-                    local ok2, s = pcall(function() return o.Text:ToString() end)
-                    if ok2 and s and s ~= "" then
-                        out[#out + 1] = string.format("  %q  <- %s", s, short(o:GetFullName()))
-                    end
-                end
-            end
-        end
-        flush()
         print("[Discover] wrote focused dump to " .. outfile .. "\n")
     end)
 end

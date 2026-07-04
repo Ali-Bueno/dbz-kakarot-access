@@ -48,6 +48,13 @@ Registry.register(require("screen_tutorial"))
 Registry.register(require("screen_options"))
 -- Cooking precedes the shop: the cooking menu embeds a UAT_UIShopTop (WL_CookingTop),
 -- so the shop adapter could latch onto it while the cooking screen is the real context.
+-- The Shop_Top mode/action list ("Make a dish / Make a full-course meal", shop Buy/Sell):
+-- reads ListBarCtn (Xlist_Bar01 rows). Registered BEFORE screen_cooking AND screen_shop:
+-- during the cooking course-select, Shop_Cook_C is already on screen with a stale recipe
+-- index, so screen_cooking would otherwise activate and shadow this. Its rows go
+-- Collapsed (on_screen=false) once you pick a mode, so it stays inactive over the recipe
+-- list and shop item list — no overlap with those readers.
+Registry.register(require("screen_shoplist"))
 Registry.register(require("screen_cooking"))
 Registry.register(require("screen_shop"))
 -- Overworld ring submenus that open their own screen (native class, no _C). The two list

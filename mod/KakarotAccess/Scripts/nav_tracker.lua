@@ -773,6 +773,47 @@ end
 -- icon's SearchRangeRadius (the game's own reveal distance) with a global cap;
 -- quests have no limit. Returns an ordered array of non-empty groups:
 --   { { key=<group>, name=<localized>, items={ {actor,key,label,dist}, ... } }, ... }
+-- Diagnostic: dump every minimap candidate (type/group/dist/range/kept) to
+-- dumps/dump_radar.txt each time the R2 menu opens — so "only fishing + quests show"
+-- can be diagnosed offline (is a category ABSENT from the minimap, or being FILTERED?).
+local RADAR_DEBUG = false
+
+-- Known NPC UniqueId/CharacterName token → spoken name. Proper nouns (no localization).
+-- Extend as the diagnostic (dump_radar.txt `name=`) reveals the real ids the game uses.
+local NPC_NAMES = {
+    chichi = "Chi-Chi", gohan = "Gohan", goku = "Goku", krillin = "Krillin",
+    kuririn = "Krillin", piccolo = "Piccolo", bulma = "Bulma", roshi = "Master Roshi",
+    kame = "Master Roshi", ox = "Ox-King", gyumao = "Ox-King", yamcha = "Yamcha",
+    tenshinhan = "Tien", tien = "Tien", chaozu = "Chiaotzu", vegeta = "Vegeta",
+    trunks = "Trunks", korin = "Korin", karin = "Korin", yajirobe = "Yajirobe",
+    dende = "Dende", mrpopo = "Mr. Popo", popo = "Mr. Popo", kamisama = "Kami",
+}
+
+-- Best spoken name for a field NPC from its UniqueId (FName), mapped through NPC_NAMES;
+-- unknown ids are cleaned (underscores→spaces) and spoken raw so the user can still tell
+-- entries apart and report the token. nil = generic noun.
+-- IMPORTANT: read ONLY UniqueId — it's a reflected member of AQuestCharacter. Do NOT
+-- touch CharacterName here: AQuestCharacter does NOT declare it (it lives on the sibling
+-- AAT_Character), and reading a non-existent property on this game raises a C++
+-- exception pcall CANNOT catch — which froze the game (it aborted right after the R2/R3
+-- menu had blocked the pad, so the neutral pad stuck). See do_open's block ordering too.
+local function npc_name(npc)
+    local raw
+    pcall(function()
+        local u = npc.UniqueId
+        if u then raw = u:ToString() end
+    end)
+    if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
+    -- normalize for the lookup: lowercase, drop non-letters
+    local key = raw:lower():gsub("[^%a]", "")
+    for tok, nm in pairs(NPC_NAMES) do
+        if key:find(tok, 1, true) then return nm end
+    end
+    -- unknown: clean the raw id for speech (strip a leading npc_/chr_ prefix, _→space)
+    local cleaned = raw:gsub("^[%a]-_", ""):gsub("_", " ")
+    return cleaned ~= "" and cleaned or nil
+end
+
 function Nav.list_targets()
     if not Nav.field_ready() then return {} end
     local pawn = player_pawn()
@@ -782,26 +823,40 @@ function Nav.list_targets()
 
     local seen = {}
     local groups = {}
-    local function add(actor, t)
-        if not t or not Core.valid(actor) then return end
+    local diag = RADAR_DEBUG and {} or nil
+    -- Core add: place an actor into a group with a spoken noun. range = the icon's own
+    -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
+    -- groups by max(global cap, range) — never tighter than the cap, so an already-shown
+    -- icon farther than its small reveal radius isn't wrongly dropped.
+    local function add_target(actor, grp, noun, range, src, name)
+        if not Core.valid(actor) then return end
         local key = tostring(actor:GetAddress())
         if seen[key] then return end
-        local grp = ICON_GROUP[t] or "other"
         local x, y, z = actor_pos(actor)
         if not x then return end
         local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+        local kept = true
         if grp ~= "quests" then
-            -- distance limit = the game's own reveal radius for this icon, else the cap
-            local _, range = icon_info(actor)
-            local cap = (range and range > 0) and range or RADAR_GLOBAL_CAP
-            if d > cap then return end
+            local cap = math.max(RADAR_GLOBAL_CAP, range or 0)
+            if d > cap then kept = false end
         end
+        if diag then
+            diag[#diag + 1] = string.format("  grp=%s noun=%s name=%s d=%.0f range=%s kept=%s src=%s",
+                grp, noun, tostring(name), d, tostring(range), tostring(kept), src)
+        end
+        if not kept then return end
         seen[key] = true
         groups[grp] = groups[grp] or { items = {} }
-        groups[grp].items[#groups[grp].items + 1] = {
-            actor = actor, key = key, dist = d,
-            noun = ICON_NOUN[t] or ("radar_cat_" .. grp),
-        }
+        groups[grp].items[#groups[grp].items + 1] =
+            { actor = actor, key = key, dist = d, noun = noun, name = name }
+    end
+    -- Add by EMapIcon type (icons): derive group + noun from the type.
+    local function add_icon(actor, t, src)
+        if not t then return end
+        local grp = ICON_GROUP[t] or "other"
+        local noun = ICON_NOUN[t] or ("radar_cat_" .. grp)
+        local _, range = icon_info(actor)
+        add_target(actor, grp, noun, range, src)
     end
 
     -- 1) active navi guidance (quest arrows) — always quest-classified
@@ -811,8 +866,7 @@ function Nav.list_targets()
             if Core.valid(icon) and icon_in_use(icon) then
                 local ok, ta = pcall(function() return icon.TargetActor end)
                 if ok and Core.valid(ta) then
-                    local t = (icon_info(ta)) or 24   -- default MAINQUEST if untyped
-                    add(ta, t)
+                    add_icon(ta, (icon_info(ta)) or 24, "navi")   -- default MAINQUEST if untyped
                 end
             end
         end
@@ -827,11 +881,33 @@ function Nav.list_targets()
                 if Core.valid(icon) then
                     local ta = icon.TargetActor
                     if Core.valid(ta) then
-                        add(ta, (icon_info(ta)))
+                        add_icon(ta, (icon_info(ta)), "mapicon")
                     end
                 end
             end
         end)
+    end
+    -- 3) talkable field NPCs (Chi-Chi, shopkeepers, quest givers): AQuestCharacter uses
+    -- a MobIconComponent, NOT the ATMapIconComponent, so it's absent from MapIconList
+    -- above. Scan them directly; the distance cap drops the game's far parked pool.
+    do
+        local npcs = FindAllOf("QuestCharacter") or {}
+        for _, npc in pairs(npcs) do
+            if Core.valid(npc) then
+                add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
+            end
+        end
+    end
+
+    if diag then
+        local src = debug.getinfo(1, "S").source:sub(2)
+        local dir = src:match("^(.*)[/\\]") or "."
+        local f = io.open(dir .. "\\dumps\\dump_radar.txt", "a")
+        if f then
+            f:write(string.format("[%d] list_targets: %d candidates\n", os.time(), #diag))
+            f:write(table.concat(diag, "\n") .. "\n")
+            f:close()
+        end
     end
 
     local out = {}
@@ -845,9 +921,15 @@ function Nav.list_targets()
     return out
 end
 
--- Localized "noun, N meters" for a picker item (used by radar_menu for announcements).
+-- The spoken label of a picker item: the resolved NPC name if we have one, else the
+-- localized category noun.
+function Nav.item_label(item)
+    return item.name or I18n.t(item.noun)
+end
+
+-- "<label>, N meters" for a picker item (used by radar_menu for announcements).
 function Nav.item_phrase(item)
-    return string.format("%s, %s", I18n.t(item.noun),
+    return string.format("%s, %s", Nav.item_label(item),
         string.format(I18n.t("nav_meters"), meters(item.dist)))
 end
 

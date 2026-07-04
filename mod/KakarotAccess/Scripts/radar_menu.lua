@@ -1,22 +1,24 @@
--- R2 radar target picker (controller overlay, modal toggle).
+-- R3 radar target picker (controller overlay, modal toggle).
 --
--- Press R2 in the RPG overworld to OPEN a target list; the game is frozen while it's
--- open (input_bridge hides the pad from the game, see input.lua) so no field command
--- fires. It's modal — you don't hold anything:
+-- Click the RIGHT STICK (R3) in the RPG overworld to OPEN a target list; the game is
+-- frozen while it's open (input_bridge hides the pad from the game, see input.lua) so
+-- no field command fires. R3 (not a trigger) is used so the flight controls stay free
+-- (R2 = descend / L2 = ascend on the Flying Nimbus). It's modal — you don't hold
+-- anything:
 --   * L1 / R1  — previous / next CATEGORY (like menu tabs): Quests, Characters,
 --                Fishing, Gathering, Shops, Minigames, Dragon Balls, Other.
 --   * D-pad up / down — move through the items in the category (nearest first).
 --   * A / Cross — SELECT the focused item: it becomes the audio-radar target, menu closes.
---   * R2 again  — close WITHOUT changing anything (cancel).
+--   * R3 again  — close WITHOUT changing anything (cancel).
 --   * B / Circle — close AND stop tracking the current target (the "stop" shortcut).
 --
 -- RPG-ONLY, NEVER COMBAT: opening is gated on Nav.field_ready() (world alive AND no
 -- pausing menu). The minimap — the game's own "free-roaming" signal — is hidden in
--- battle/cutscenes/menus, so R2 there does nothing and the pad is never blocked. If a
+-- battle/cutscenes/menus, so R3 there does nothing and the pad is never blocked. If a
 -- battle/cutscene starts while the menu is open, it closes and unblocks at once.
 --
 -- On close the pad stays blocked until every button/trigger is released (a "drain"),
--- so the game never receives the residual A/R2/B press that closed the menu.
+-- so the game never receives the residual A/R3/B press that closed the menu.
 --
 -- All world reads live in nav_tracker (Nav.list_targets / Nav.set_manual_target /
 -- Nav.stop_tracking), behind the radar's safety gates; this file is pure input + speech.
@@ -28,15 +30,15 @@ local Nav = require("nav_tracker")
 
 local Menu = {}
 
-local TICK_MS = 60
-local OPEN_TH = 45        -- R2 raw (0..255) to register a press
-local REL_TH = 25         -- R2 raw to register a release (hysteresis)
+local TICK_MS = 20        -- fast poll: catches the R3 press within ~1 frame so the game
+                          -- barely sees it before we block (the opening click could
+                          -- otherwise leak a frame to R3's field action)
+local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
 
 local running = false
 local open = false        -- menu currently open (and pad blocked)
 local blocked = false
 local draining = false    -- closed, waiting for a neutral pad before unblocking
-local r2_state = false    -- debounced R2 pressed/released state (for edge detection)
 local cats = {}           -- [{ key, name, items={{actor,key,dist,noun},...} }]
 local ci, ii = 1, 1       -- current category / item index
 local prev_btn = 0        -- previous button bitmask (edge detection)
@@ -60,11 +62,15 @@ end
 -- ---- open / close ------------------------------------------------------------------
 
 local function do_open()
-    -- Block the pad FIRST so the game never sees this R2 press, THEN read the world.
+    -- Build the target list BEFORE blocking. If a world read faults (an uncatchable C++
+    -- abort on this game — e.g. a bad property access), it must NOT strand the pad in a
+    -- blocked state and freeze the game. The one-tick R3 leak before we block is
+    -- harmless (R3 = ki-sense). Safety over the micro-leak.
+    local list = Nav.list_targets()
     Input.block(true)
     blocked = true
     open = true
-    cats = Nav.list_targets()
+    cats = list
     ci, ii = 1, 1
     if #cats == 0 then
         Speech.say(I18n.t("radar_nothing"), true)
@@ -85,7 +91,7 @@ local function do_close(mode)
         local cat = cats[ci]
         local it = cat and cat.items[ii]
         if it and it.actor then
-            Nav.set_manual_target(it.actor, it.key, I18n.t(it.noun))
+            Nav.set_manual_target(it.actor, it.key, Nav.item_label(it))
         end
     elseif mode == "stop" then
         Nav.stop_tracking()
@@ -103,21 +109,15 @@ local function step()
     if not snap then
         -- pad lost — never leave the game blocked
         if blocked then Input.block(false) end
-        blocked, open, draining, r2_state = false, false, false, false
+        blocked, open, draining = false, false, false
         prev_btn = 0
         return
     end
 
-    -- Debounced R2 edge (rising = a fresh press this tick).
-    local r2_rise = false
-    if not r2_state and snap.rt >= OPEN_TH then
-        r2_state = true; r2_rise = true
-    elseif r2_state and snap.rt < REL_TH then
-        r2_state = false
-    end
+    local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
 
     -- Draining: menu closed, waiting for a fully neutral pad before handing control
-    -- back — so the A/R2/B that closed it isn't delivered to the game.
+    -- back — so the A/R3/B that closed it isn't delivered to the game.
     if draining then
         if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH then
             Input.block(false); blocked = false; draining = false
@@ -127,7 +127,7 @@ local function step()
     end
 
     if not open then
-        if r2_rise and Nav.field_ready() then do_open() end
+        if pressed(B.RIGHT_THUMB) and Nav.field_ready() then do_open() end
         prev_btn = snap.buttons
         return
     end
@@ -139,11 +139,9 @@ local function step()
         return
     end
 
-    local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
-
-    if pressed(B.A) then                       -- A / Cross -> select + track
+    if pressed(B.A) then                        -- A / Cross -> select + track
         do_close("select")
-    elseif r2_rise or pressed(B.B) then        -- R2 again / B -> close
+    elseif pressed(B.RIGHT_THUMB) or pressed(B.B) then   -- R3 again / B -> close
         do_close(pressed(B.B) and "stop" or "cancel")
     elseif #cats > 0 then
         local n = #cats
@@ -201,7 +199,7 @@ function Menu.stop()
     running = false
     _G.__KakarotRadarMenuGen = (_G.__KakarotRadarMenuGen or 0) + 1
     if blocked then Input.block(false) end
-    blocked, open, draining, r2_state = false, false, false, false
+    blocked, open, draining = false, false, false
     cats = {}
 end
 
