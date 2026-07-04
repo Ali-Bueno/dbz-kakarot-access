@@ -11,6 +11,7 @@
 local Speech = require("speech")
 local Mem = require("mem")
 local Audio = require("audio")
+local Input = require("input")
 
 local MOD = "KakarotAccess"
 print("[" .. MOD .. "] Lua loading...\n")
@@ -23,6 +24,10 @@ Mem.init()
 -- Native audio-cue player (audio_bridge.dll, XAudio2) for the navigation radar.
 -- Same lifecycle as the other bridges: loaded once, survives hot reloads.
 Audio.init()
+-- Native gamepad reader + game-input blocker (input_bridge.dll, XInput IAT hook) for
+-- the hold-R2 radar target picker. Installed once (the IAT hook must NOT be reinstalled
+-- on a reload), so it lives before the protected snapshot like the other bridges.
+Input.init()
 
 -- Snapshot everything loaded so far (stdlib + speech + prism_bridge + mem_bridge). These must
 -- survive a reload; anything required AFTER this point is our own logic and is

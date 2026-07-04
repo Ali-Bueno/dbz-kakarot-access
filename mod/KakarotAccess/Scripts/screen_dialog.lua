@@ -128,20 +128,31 @@ local function choices()
             end
         end
     end
-    -- Choice lists OWNED by the window (Win01's WL_TextPlateCtn — e.g. the Soul
-    -- Emblems "Sort" popup — and Win02's UIChoice_List) use the same
-    -- Xcmn_Win00_Choice_C rows but NESTED under the window's tree, so the top-level
-    -- filter above never sees them. Same highlight rule.
+    -- Choice lists OWNED by the window, NESTED under its tree (the top-level filter
+    -- above never sees them). Two row shapes, handled with member fallbacks:
+    --   * Win01's WL_TextPlateCtn (Sort popup) = Xcmn_Win00_Choice_C: Txt_Choice +
+    --     Img_Xwin01_List highlight.
+    --   * Win02's UIChoice_List (the brown field DECISION box — "Check out this area
+    --     a bit more / Return home") = UAT_UISystemWindowChoice: ChoiceTxt label, and
+    --     the selected row shows its BasePlate (the yellow bar).
     for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
         pcall(function()
             local arr = win[pool]
             for i = 1, #arr do
                 local ch = arr[i]
                 if Core.valid(ch) and Core.on_screen(ch) then
-                    local label = A.markup_to_speech(Core.read_text(ch.Txt_Choice))
+                    local label
+                    pcall(function() label = A.markup_to_speech(Core.read_text(ch.Txt_Choice)) end)
+                    if not label then
+                        pcall(function() label = A.markup_to_speech(Core.read_text(ch.ChoiceTxt)) end)
+                    end
                     if label then
                         labels[#labels + 1] = label
-                        if Core.is_visible(ch.Img_Xwin01_List) then sel = label end
+                        local hi = false
+                        pcall(function()
+                            hi = Core.is_visible(ch.Img_Xwin01_List) or Core.is_visible(ch.BasePlate)
+                        end)
+                        if hi then sel = label end
                     end
                 end
             end
@@ -196,14 +207,34 @@ end
 -- TextBox_Caption + old/new numbers, choices in UIChoice_List).
 local WINDOW_CLASSES = { "Xcmn_Win01_C", "Xcmn_Win00_C", "Xcmn_Win02_C" }
 
--- Find a live message window ACTUALLY on screen (on_screen, not IsVisible) showing text.
--- Uses the persistent cache (these windows are pooled and persist), so this is a cheap
--- on_screen check on a cached ref, not a per-tick FindAllOf scan.
+-- Does this window own any on-screen choice rows? A field DECISION box (the brown
+-- Xcmn_Win02 "Check out this area a bit more / Return home" prompt) has options but NO
+-- message text, so message() alone would miss it — acquire() also accepts choice-only
+-- windows. Cheap: the pool is small and collapsed rows fail the on_screen check.
+local function window_has_choices(w)
+    if not Core.valid(w) then return false end
+    for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
+        local found = false
+        pcall(function()
+            local arr = w[pool]
+            for i = 1, #arr do
+                local ch = arr[i]
+                if Core.valid(ch) and Core.on_screen(ch) then found = true return end
+            end
+        end)
+        if found then return true end
+    end
+    return false
+end
+
+-- Find a live window ACTUALLY on screen (on_screen, not IsVisible) that shows text OR
+-- offers choices. Uses the persistent cache (these windows are pooled and persist), so
+-- this is a cheap on_screen check on a cached ref, not a per-tick FindAllOf scan.
 local function acquire()
     win = nil
     for _, cls in ipairs(WINDOW_CLASSES) do
         local w = Core.cached_live(cls, tick)
-        if Core.on_screen(w) and message(w) then win = w return end
+        if Core.on_screen(w) and (message(w) or window_has_choices(w)) then win = w return end
     end
 end
 
@@ -216,7 +247,7 @@ end
 -- change — for pinning windows whose selectable rows aren't read yet (live case:
 -- a first-time community notice with 2 side-by-side options that stayed silent).
 -- Turn OFF once those rows are identified.
-local DEBUG = true
+local DEBUG = false
 local last_dumped = nil
 
 local DUMP_POOLS = {
@@ -224,7 +255,7 @@ local DUMP_POOLS = {
     "WL_TextPlateCtn", "UIChoice_List", "Relation_List", "WL_StatePlateCtn",
 }
 local ROW_TEXTS = {
-    "Txt_Choice", "ItemName", "ItemNum", "WL_CharName", "WL_LevelTitle",
+    "Txt_Choice", "ChoiceTxt", "ItemName", "ItemNum", "WL_CharName", "WL_LevelTitle",
     "TxtList", "LinkNameText", "TxtName", "TxtNum",
 }
 
@@ -251,7 +282,9 @@ local function dump_window(msg)
                     end
                     local hi = ""
                     pcall(function()
-                        if Core.is_visible(row.Img_Xwin01_List) then hi = " HIGHLIGHT" end
+                        if Core.is_visible(row.Img_Xwin01_List) or Core.is_visible(row.BasePlate) then
+                            hi = " HIGHLIGHT"
+                        end
                     end)
                     f:write(string.format("  %s[%d] %s %s%s\n", pool, i, cls,
                         table.concat(texts, " "), hi))
@@ -270,16 +303,23 @@ local spoken = nil
 function Dialog.is_active()
     tick = tick + 1
     if not Core.on_screen(win) then acquire() end   -- acquire is now cheap (cached refs)
-    local msg = Core.on_screen(win) and message(win) or nil
-    if not msg then
+    if not Core.on_screen(win) then
         spoken = nil
         state = { msg = nil, labels = {}, sel = nil }
         return false
     end
+    local msg = message(win)
     local labels, sel, items = choices()
-    if DEBUG and msg ~= last_dumped then
-        last_dumped = msg
-        dump_window(msg)
+    -- Nothing to say (no message AND no options): release.
+    if not msg and #labels == 0 then
+        spoken = nil
+        state = { msg = nil, labels = {}, sel = nil }
+        return false
+    end
+    if DEBUG then
+        -- Signature covers choice-only windows (msg is nil for a field decision box).
+        local sig = (msg or "nomsg") .. "|" .. #labels .. "|" .. (labels[1] or "")
+        if sig ~= last_dumped then last_dumped = sig; dump_window(msg) end
     end
     -- A NOTICE (no choices) owns the screen only until it has been announced; then it
     -- RELEASES the tick so an interactive screen underneath keeps reading — the

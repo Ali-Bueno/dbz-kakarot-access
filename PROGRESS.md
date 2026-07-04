@@ -1,6 +1,55 @@
 # DBZ Kakarot Accessibility — Progress & Next Steps
 
-_Session handoff, last updated 2026-07-03._
+_Session handoff, last updated 2026-07-04._
+
+---
+
+## R2 RADAR TARGET PICKER — BUILT 2026-07-04, PENDING in-game verify (needs a game RESTART)
+
+A controller overlay to pick what the audio radar tracks. Press **R2** in the RPG
+overworld → a modal target list opens and the game freezes; **L1/R1** switch category,
+**d-pad** moves through items, **A/Cross** selects (radar starts guiding), **R2 again**
+cancels, **B/Circle** closes and stops the current tracking. RPG-only: it can NEVER open
+or block input in combat/cutscenes/menus.
+
+**New native bridge `input_bridge.dll`** (`src/input_bridge/`, build.ps1 like the
+others). The game reads the pad via `XINPUT1_3.dll!XInputGetState` (confirmed in the
+exe imports). The bridge IAT-hooks that import (exe first, then any loaded module):
+the wrapper calls the real function, caches the TRUE pad state for us, and — while
+`block(true)` — hands the GAME a neutral pad so nothing triggers. Exposes
+`install()/poll()/block()/is_hooked()`. No xinput link (the real pointer comes from the
+IAT slot). SEH-free but pointer-safe; static Lua 5.4.4 like the other bridges. If the
+import can't be patched it falls back to read-only (poll works, block is a no-op) — check
+`is_hooked` in the boot log.
+
+**Lua pieces:**
+- `input.lua` — wrapper: `Input.init/read/block`, XINPUT button bitmask constants, R2
+  trigger threshold. `Input.init()` in main.lua (before the protected snapshot, so the
+  hook installs ONCE and survives Ctrl+Shift+R).
+- `radar_menu.lua` — the modal picker (own 60 ms loop, gen+busy guard). Toggle model:
+  R2 edge opens (blocks pad, builds list, announces), A selects, R2/B close. On close the
+  pad stays blocked (a "drain") until every button/trigger is released, so the closing
+  press never reaches the game. Force-closes if `Nav.field_ready()` goes false.
+- `nav_tracker.lua` additions (all world reads live here, behind the radar's gates):
+  `Nav.field_ready()` (RPG-only gate = not ui_muted AND minimap visible),
+  `Nav.list_targets()` (minimap `MapIconList` + navi icons grouped by EMapIcon into the
+  L1/R1 categories; non-quest items distance-limited by each icon's own
+  `SearchRangeRadius`, else a 300 m cap; quests unlimited), `Nav.item_phrase()`,
+  `Nav.set_manual_target()` (manual = auto-scan won't steal it), `Nav.stop_tracking()`.
+  **Manual targets STOP on arrival** (beacon quiet + dropped; re-pick to track again);
+  auto quest targets keep the re-arm behavior.
+- EMapIcon→group map + per-type spoken nouns in nav_tracker; category/noun strings in
+  i18n (ES+EN): `radar_cat_*`, `cat_*`, `radar_nothing`, `nav_stopped`.
+
+**TEST (RESTART the game — main.lua changed + a new DLL loads; Ctrl+Shift+R is NOT
+enough):**
+1. Boot log should show `input_bridge loaded (hooked=true)`. hooked=false → blocking off
+   (read-only); tell me and I'll add a GetProcAddress/inline-hook fallback.
+2. In the field, tap R2 → hear a category + "noun, N meters, i of n". Move d-pad; switch
+   category with L1/R1. The character/camera must NOT move while it's open.
+3. A/Cross on an item → menu closes, beacon guides you there; arriving stops it.
+4. R2-again and B both close; B also stops the current beacon.
+5. In BATTLE, R2 must do its normal combat thing (menu must NOT open, input NOT blocked).
 
 ---
 

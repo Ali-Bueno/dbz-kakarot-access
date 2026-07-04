@@ -14,6 +14,7 @@ local HeaderReader = require("header_reader")
 local Speech = require("speech")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
+local RadarMenu = require("radar_menu")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
@@ -68,11 +69,13 @@ local App = {}
 function App.start()
     Registry.start()
     Nav.start()
+    RadarMenu.start()
 end
 
 function App.stop()
     Registry.stop()
     Nav.stop()
+    RadarMenu.stop()
 end
 
 function App.repeat_current() Registry.repeat_current() end

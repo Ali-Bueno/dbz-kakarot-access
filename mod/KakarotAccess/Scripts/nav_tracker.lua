@@ -71,6 +71,47 @@ local SUB_QUEST_ICONS = {                               -- SUBQUEST_* + DLC stor
 -- Target priority classes (higher wins; ties broken by distance).
 local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 
+-- ---- radar target-picker categories (hold-R2 menu, radar_menu.lua) ---------------
+-- EMapIcon (AT_enums.hpp) grouped into the player-facing categories the hold-R2 menu
+-- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
+-- L1/R1 tab order (empty groups are skipped when cycling).
+local GROUP_ORDER = {
+    "quests", "npc", "fishing", "gathering", "shops", "minigames", "dragonball", "other",
+}
+local ICON_GROUP = {
+    -- quests (no distance limit)
+    [24] = "quests", [71] = "quests", [26] = "quests", [40] = "quests",
+    [47] = "quests", [53] = "quests", [59] = "quests", [72] = "quests",
+    -- story / community NPCs
+    [4] = "npc", [10] = "npc", [42] = "npc", [56] = "npc", [61] = "npc", [41] = "npc",
+    -- fishing
+    [5] = "fishing",
+    -- gathering (collect / hunt / ore / bugs / rocks)
+    [6] = "gathering", [7] = "gathering", [8] = "gathering", [18] = "gathering",
+    [63] = "gathering", [68] = "gathering", [69] = "gathering",
+    -- shops / stalls / eateries
+    [1] = "shops", [2] = "shops", [3] = "shops", [51] = "shops", [54] = "shops",
+    [55] = "shops", [58] = "shops", [66] = "shops",
+    -- minigames
+    [11] = "minigames", [12] = "minigames", [13] = "minigames", [14] = "minigames",
+    [37] = "minigames",
+    -- dragon balls
+    [28] = "dragonball",
+}
+-- Per-EMapIcon spoken noun (i18n key) for the focused item; falls back to the group
+-- name when the type has no specific noun. Keeps items in a group distinguishable
+-- beyond distance (e.g. "ore" vs "gathering point").
+local ICON_NOUN = {
+    [24] = "nav_main", [71] = "nav_main",
+    [26] = "nav_sub", [40] = "nav_sub", [47] = "nav_sub",
+    [53] = "nav_sub", [59] = "nav_sub", [72] = "nav_sub",
+    [5] = "cat_fishing", [6] = "cat_collect", [7] = "cat_hunt", [8] = "cat_ore",
+    [28] = "cat_dragonball",
+    [1] = "cat_food_shop", [2] = "cat_cooking_shop", [3] = "cat_material_shop",
+    [58] = "cat_restaurant",
+}
+local RADAR_GLOBAL_CAP = 300 * 100   -- fallback distance limit (m) for non-quest icons
+
 -- ---- state ---------------------------------------------------------------------
 local on = true                -- master switch (F3); radar auto-tracks while on
 local route_mode = true        -- NavMesh route guidance (Shift+F3)
@@ -80,6 +121,10 @@ local tick = 0                 -- loop tick counter; tick * TICK_MS is our clock
 local target = nil             -- { actor, key, pri, label, manual }
 local target_missing = 0       -- consecutive scans where the target wasn't found
 local companion_idx = 0        -- Shift+F5 cycle: 0 = quest mode; 1..n = that companion
+local auto_suppressed = false  -- after reaching / stopping a target the auto-scan stays
+                               -- quiet (no re-acquire) until you re-pick (R2 menu) or F3.
+                               -- Fixes: a reached manual target re-arming when you walk
+                               -- away because the auto-scan grabbed it again.
 local arrived = false
 local last_ping_ms = 0
 local last_dir_cue, last_dir_ms = nil, -DIR_CUE_MS
@@ -201,6 +246,25 @@ local function map_icon_type(actor)
         end
     end)
     return t
+end
+
+-- Map icon type AND search-range radius in one component fetch. SearchRangeRadius is
+-- the game's own "distance at which this icon appears" (UATMapIconComponent, reflected
+-- @0x104) — we use it as the per-item visibility limit so the target list matches what
+-- a sighted player would see. Returns type, range (both may be nil).
+local function icon_info(actor)
+    local cls = icon_component_class()
+    if not cls then return nil, nil end
+    local t, range
+    pcall(function()
+        local comp = actor:GetComponentByClass(cls)
+        if comp and comp:IsValid() then
+            if comp.bShowMapIcon == false then return end
+            t = tonumber(comp.MapIconType)
+            range = tonumber(comp.SearchRangeRadius)
+        end
+    end)
+    return t, range
 end
 
 -- MAIN/SUB quest priority from the icon type, or nil for anything else.
@@ -427,7 +491,7 @@ local function step()
     -- (auto-track on accept), retargets when the current step is done, and drops
     -- the target when the game stops guiding. A MANUAL target (companion tracking,
     -- Shift+F5) is never overridden by the auto-scan.
-    if tick % SCAN_EVERY == 0 and not (target and target.manual) then
+    if tick % SCAN_EVERY == 0 and not auto_suppressed and not (target and target.manual) then
         local best = best_candidate(px, py, pz)
         if best then
             if not target or target.key ~= best.key then
@@ -464,6 +528,15 @@ local function step()
             arrived = true
             Audio.arrival()
             Speech.say(I18n.t("nav_arrived"), false)
+            -- A hand-picked (manual) target STOPS on arrival: the beacon goes quiet, the
+            -- target is dropped, AND the auto-scan is suppressed so it can't immediately
+            -- re-acquire the same spot when you walk away (the bug the user hit). To
+            -- track again, re-pick from the R2 menu or press F3. (Auto quest targets
+            -- keep the re-arm behavior — the quest system moves the marker.)
+            if target.manual then
+                drop_target()
+                auto_suppressed = true
+            end
         end
         return
     end
@@ -565,6 +638,7 @@ function Nav.toggle()
         Speech.say(I18n.t("nav_off"), true)
     else
         gated_prev = false
+        auto_suppressed = false   -- F3 on resumes auto quest tracking after a stop/arrival
         Speech.say(I18n.t("nav_on"), true)
     end
     return on
@@ -677,6 +751,145 @@ function Nav.where()
         end
         Speech.say(table.concat(parts, ", "), true)
     end)
+end
+
+-- ---- hold-R2 target picker support (radar_menu.lua) --------------------------------
+-- All world-actor reads for the picker live HERE, behind the same safety gates and
+-- caches as the radar, so radar_menu.lua stays pure input + UI.
+
+-- Free-roam gate for the picker: TRUE only in the RPG overworld. ui_muted (a pausing
+-- menu/dialog owns the screen) OR the world gate closed (minimap hidden = BATTLE,
+-- cutscene, loading, full-screen menu) both return false — so the R2 menu can NEVER
+-- open in combat or block combat input. Pure-Lua ui_muted is checked first (probing
+-- the world during a menu-covered teardown can abort).
+function Nav.field_ready()
+    return not ui_muted() and world_alive()
+end
+
+-- Snapshot the currently navigable field targets, grouped into the L1/R1 categories.
+-- MUST be called on the game thread (radar_menu wraps it in ExecuteInGameThread).
+-- Source = the game's OWN minimap icons (MapIconList) + active navi icons, so it
+-- matches what a sighted player sees. Non-quest icons are distance-limited by each
+-- icon's SearchRangeRadius (the game's own reveal distance) with a global cap;
+-- quests have no limit. Returns an ordered array of non-empty groups:
+--   { { key=<group>, name=<localized>, items={ {actor,key,label,dist}, ... } }, ... }
+function Nav.list_targets()
+    if not Nav.field_ready() then return {} end
+    local pawn = player_pawn()
+    if not pawn then return {} end
+    local px, py, pz = actor_pos(pawn)
+    if not px then return {} end
+
+    local seen = {}
+    local groups = {}
+    local function add(actor, t)
+        if not t or not Core.valid(actor) then return end
+        local key = tostring(actor:GetAddress())
+        if seen[key] then return end
+        local grp = ICON_GROUP[t] or "other"
+        local x, y, z = actor_pos(actor)
+        if not x then return end
+        local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+        if grp ~= "quests" then
+            -- distance limit = the game's own reveal radius for this icon, else the cap
+            local _, range = icon_info(actor)
+            local cap = (range and range > 0) and range or RADAR_GLOBAL_CAP
+            if d > cap then return end
+        end
+        seen[key] = true
+        groups[grp] = groups[grp] or { items = {} }
+        groups[grp].items[#groups[grp].items + 1] = {
+            actor = actor, key = key, dist = d,
+            noun = ICON_NOUN[t] or ("radar_cat_" .. grp),
+        }
+    end
+
+    -- 1) active navi guidance (quest arrows) — always quest-classified
+    do
+        local icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
+        for _, icon in pairs(icons) do
+            if Core.valid(icon) and icon_in_use(icon) then
+                local ok, ta = pcall(function() return icon.TargetActor end)
+                if ok and Core.valid(ta) then
+                    local t = (icon_info(ta)) or 24   -- default MAINQUEST if untyped
+                    add(ta, t)
+                end
+            end
+        end
+    end
+    -- 2) every minimap icon with a typed component
+    local mm = minimap()
+    if Core.valid(mm) then
+        pcall(function()
+            local arr = mm.MapIconList
+            for i = 1, #arr do
+                local icon = arr[i]
+                if Core.valid(icon) then
+                    local ta = icon.TargetActor
+                    if Core.valid(ta) then
+                        add(ta, (icon_info(ta)))
+                    end
+                end
+            end
+        end)
+    end
+
+    local out = {}
+    for _, gk in ipairs(GROUP_ORDER) do
+        local g = groups[gk]
+        if g and #g.items > 0 then
+            table.sort(g.items, function(a, b) return a.dist < b.dist end)
+            out[#out + 1] = { key = gk, name = I18n.t("radar_cat_" .. gk), items = g.items }
+        end
+    end
+    return out
+end
+
+-- Localized "noun, N meters" for a picker item (used by radar_menu for announcements).
+function Nav.item_phrase(item)
+    return string.format("%s, %s", I18n.t(item.noun),
+        string.format(I18n.t("nav_meters"), meters(item.dist)))
+end
+
+-- Stop tracking the current target on demand (the R2 menu's B button). Silences the
+-- beacon and drops the target; if a quest is active the auto-scan may re-acquire it
+-- next tick (that's the base radar), but a hand-picked target stays gone until
+-- re-picked. Does NOT turn the whole radar off (F3 does that).
+function Nav.stop_tracking()
+    local had = target ~= nil
+    drop_target()
+    auto_suppressed = true   -- stay quiet until re-pick / F3 (don't auto-grab a quest)
+    Audio.stop()
+    if had then Speech.say(I18n.t("nav_stopped"), true) end
+end
+
+-- Commit a picker choice: track this actor as a MANUAL target (auto-scan won't steal
+-- it) and make sure the radar is on. Game-thread only (radar_menu calls it there).
+function Nav.set_manual_target(actor, key, label)
+    if not Core.valid(actor) then return false end
+    on = true
+    auto_suppressed = false   -- an explicit pick resumes normal tracking
+    gated_prev = false
+    companion_idx = 0
+    target = { actor = actor, key = key or tostring(actor:GetAddress()),
+               pri = PRI_OTHER, label = label, manual = true }
+    arrived, target_missing = false, 0
+    route, route_idx = nil, 0
+    local pawn = player_pawn()
+    local d = nil
+    if pawn then
+        local px, py, pz = actor_pos(pawn)
+        local tx, ty, tz = actor_pos(actor)
+        if px and tx then
+            d = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2 + (tz - pz) ^ 2)
+        end
+    end
+    if d then
+        Speech.say(string.format(I18n.t("nav_tracking"), label, meters(d)), true)
+    else
+        Speech.say(string.format(I18n.t("nav_tracking"), label, 0), true)
+    end
+    return true
 end
 
 -- Ctrl+F5 (dev): dump every guidance candidate + a NavMesh probe to
