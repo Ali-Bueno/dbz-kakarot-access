@@ -341,23 +341,35 @@ local function dump_instances()
     f:close()
 end
 
-local WIDE_FROM, WIDE_LEN = 0x3F0, 0x370
+-- Wide scan of BOTH the host AND the panel frame (the cursor + panel list live on the
+-- frame, UAT_UICommunityBoard_PanelFrame, size 0x958 — 0 host changes ruled the host
+-- out). Reports any int32/float that moves tick-to-tick.
+local WIDE = {
+    { key = "host",  from = 0x3F0, len = 0x370 },
+    { key = "frame", from = 0x430, len = 0x520 },
+}
 
-local function dump_wide_changes()
-    if not Core.valid(board) then return end
-    local cur = Mem.bytes(board, WIDE_FROM, WIDE_LEN)
-    if not cur then return end
-    local prev = wide_prev
-    wide_prev = cur
-    if not prev or prev == cur then return end
+local function dump_wide_changes(frame)
+    local objs = { host = board, frame = frame }
     local lines = {}
-    for off = 0, WIDE_LEN - 4, 4 do
-        local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
-        if a and b and a ~= b then
-            local fb = string.unpack("<f", cur, off + 1)
-            local repr = (fb == fb and math.abs(fb) > 1e-4 and math.abs(fb) < 1e6)
-                and string.format("%.1ff", fb) or tostring(b)
-            lines[#lines + 1] = string.format("0x%X=%s(was %d)", WIDE_FROM + off, repr, a)
+    for _, w in ipairs(WIDE) do
+        local o = objs[w.key]
+        local cur = Core.valid(o) and Mem.bytes(o, w.from, w.len) or nil
+        if cur then
+            local prev = wide_prev and wide_prev[w.key]
+            if prev and prev ~= cur then
+                for off = 0, w.len - 4, 4 do
+                    local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
+                    if a and b and a ~= b then
+                        local fb = string.unpack("<f", cur, off + 1)
+                        local repr = (fb == fb and math.abs(fb) > 1e-4 and math.abs(fb) < 1e6)
+                            and string.format("%.1ff", fb) or tostring(b)
+                        lines[#lines + 1] = string.format("%s+0x%X=%s(was %d)", w.key, w.from + off, repr, a)
+                    end
+                end
+            end
+            wide_prev = wide_prev or {}
+            wide_prev[w.key] = cur
         end
     end
     if #lines == 0 then return end
@@ -366,6 +378,28 @@ local function dump_wide_changes()
         f:write(string.format("[%d] wide %s\n", os.time(), table.concat(lines, " ")))
         f:close()
     end
+end
+
+-- Periodic snapshot of every cursor widget's RenderTransform (0x90 translation,
+-- 0x98 scale) — written even when unchanged, so we can SEE whether the pad moves the
+-- cursor at all (a flat snapshot across a "moving" pass = the cursor isn't responding
+-- to what the user presses, i.e. wrong input, not a read bug).
+local CURSORS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_Img_Curs_Fing01", "WL_EmbCursorFrame" }
+
+local function dump_cursors(frame)
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    local parts = {}
+    for _, m in ipairs(CURSORS) do
+        local w
+        pcall(function() w = frame[m] end)
+        if Core.valid(w) then
+            parts[#parts + 1] = string.format("%s=%.0f,%.0f s%.2f", m,
+                Mem.float(w, 0x90) or -999, Mem.float(w, 0x94) or -999, Mem.float(w, 0x98) or -999)
+        end
+    end
+    f:write(string.format("[%d] curs %s\n", os.time(), table.concat(parts, " ")))
+    f:close()
 end
 
 -- ---- detail readout --------------------------------------------------------------
@@ -504,8 +538,11 @@ local function board_update()
     -- DEBUG: enumerate instances once on entry, then wide-scan the host's memory every
     -- tick — this is the decisive pass to find what the pad actually moves.
     if DEBUG then
-        if not last_prof then dump_instances(); last_prof = "done" end
-        dump_wide_changes()
+        if not last_prof then dump_instances(); last_prof = "0" end
+        dump_wide_changes(frame)
+        local n = tonumber(last_prof) or 0          -- reuse last_prof as a tick counter
+        if n % 15 == 0 then dump_cursors(frame) end
+        last_prof = tostring(n + 1)
     end
     if idx then
         last_idx = idx
