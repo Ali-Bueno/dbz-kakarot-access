@@ -228,19 +228,28 @@ end
 -- The hovered socket: the NEAREST socket to the live cursor, both positioned via
 -- raw RenderTransform reads. (The native tail guess +0x500 froze while moving —
 -- see native_offsets history — so geometry is primary; a panel's ActiveAnim as the
--- no-cursor fallback.)
+-- no-cursor fallback.) The cursor reading is only TRUSTED once it has actually
+-- moved since board entry: live 2026-07-04 the first sample (541,319) was a stale
+-- init value in a different space than the sockets, and nearest-to-it announced a
+-- bogus "11 of 11" on entry.
+local cursor_ref = nil
+
 local function board_selected(frame, pc)
     local cx, cy, src = cursor_xy(frame)
     if cx then
-        local best, bd
-        for i, p in ipairs(pc.list) do
-            local x, y = widget_xy(p)
-            if x then
-                local d = (x - cx) ^ 2 + (y - cy) ^ 2
-                if not bd or d < bd then bd, best = d, i end
+        if not cursor_ref then cursor_ref = { x = cx, y = cy } end
+        local moved = math.abs(cx - cursor_ref.x) + math.abs(cy - cursor_ref.y) > 1.0
+        if moved then
+            local best, bd
+            for i, p in ipairs(pc.list) do
+                local x, y = widget_xy(p)
+                if x then
+                    local d = (x - cx) ^ 2 + (y - cy) ^ 2
+                    if not bd or d < bd then bd, best = d, i end
+                end
             end
+            if best then return best, "near:" .. src end
         end
-        if best then return best, "near:" .. src end
     end
     local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
     if idx then return idx, "anim" end
@@ -378,6 +387,38 @@ local function dump_tail_changes(frame)
     end
 end
 
+-- DEBUG: periodic probe of EVERY position candidate (cursor widgets, content canvases,
+-- per-panel transform + scale), written even when nothing announces — the earlier
+-- change-triggered dumps went blind exactly when the selection froze.
+local PROBE_WIDGETS = {
+    "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_Img_Curs_Fing01", "WL_EmbCursorFrame",
+    "WL_Pnl_Contents", "WL_Pnl_Contents_Parts",
+}
+local function dump_probe(frame, pc)
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    local parts = {}
+    for _, m in ipairs(PROBE_WIDGETS) do
+        local w
+        pcall(function() w = frame[m] end)
+        if Core.valid(w) then
+            local tx, ty = Mem.float(w, RT_X), Mem.float(w, RT_Y)
+            local sx = Mem.float(w, 0x98)
+            parts[#parts + 1] = string.format("%s t=%.1f,%.1f s=%.2f",
+                m, tx or -999, ty or -999, sx or -999)
+        end
+    end
+    f:write(string.format("[%d] probe %s\n", os.time(), table.concat(parts, " | ")))
+    local ps = {}
+    for i, p in ipairs(pc.list) do
+        local tx, ty = Mem.float(p, RT_X), Mem.float(p, RT_Y)
+        local sx = Mem.float(p, 0x98)
+        ps[#ps + 1] = string.format("%d:%.0f,%.0f s%.2f", i, tx or -999, ty or -999, sx or -999)
+    end
+    f:write("  panels " .. table.concat(ps, " ") .. "\n")
+    f:close()
+end
+
 local function dump_board(frame, pc, idx, how, title)
     local f = io.open(dump_path(), "a")
     if not f then return end
@@ -432,7 +473,7 @@ end
 
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
-    last_title, panel_cache = nil, nil
+    last_title, panel_cache, cursor_ref = nil, nil, nil
 end
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
@@ -530,7 +571,13 @@ local function board_update()
     local pc = board_panels(frame, title or "?")
     local idx, how
     if #pc.list > 0 then idx, how = board_selected(frame, pc) end
-    if DEBUG then dump_tail_changes(frame) end
+    if DEBUG then
+        dump_tail_changes(frame)
+        if tick - last_dump > 20 then
+            last_dump = tick
+            dump_probe(frame, pc)
+        end
+    end
     -- DEBUG must capture the FAILING case too (no socket resolves → silence): dump on
     -- every selection change AND periodically while unresolved.
     if DEBUG and (idx ~= last_idx or (idx == nil and tick - last_dump > 300)) then
