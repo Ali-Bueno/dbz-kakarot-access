@@ -309,6 +309,65 @@ local function dump_board(frame, pc, idx, how, title)
     f:close()
 end
 
+-- DECISIVE DIAGNOSTIC: the scale/position/native-index all froze while the user moved
+-- the cursor — a strong sign we read a POOLED instance that ISN'T the one the pad
+-- drives. So: enumerate EVERY Start_Commu_Brd_C instance (which is on_screen, its
+-- address) and, for the one we use, WIDE-scan its memory (0x3F0..0x760) reporting any
+-- int32/float that changes tick-to-tick. One user pass moving the cursor tells us the
+-- real host + the selection offset at once.
+local wide_prev = nil
+
+local function le_i32(s, i)
+    local a, b, c, d = s:byte(i, i + 3)
+    if not d then return nil end
+    local v = a + b * 256 + c * 65536 + d * 16777216
+    if v >= 0x80000000 then v = v - 0x100000000 end
+    return v
+end
+
+local function dump_instances()
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    f:write(string.format("[%d] instances of Start_Commu_Brd_C:\n", os.time()))
+    local all = FindAllOf("Start_Commu_Brd_C") or {}
+    for _, o in pairs(all) do
+        if Core.valid(o) then
+            local fn = "?"
+            pcall(function() fn = o:GetFullName() end)
+            f:write(string.format("  on_screen=%s vis=%s %s\n",
+                tostring(Core.on_screen(o)), tostring(Core.is_visible(o)), fn))
+        end
+    end
+    f:close()
+end
+
+local WIDE_FROM, WIDE_LEN = 0x3F0, 0x370
+
+local function dump_wide_changes()
+    if not Core.valid(board) then return end
+    local cur = Mem.bytes(board, WIDE_FROM, WIDE_LEN)
+    if not cur then return end
+    local prev = wide_prev
+    wide_prev = cur
+    if not prev or prev == cur then return end
+    local lines = {}
+    for off = 0, WIDE_LEN - 4, 4 do
+        local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
+        if a and b and a ~= b then
+            local fb = string.unpack("<f", cur, off + 1)
+            local repr = (fb == fb and math.abs(fb) > 1e-4 and math.abs(fb) < 1e6)
+                and string.format("%.1ff", fb) or tostring(b)
+            lines[#lines + 1] = string.format("0x%X=%s(was %d)", WIDE_FROM + off, repr, a)
+        end
+    end
+    if #lines == 0 then return end
+    local f = io.open(dump_path(), "a")
+    if f then
+        f:write(string.format("[%d] wide %s\n", os.time(), table.concat(lines, " ")))
+        f:close()
+    end
+end
+
 -- ---- detail readout --------------------------------------------------------------
 
 -- The detail pane's reward bars (Xlist_Reward_Commu: reward text + have/max numbers).
@@ -346,7 +405,7 @@ end
 
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
-    last_title, panel_cache = nil, nil
+    last_title, panel_cache, last_prof, wide_prev = nil, nil, nil, nil
 end
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
@@ -442,16 +501,11 @@ local function board_update()
     local pc = board_panels(frame, title or "?")
     local idx, how
     if #pc.list > 0 then idx, how = board_selected(frame, pc) end
-    -- DEBUG: log whenever the selection OR the panel-scale profile changes, so a live
-    -- pass confirms the scale really follows the cursor (and which socket).
+    -- DEBUG: enumerate instances once on entry, then wide-scan the host's memory every
+    -- tick — this is the decisive pass to find what the pad actually moves.
     if DEBUG then
-        local prof = {}
-        for _, p in ipairs(pc.list) do prof[#prof + 1] = string.format("%.2f", panel_scale(p)) end
-        prof = table.concat(prof, ",")
-        if idx ~= last_idx or prof ~= last_prof then
-            last_prof = prof
-            dump_board(frame, pc, idx, how, title)
-        end
+        if not last_prof then dump_instances(); last_prof = "done" end
+        dump_wide_changes()
     end
     if idx then
         last_idx = idx
