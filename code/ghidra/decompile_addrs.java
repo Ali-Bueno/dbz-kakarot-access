@@ -20,8 +20,11 @@ public class decompile_addrs extends GhidraScript {
     @Override
     public void run() throws Exception {
         new File(OUT_DIR).mkdirs();
-        String[] args = getScriptArgs();
-        if (args.length == 0) { println("DECADDR: no addresses given"); return; }
+        String[] rawArgs = getScriptArgs();
+        if (rawArgs.length == 0) { println("DECADDR: no addresses given"); return; }
+        // cmd.exe treats commas as argument delimiters, so a comma list arrives as
+        // several args — rejoin them all into one list.
+        String[] args = { String.join(",", rawArgs) };
         FunctionManager fm = currentProgram.getFunctionManager();
         ConsoleTaskMonitor mon = new ConsoleTaskMonitor();
         DecompInterface decomp = new DecompInterface();

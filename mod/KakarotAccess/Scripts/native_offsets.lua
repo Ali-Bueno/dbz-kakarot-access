@@ -88,14 +88,46 @@ return {
     },
 
     -- Community board (Start_Commu_Brd_C -> UAT_UICommunityBoard): the free cursor over
-    -- the emblem sockets. HISTORY: the tail diff once showed 0x500 step 7 -> 10 and it
-    -- was wired as the hovered index — WRONG: live it froze at 10 while the cursor
-    -- moved (2026-07-04; probably the board's release level, SetReleaseLevel). The
-    -- working source is GEOMETRY instead: RenderTransform.Translation read RAW at
-    -- UWidget+0x90/+0x94 (UMG.hpp) on the cursor widgets and each socket panel —
-    -- reflection on RenderTransform aborts, raw mem reads are safe. Kept here only
-    -- as documentation; screen_community reads the transforms directly.
-    commuBoard = {},
+    -- the emblem sockets. SOLVED STATICALLY (Ghidra 2026-07-04): the game's own socket
+    -- hit-test is FUN_1414f2ab0(frame, bCheckEmblem) — see code/decompiled/
+    -- manual_1414f2ab0.c. It reads the cursor from the frame's WL_PanelCursor widget at
+    -- RenderTransform.Translation (UWidget+0x90/+0x94, raw read — reflection aborts),
+    -- and each socket's hit position = panel.PointerCenterOffset (0x3F0/0x3F4, reflected)
+    -- + a hidden board position (panel+0x550/0x554) + a hidden frame-side adjust;
+    -- socket 1 (the leader pedestal) has its own adjust and range. First hit wins,
+    -- iterating LAST -> FIRST. Returns the 1-based WL_PanelTbl index or -1.
+    --
+    -- HISTORY: host+0x500 once read as "hovered index frozen at 10" — it is really the
+    -- board UI MODE: 7 = free-cursor browsing, 9 = emblem detail open, 10 = the Soul
+    -- Emblems grid open ON TOP (FUN_1414d59c0 sets it), 16 = tutorial link demo
+    -- (FUN_1414d79e0, Cpl021A.. + CommunityLink_41_12). A frozen cursor with mode 10
+    -- just means the grid was open.
+    commuBoard = {
+        -- on the HOST (Start_Commu_Brd_C / UAT_UICommunityBoard)
+        mode         = 0x500,   -- int32 board UI mode (7 browse / 9 detail / 10 grid / 16 tutorial)
+        subState     = 0x4F3,   -- u8 pick/place sub-state (6 = picking, 7 = placing; from decide)
+        hoveredCache = 0x5D8,   -- int32 the game's OWN cached hovered index, written by its
+                                -- hover tracker FUN_1414e3170 every tick: 1-based socket, or
+                                -- -1 over empty/no-data sockets (it stores hit_test(frame, 1));
+                                -- 0x80000001 sentinel right after a board switch
+        -- on the cursor WIDGET (frame.WL_PanelCursor, a UCanvasPanel)
+        cursorX      = 0x90,    -- float RenderTransform.Translation.X (the game's own source)
+        cursorY      = 0x94,    -- float RenderTransform.Translation.Y
+        -- on the FRAME (WL_BrdFrame / UAT_UICommunityBoard_PanelFrame), hidden members
+        activeCount  = 0x628,   -- int32 number of active sockets this board (hit-test bound)
+        hitAdjX      = 0x428,   -- float hit-test adjust X (normal sockets)
+        hitAdjY      = 0x42C,   -- float hit-test adjust Y
+        hitRange     = 0x420,   -- float hit half-extent (normal sockets, square test)
+        leaderAdjX   = 0x430,   -- float adjust X for socket 1 (leader pedestal)
+        leaderAdjY   = 0x434,   -- float adjust Y for socket 1
+        leaderRange  = 0x424,   -- float hit half-extent for socket 1
+        heldEmblem   = 0x7B8,   -- ptr, non-null while an emblem is IN HAND (being placed)
+        -- on each SOCKET PANEL (UAT_UICommunityBoard_Panel)
+        panelPosX    = 0x3F0,   -- float PointerCenterOffset.X (reflected, read raw)
+        panelPosY    = 0x3F4,   -- float PointerCenterOffset.Y
+        panelBoardX  = 0x550,   -- float hidden board-layout position X
+        panelBoardY  = 0x554,   -- float hidden board-layout position Y
+    },
 
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named

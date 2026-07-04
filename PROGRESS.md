@@ -85,7 +85,72 @@ DEBUG off. **Verify**: grid reads "Goku, community level 3, 1 of 21" / "Not
 acquired, 8 of 21"; detail on A; Sort options on X; the received-emblems notice
 rows.
 
-### COMMUNITY BOARD — cursor UNREADABLE so far; NEXT-SESSION ATTACK PLAN (2026-07-04)
+### COMMUNITY BOARD — SOLVED + VERIFIED IN-GAME (2026-07-04). Story unblocked.
+
+**Live-verified with the user (2026-07-04, ~2 AM):** the cursor reader works end to
+end — sockets announce as the stick moves ("Goku, leader…", "Empty socket, N of 11"),
+the user picked Gohan from the grid, heard "Emblem in hand…", placed him in socket 2
+next to Goku (dump: held→false, cache=2, mode→16 link-bonus demo) and **completed the
+tutorial that blocked story progress**. The frozen-cursor mystery was exactly the
+tutorial-mode gate described below. DEBUG is now OFF in screen_community.
+Added right after the verify (both additive+guarded, PENDING verify):
+- **Link-bonus subtitles**: the registry gives the screen to ONE adapter, so the
+  dialogue reader never runs while the board owns it → `board_subtitles()` reads
+  `host.LinkBonusSubtitles` (UATUISubtitles TextName/TextSelif) diff-gated.
+- **Community Skills list** (user OCR'd it as unread): detail pane `WL_SkillParts`
+  is a FIXED array of 10 (detail+0x470, UE4SS collapses to elem 0) → elements 1..9
+  via RegisterCustomProperty on the runtime class (screen_party technique); each row
+  speaks name+threshold, active variant preferred; appended to the entry summary.
+
+Original static solution write-up:
+
+The whole mystery is closed. Ghidra pass on the unpacked exe (scripts
+`code/ghidra/find_commu.java` — anchors the class's native-registration table on its
+UNIQUE names PlayIn/OutCommRank, then walks the contiguous {name, exec} pairs — plus
+`decompile_addrs.java` / `dig_commu_callers.java`; output in `code/decompiled/`):
+
+- **The board tick is `FUN_1414c7de0(this, ?, dt)`** (commu_tick_callers.c) — a mode
+  state machine on `host+0x500`: 1 intro, 7 FREE-CURSOR BROWSE, 9 detail, 10 Soul-Emblems
+  grid open, 12/13/14/17 TUTORIAL POPUP WAITS ("Comm_TutorialEvent_EmptyPanetChoose",
+  "TUTO_MNU_24_01"), 16 link-bonus demo. **The hover tracker runs ONLY in mode 7** —
+  in the tutorial modes the stick is DEAD by design. That is why every live diagnostic
+  (d-pad AND left stick) saw 100% frozen memory: the user was inside the community
+  tutorial's popup chain. Not an input-device issue, not a read bug.
+- **The game caches the hovered socket at `host+0x5D8`** (int32, 1-based WL_PanelTbl
+  index; -1 = none/empty-data socket; 0x80000001 = just-switched sentinel), written
+  every mode-7 tick by its hover tracker `FUN_1414e3170`.
+- **The hit-test is `FUN_1414f2ab0(frame, bCheckData)`** (manual_1414f2ab0.c): cursor =
+  `frame.WL_PanelCursor->RenderTransform.Translation` (+0x90/+0x94, the exact field we
+  always read — it was frozen because the cursor genuinely never moved); socket pos =
+  `panel.PointerCenterOffset` (0x3F0) + hidden board pos (panel+0x550) + hidden frame
+  adjusts (frame+0x428/0x42C, leader 0x430/0x434), square range frame+0x420 (leader
+  0x424), bounded by `frame+0x628` (active count), iterated LAST→FIRST, first hit wins.
+- Pick/place: `frame+0x7B8` = held-emblem ptr (non-null while carrying), `frame+0x7C0`
+  = source socket; the LEADER socket (index 1) always refuses pick/place (error buzz).
+  `host+0x4F3` = pick/place sub-state (6 picking / 7 placing).
+
+**Implemented in `screen_community.lua` (offsets in `native_offsets.commuBoard`):**
+board mode gate (track only in mode 7); hovered = game cache at 0x5D8 when >=1, else
+our 1:1 hit-test replica (also names EMPTY sockets); announces "<char>, level N,
+leader, socket i of n" / "Empty socket, i of n" per move, "free" when leaving all
+sockets; "emblem in hand…" hint on pickup/grid return; the entry summary now numbers
+each placed emblem's socket so it correlates with the live cursor. DEBUG=true for one
+pass: `state` snapshot every ~2 s (host addr, instance count, mode, sub, held, cursor
+xy, n, hovered, cache) + the hunt-v2 memory diff (host tail, UAT_UICmnInput 0x460,
+UATCommunityBoard model 0x138, menu, WL_PnlCurs, frame gap) as the safety net.
+
+**TEST CHECKLIST (first board visit):**
+1. Dismiss any tutorial popup on the board (the reader/dialog reads it; press its
+   confirm/close). Cursor only works after that (mode 7).
+2. Move the LEFT STICK slowly: expect per-socket announcements; between sockets "free".
+3. Confirm on an empty socket → grid opens (already accessible) → pick Gohan → back on
+   the board expect "Emblem in hand…" → move to the socket NEXT TO GOKU (socket numbers
+   were read on entry; Goku's socket says "leader") → confirm places it.
+4. If moves stay silent: read dumps/dump_community.txt — the `state` lines show mode
+   (7 vs tutorial), cursor xy moving, hovered/cache; `hunt` lines catch anything else.
+5. Afterwards set DEBUG=false in screen_community.lua.
+
+### COMMUNITY BOARD — superseded attack plan (2026-07-04, kept for history)
 
 Status: the board's SUMMARY (title, overall level, to-next-rank, rank, active skills)
 and the PLACED emblems + a "press confirm to open Soul Emblems" hint are read on entry

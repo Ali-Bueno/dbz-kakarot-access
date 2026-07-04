@@ -83,6 +83,9 @@ local S = {
         leader = "líder",
         placed = "Colocados:",
         board_hint = "%d huecos. Pulsa aceptar en un hueco vacío para abrir Emblemas de alma y colocar uno.",
+        board_free = "libre",
+        board_holding = "Emblema en mano. Mueve el cursor a un hueco y acepta para colocarlo",
+        board_socket = "hueco %d de %d",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
         -- Navigation radar (nav_tracker.lua).
@@ -170,6 +173,9 @@ local S = {
         leader = "leader",
         placed = "Placed:",
         board_hint = "%d sockets. Press confirm on an empty socket to open Soul Emblems and set one.",
+        board_free = "free",
+        board_holding = "Emblem in hand. Move the cursor to a socket and confirm to place it",
+        board_socket = "socket %d of %d",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
         -- Navigation radar (nav_tracker.lua).

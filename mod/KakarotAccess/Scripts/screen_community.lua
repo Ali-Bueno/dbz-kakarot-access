@@ -31,13 +31,17 @@ local A = require("ui_archetypes")
 local I18n = require("i18n")
 local Speech = require("speech")
 local Mem = require("mem")
+local OFF = require("native_offsets")
+
+local BOARD = OFF.commuBoard
 
 local Commu = {}
 
--- Targeted cursor hunt (2026-07-04): the free pointer's position was NOT in the host
--- or frame memory. NOT YET SCANNED: the cursor WIDGET's own memory and its canvas
--- SLOT — where UMG pointers usually keep their live position. ON for one board pass.
-local DEBUG = true
+-- Diagnostics (hunt-v2 memory diff + 2 s state snapshots to dumps/dump_community.txt).
+-- The cursor mystery is SOLVED (2026-07-04, verified in-game: tutorial modes freeze
+-- the cursor; hovered read from host+0x5D8 / the hit-test replica) — OFF unless a
+-- regression needs ground truth again.
+local DEBUG = false
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -175,7 +179,9 @@ end
 -- SEH-guarded reads are safe; UWidget.RenderTransform sits at 0x90 per the UMG.hpp
 -- CXX dump.)
 
--- The board's sockets, cached per board.
+-- The board's sockets, cached per board. RAW WL_PanelTbl order — the game's hit-test
+-- indexes the raw array (frame+0x548) bounded by activeCount, so the list must NOT be
+-- visibility-filtered or the indices would misalign on partially-unlocked boards.
 local function board_panels(frame, key)
     if panel_cache and panel_cache.key == key then return panel_cache end
     local c = { key = key, list = {} }
@@ -183,19 +189,80 @@ local function board_panels(frame, key)
         local arr = frame.WL_PanelTbl
         for i = 1, #arr do
             local p = arr[i]
-            if Core.valid(p) and Core.is_visible(p) then c.list[#c.list + 1] = p end
+            if not Core.valid(p) then break end   -- keep positions aligned: stop, don't skip
+            c.list[i] = p
         end
     end)
     panel_cache = c
     return c
 end
 
--- CURSOR SELECTION IS UNREADABLE ON THIS BOARD (verified 2026-07-04): the free analog
--- cursor's position is NOT in any widget (WL_PanelCursor stayed 542,319 across a full
--- move pass) and NOT in the host/frame memory (0x8C0 bytes scanned, zero change while
--- the pad moved). Like the battle pause, the state lives in the native input system,
--- unrecoverable without RE of the exe. So the board does NOT track the cursor; it
--- reads the board summary + the emblems already placed on entry (board_update).
+-- CURSOR SOLVED (Ghidra 2026-07-04, code/decompiled/manual_1414f2ab0.c): the game's
+-- own hit-test reads the cursor from WL_PanelCursor's RenderTransform.Translation
+-- (raw +0x90/+0x94) and tests it against each socket's PointerCenterOffset + a hidden
+-- board position (panel+0x550) + hidden frame adjusts, square-range per socket (the
+-- leader socket 1 has its own adjust/range). board_hovered() below replicates it
+-- 1:1 (offsets in native_offsets.commuBoard). A cursor frozen at 542,319 during the
+-- earlier passes just means the game never moved it (the grid/tutorial modes own the
+-- input then — host+0x500 is the board MODE: 7 browse / 9 detail / 10 grid / 16
+-- tutorial demo, NOT a hovered index).
+
+-- The game's socket hit-test, replicated exactly (first hit wins, LAST socket first).
+-- Returns the 1-based WL_PanelTbl index of the socket under the cursor, or nil.
+local function board_hovered(frame, pc)
+    local cw
+    pcall(function() cw = frame.WL_PanelCursor end)
+    if not Core.valid(cw) then return nil end
+    local cx = Mem.float(cw, BOARD.cursorX)
+    local cy = Mem.float(cw, BOARD.cursorY)
+    if not cx or not cy then return nil end
+    local count = Mem.i32(frame, BOARD.activeCount) or 0
+    if count > #pc.list then count = #pc.list end
+    local ax = Mem.float(frame, BOARD.hitAdjX) or 0
+    local ay = Mem.float(frame, BOARD.hitAdjY) or 0
+    local ar = Mem.float(frame, BOARD.hitRange) or 0
+    for i = count, 1, -1 do
+        local p = pc.list[i]
+        local px = Mem.float(p, BOARD.panelPosX)
+        local py = Mem.float(p, BOARD.panelPosY)
+        local bx = Mem.float(p, BOARD.panelBoardX)
+        local by = Mem.float(p, BOARD.panelBoardY)
+        if px and bx then
+            local ox, oy, r = ax, ay, ar
+            if i == 1 then
+                ox = Mem.float(frame, BOARD.leaderAdjX) or 0
+                oy = Mem.float(frame, BOARD.leaderAdjY) or 0
+                r = Mem.float(frame, BOARD.leaderRange) or 0
+            end
+            local hx, hy = px + bx + ox, py + by + oy
+            if math.abs(hx - cx) <= r and math.abs(hy - cy) <= r then return i end
+        end
+    end
+    return nil
+end
+
+-- What the hovered socket sounds like: emblem name + level + leader, or empty.
+local function socket_label(p, idx, count)
+    local name
+    local embr
+    pcall(function() embr = p.WL_Emblem end)
+    if Core.valid(embr) and Core.is_visible(embr) then
+        pcall(function() name = face_char(embr.UIXCmnEmb) end)
+    end
+    local where = string.format(I18n.t("board_socket"), idx, count)
+    if not name then
+        return Core.phrase(I18n.t("empty_socket"), where)
+    end
+    local lv = read(p.WL_Lv)
+    local leader = false
+    pcall(function()
+        leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
+    end)
+    return Core.phrase(name,
+        lv and string.format(I18n.t("lvl"), lv) or nil,
+        leader and I18n.t("leader") or nil,
+        where)
+end
 
 -- The right-hand pane: board title (used as the announcer tab) and the summary
 -- (overall level, to-next-rank, rank, active skills) spoken when the board changes.
@@ -208,6 +275,75 @@ end
 local function board_title()
     local d = board_detail()
     return d and read(d.WL_Txt_Titl00) or nil
+end
+
+-- Community Skills list (user request 2026-07-04): the thresholds panel ("Support
+-- Gauge Initial Value +5% …"). It lives in the detail pane's WL_SkillParts — a FIXED
+-- C array of 10 UAT_UICommunityBoardDetailSkillParts* (detail+0x470, size 0x50).
+-- UE4SS reflection collapses fixed arrays to element 0; elements 1..9 are recovered
+-- with RegisterCustomProperty at base+i*8 (the screen_party technique), registered
+-- lazily against the widget's RUNTIME class path.
+local SKILL_PARTS_BASE = 0x470
+local SKILL_PARTS_N = 10
+local skills_registered = false
+
+local function ensure_skill_props(d)
+    if skills_registered then return end
+    local cls
+    pcall(function() cls = d:GetClass():GetFullName():match("%s(.+)$") end)
+    if not cls then return end
+    skills_registered = true
+    for i = 1, SKILL_PARTS_N - 1 do
+        pcall(function()
+            RegisterCustomProperty({
+                ["Name"] = "CommuSkillPart" .. i,
+                ["Type"] = PropertyTypes.ObjectProperty,
+                ["BelongsToClass"] = cls,
+                ["OffsetInternal"] = SKILL_PARTS_BASE + i * 8,
+            })
+        end)
+    end
+end
+
+-- One skill row: prefers the ACTIVE variant's text (unlocked skills render through
+-- WL_Txt_Skill_Act/WL_Txt_Num_Act; locked ones through WL_Txt_Skill/WL_Txt_Num).
+local function skill_row(p)
+    local act = false
+    pcall(function() act = Core.is_visible(p.WL_Pnl_Skill_Act) end)
+    local name, num
+    if act then
+        name = read(p.WL_Txt_Skill_Act) or read(p.WL_Txt_Skill)
+        num = read(p.WL_Txt_Num_Act) or read(p.WL_Txt_Num)
+    else
+        name = read(p.WL_Txt_Skill) or read(p.WL_Txt_Skill_Act)
+        num = read(p.WL_Txt_Num) or read(p.WL_Txt_Num_Act)
+    end
+    if not name then return nil end
+    return Core.phrase(name, num)
+end
+
+local function skills_text()
+    local d = board_detail()
+    if not d then return nil end
+    ensure_skill_props(d)
+    local parts = {}
+    local hdr
+    pcall(function() hdr = read(d.WL_Txt_Skill_Header00) or read(d.WL_Txt_Skill_Header01) end)
+    if hdr then parts[#parts + 1] = hdr end
+    for i = 0, SKILL_PARTS_N - 1 do
+        local p
+        if i == 0 then
+            pcall(function() p = d.WL_SkillParts end)
+        else
+            pcall(function() p = d["CommuSkillPart" .. i] end)
+        end
+        if Core.valid(p) and Core.is_visible(p) then
+            local row = skill_row(p)
+            if row then parts[#parts + 1] = row end
+        end
+    end
+    if #parts == 0 or (hdr and #parts == 1) then return nil end
+    return table.concat(parts, ", ")
 end
 
 local function board_summary()
@@ -272,6 +408,7 @@ end
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
     last_title, panel_cache = nil, nil
+    last_sub = nil
 end
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
@@ -363,7 +500,9 @@ local function placed_emblems(pc)
             pcall(function()
                 leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
             end)
-            parts[#parts + 1] = Core.phrase(name,
+            -- socket number first, so it correlates with the live cursor's "socket N"
+            parts[#parts + 1] = Core.phrase(string.format("%d", i),
+                name,
                 lv and string.format(I18n.t("lvl"), lv) or nil,
                 leader and I18n.t("leader") or nil)
         end
@@ -371,10 +510,17 @@ local function placed_emblems(pc)
     return parts
 end
 
--- ---- CURSOR HUNT (DEBUG, 2026-07-04) ------------------------------------------------
--- Scan the cursor WIDGETS' own memory + their canvas SLOTS' memory (never done before)
--- and report any int32/float that moves while the pad moves. This is where a UMG
--- pointer keeps its live position when the render transform stays put.
+-- ---- CURSOR HUNT (DEBUG, v2 2026-07-04) ---------------------------------------------
+-- The widget layer is exhausted (cursor widgets + slots + render transforms all frozen
+-- across a full left-stick pass). v2 diffs the LOGIC layer the widgets point at, none
+-- of which was ever scanned (offsets from the CXX header dump, AT.hpp/ATExt.hpp):
+--   * the host's own non-reflected tail gap 0x4E8..0x510 (between WL_Dmy_Bg 0x4E0 and
+--     TargetCommBoradIns 0x510 — where the old tail-diff once saw 0x4F8/0x500 move),
+--   * UAT_UICmnInput  @ host+0x618 — 0x460-byte input helper, ZERO reflected members,
+--   * UATCommunityBoard @ host+0x600 (TargetBoard) — 0x138-byte model, ZERO reflected,
+--   * UCommunityBoardMenu via UAT_UICommunityManager(host+0x5F8)+0x88,
+--   * the host's WL_PnlCurs canvas (host+0x490) + its slot (the cursor lives on the
+--     HOST canvas too, separate from the frame's WL_PanelCursor).
 local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
     return (src:match("^(.*)[/\\]") or ".") .. "\\dumps\\dump_community.txt"
@@ -411,6 +557,23 @@ local function scan_addr(key, addr, from, len, lines)
     end
 end
 
+-- Host-relative pointers to the opaque logic objects (CXX header dump offsets).
+local HOST_UICMNINPUT_OFF = 0x618   -- UAT_UICmnInput* (0x460 bytes, no reflection)
+local HOST_TARGETBOARD_OFF = 0x600  -- UATCommunityBoard* (0x138 bytes, no reflection)
+local HOST_UICOMMMNG_OFF = 0x5F8    -- UAT_UICommunityManager*
+local UICOMMMNG_MENU_OFF = 0x88     -- .MenuCommunityBrdIns (UCommunityBoardMenu, 0x128)
+local HOST_PNLCURS_OFF = 0x490      -- WL_PnlCurs (UCanvasPanel on the HOST)
+
+-- Pointer stored at absolute addr+off (Mem.ptr only takes UObjects).
+local function ptr_at(addr, off)
+    local raw = Mem.at_bytes(addr, off, 8)
+    if not raw then return nil end
+    local p = 0
+    for k = 8, 1, -1 do p = p * 256 + raw:byte(k) end
+    if p == 0 then return nil end
+    return p
+end
+
 local function dump_cursor_hunt(frame)
     local lines = {}
     for _, m in ipairs(CURSOR_MEMBERS) do
@@ -423,9 +586,80 @@ local function dump_cursor_hunt(frame)
             scan_addr(m .. ".slot", slot, 0x0, 0x80, lines)      -- the canvas slot's layout
         end
     end
+    scan_addr("frame", Mem.addr(frame), 0x3F0, 0x568, lines)     -- frame incl. 0x618..0x868 gap
+    local ha = Mem.addr(board)
+    if ha then
+        scan_addr("host", ha, 0x3F0, 0x2A0, lines)               -- full host incl. 0x4E8..0x510 gap
+        scan_addr("input", Mem.ptr(board, HOST_UICMNINPUT_OFF), 0x28, 0x438, lines)
+        scan_addr("model", Mem.ptr(board, HOST_TARGETBOARD_OFF), 0x28, 0x110, lines)
+        local mng = Mem.ptr(board, HOST_UICOMMMNG_OFF)
+        if mng then
+            scan_addr("menu", ptr_at(mng, UICOMMMNG_MENU_OFF), 0x28, 0x100, lines)
+        end
+        local pnl = Mem.ptr(board, HOST_PNLCURS_OFF)
+        scan_addr("pnlcurs", pnl, 0x88, 0x180, lines)            -- host cursor canvas
+        if pnl then
+            scan_addr("pnlcurs.slot", ptr_at(pnl, SLOT_PTR_OFF), 0x0, 0x80, lines)
+        end
+    end
     if #lines == 0 then return end
     local f = io.open(dump_path(), "a")
     if f then f:write(string.format("[%d] hunt %s\n", os.time(), table.concat(lines, " "))) f:close() end
+end
+
+local last_held = false      -- emblem-in-hand edge detector
+local last_sub = nil         -- last spoken link-bonus subtitle
+local snap_tick = 0          -- DEBUG state-snapshot throttle
+
+-- Link-bonus voice subtitles (played on placement, board mode 16). The screen
+-- registry gives the display to ONE adapter, so the dialogue reader below us never
+-- runs while the board is active — the board reads its own subtitles widget
+-- (host.LinkBonusSubtitles, UATUISubtitles: TextName + TextSelif, both reflected).
+local function board_subtitles()
+    local sub
+    pcall(function() sub = board.LinkBonusSubtitles end)
+    if not Core.valid(sub) or not Core.on_screen(sub) then
+        last_sub = nil
+        return
+    end
+    local line = read(sub.TextSelif)
+    if not line then return end
+    local msg = Core.phrase(read(sub.TextName), line)
+    if msg ~= last_sub then
+        last_sub = msg
+        Speech.say(msg, false)
+    end
+end
+
+-- DEBUG: periodic one-line state snapshot (board mode, sub-state, cursor, hovered) —
+-- the ground truth for the next live pass if anything still reads wrong.
+local function dump_state(frame, hovered)
+    if tick - snap_tick < 20 then return end
+    snap_tick = tick
+    local cw
+    pcall(function() cw = frame.WL_PanelCursor end)
+    local cx = Core.valid(cw) and Mem.float(cw, BOARD.cursorX) or nil
+    local cy = Core.valid(cw) and Mem.float(cw, BOARD.cursorY) or nil
+    -- instance count guards against reading a STALE pooled board (Start_Char lesson)
+    local inst = 0
+    pcall(function()
+        for _, o in ipairs(Core.cached_all("Start_Commu_Brd_C", tick) or {}) do
+            if Core.valid(o) then inst = inst + 1 end
+        end
+    end)
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    f:write(string.format("[%d] state host=%x inst=%d mode=%s sub=%s held=%s curs=%s,%s n=%s hov=%s cache=%s\n",
+        os.time(),
+        Mem.addr(board) or 0, inst,
+        tostring(Mem.i32(board, BOARD.mode)),
+        tostring(Mem.u8(board, BOARD.subState)),
+        tostring((Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0),
+        cx and string.format("%.0f", cx) or "?", cy and string.format("%.0f", cy) or "?",
+        tostring(Mem.i32(frame, BOARD.activeCount)),
+        tostring(hovered),
+        tostring(Mem.i32(board, BOARD.hoveredCache))))
+    f:close()
 end
 
 local function board_update()
@@ -435,22 +669,64 @@ local function board_update()
     if DEBUG then dump_cursor_hunt(frame) end
     local title = board_title()
     local pc = board_panels(frame, title or "?")
-    -- The live cursor is unreadable on this board, so we don't track a focused socket.
-    -- Announce the board name on entry (tab = the board title, spoken on LB/RB change);
-    -- then queue the summary (level/rank/skills) + the placed emblems + a hint that A
-    -- opens the accessible Soul Emblems screen to set one.
-    ann:focus(I18n.header(1), title, title, nil, nil)
+
+    -- Live cursor — ONLY in board mode 7. The board tick (FUN_1414c7de0) runs its
+    -- hover tracker exclusively in mode 7; in the tutorial-popup modes (12/13/14/17)
+    -- the stick is dead by design and every cursor read is stale (this is why every
+    -- earlier live pass saw frozen memory: the community tutorial holds those modes
+    -- until its popups are dismissed).
+    -- PRIMARY source: the game's own cached hovered index (host+0x5D8, written by
+    -- FUN_1414e3170 each tick) — authoritative when >= 1 (0x80000001 = sentinel).
+    -- FALLBACK: our replica of its hit test (board_hovered), which also detects
+    -- EMPTY sockets (the cache stores -1 over those). The hovered socket is the
+    -- announcer's focused NAME, so moves announce and idling stays silent; leaving
+    -- every socket announces "free" once so a confirm there is known to open the grid.
+    local hovered = nil
+    if Mem.i32(board, BOARD.mode) == 7 then
+        hovered = Mem.i32(board, BOARD.hoveredCache)
+        if not hovered or hovered < 1 or hovered > #pc.list then
+            hovered = board_hovered(frame, pc)
+        end
+    end
+    if DEBUG then dump_state(frame, hovered) end
+    local n = Mem.i32(frame, BOARD.activeCount) or #pc.list
+    if n > #pc.list then n = #pc.list end
+    local item = title
+    if hovered and pc.list[hovered] then
+        item = cached_label(hovered, function()
+            return socket_label(pc.list[hovered], hovered, n)
+        end)
+    elseif last_idx then
+        item = I18n.t("board_free")   -- had a socket before, cursor now over open space
+    end
+    if hovered then last_idx = hovered end
+
+    ann:focus(I18n.header(1), title, item, nil, nil)
+
+    board_subtitles()
+
+    -- An emblem was just picked up (or we returned from the grid carrying one):
+    -- explain the placement gesture once.
+    local held = (Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0
+    if held ~= last_held then
+        last_held = held
+        if held then Speech.say(I18n.t("board_holding"), false) end
+    end
+
     if title and title ~= last_title then
         last_title = title
         panel_cache = nil                    -- socket layout changes with the board
+        last_idx, label_cache, label_idx = nil, nil, nil   -- labels too
         local bits = {}
         local s = board_summary()
         if s then bits[#bits + 1] = s end
+        local sk = skills_text()
+        if sk then bits[#bits + 1] = sk end
         local placed = placed_emblems(pc)
         if #placed > 0 then
             bits[#bits + 1] = I18n.t("placed") .. " " .. table.concat(placed, ", ")
         end
-        bits[#bits + 1] = string.format(I18n.t("board_hint"), #pc.list)
+        bits[#bits + 1] = string.format(I18n.t("board_hint"), n)
         Speech.say(table.concat(bits, ". "), false)
     end
 end
