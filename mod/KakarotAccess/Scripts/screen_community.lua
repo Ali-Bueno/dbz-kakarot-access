@@ -30,8 +30,14 @@ local Core = require("ui_core")
 local A = require("ui_archetypes")
 local I18n = require("i18n")
 local Speech = require("speech")
+local Mem = require("mem")
 
 local Commu = {}
+
+-- Targeted cursor hunt (2026-07-04): the free pointer's position was NOT in the host
+-- or frame memory. NOT YET SCANNED: the cursor WIDGET's own memory and its canvas
+-- SLOT — where UMG pointers usually keep their live position. ON for one board pass.
+local DEBUG = true
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -365,10 +371,68 @@ local function placed_emblems(pc)
     return parts
 end
 
+-- ---- CURSOR HUNT (DEBUG, 2026-07-04) ------------------------------------------------
+-- Scan the cursor WIDGETS' own memory + their canvas SLOTS' memory (never done before)
+-- and report any int32/float that moves while the pad moves. This is where a UMG
+-- pointer keeps its live position when the render transform stays put.
+local function dump_path()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    return (src:match("^(.*)[/\\]") or ".") .. "\\dumps\\dump_community.txt"
+end
+
+local function le_i32(s, i)
+    local a, b, c, d = s:byte(i, i + 3)
+    if not d then return nil end
+    local v = a + b * 256 + c * 65536 + d * 16777216
+    return v >= 0x80000000 and v - 0x100000000 or v
+end
+
+local CURSOR_MEMBERS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_Img_Curs_Fing01", "WL_EmbCursorFrame" }
+local cur_prev = {}
+
+-- The UWidget.Slot pointer offset (UMG.hpp) — read the slot object's VA to scan it too.
+local SLOT_PTR_OFF = 0x0110
+
+local function scan_addr(key, addr, from, len, lines)
+    if not addr then return end
+    local cur = Mem.at_bytes(addr, from, len)
+    if not cur then return end
+    local prev = cur_prev[key]
+    cur_prev[key] = cur
+    if not prev or prev == cur then return end
+    for off = 0, len - 4, 4 do
+        local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
+        if a and b and a ~= b then
+            local fb = string.unpack("<f", cur, off + 1)
+            local repr = (fb == fb and math.abs(fb) > 1e-4 and math.abs(fb) < 1e6)
+                and string.format("%.1ff", fb) or tostring(b)
+            lines[#lines + 1] = string.format("%s+0x%X=%s(was %d)", key, from + off, repr, a)
+        end
+    end
+end
+
+local function dump_cursor_hunt(frame)
+    local lines = {}
+    for _, m in ipairs(CURSOR_MEMBERS) do
+        local w
+        pcall(function() w = frame[m] end)
+        if Core.valid(w) then
+            local wa = Mem.addr(w)
+            scan_addr(m, wa, 0x88, 0x180, lines)                 -- the widget: transform + tail
+            local slot = Mem.ptr(w, SLOT_PTR_OFF)                -- follow UWidget.Slot
+            scan_addr(m .. ".slot", slot, 0x0, 0x80, lines)      -- the canvas slot's layout
+        end
+    end
+    if #lines == 0 then return end
+    local f = io.open(dump_path(), "a")
+    if f then f:write(string.format("[%d] hunt %s\n", os.time(), table.concat(lines, " "))) f:close() end
+end
+
 local function board_update()
     local frame
     pcall(function() frame = board.WL_BrdFrame end)
     if not Core.valid(frame) then return end
+    if DEBUG then dump_cursor_hunt(frame) end
     local title = board_title()
     local pc = board_panels(frame, title or "?")
     -- The live cursor is unreadable on this board, so we don't track a focused socket.
