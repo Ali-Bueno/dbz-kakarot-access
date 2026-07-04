@@ -178,76 +178,73 @@ end
 
 -- ---- board: sockets, cursor, summary -------------------------------------------
 
--- Canvas-slot position of a widget (Left/Top of its CanvasPanelSlot offsets), or nil.
--- Plain reflected data — NEVER read RenderTransform here (uncatchable abort, seen on
--- the pause menu 2026-07-01).
-local function slot_xy(w)
-    local x, y
+-- Widget position for the board: RenderTransform.Translation read RAW via mem_bridge
+-- (REFLECTION on RenderTransform hard-aborts — pause lesson 2026-07-01 — but raw
+-- SEH-guarded reads are safe; UWidget.RenderTransform sits at 0x90 per the UMG.hpp
+-- CXX dump: Translation.X 0x90, .Y 0x94). Canvas-slot offsets as fallback. 0,0 from
+-- both counts as UNSET (live: every canvas slot on this screen reads 0,0).
+local RT_X, RT_Y = 0x90, 0x94
+
+local function widget_xy(w)
+    if not Core.valid(w) then return nil end
+    local x, y = Mem.float(w, RT_X), Mem.float(w, RT_Y)
+    if x and y and (x ~= 0 or y ~= 0) then return x, y end
     pcall(function()
         local off = w.Slot.LayoutData.Offsets
         x, y = off.Left + 0.0, off.Top + 0.0
     end)
-    return x, y
+    if x and y and (x ~= 0 or y ~= 0) then return x, y end
+    return nil
 end
 
--- The board's sockets + their positions, cached per board (they only change when
--- the board itself changes; re-scanning canvas slots per tick is wasted cost).
+-- The board's sockets, cached per board. Positions are NOT cached: the render
+-- transforms move (board pans/zooms), and 11 × 2 raw float reads per tick is cheap.
 local function board_panels(frame, key)
     if panel_cache and panel_cache.key == key then return panel_cache end
-    local c = { key = key, list = {}, xy = {} }
+    local c = { key = key, list = {} }
     pcall(function()
         local arr = frame.WL_PanelTbl
         for i = 1, #arr do
             local p = arr[i]
-            if Core.valid(p) and Core.is_visible(p) then
-                local x, y = slot_xy(p)
-                c.list[#c.list + 1] = p
-                c.xy[#c.list] = { x = x, y = y }
-            end
+            if Core.valid(p) and Core.is_visible(p) then c.list[#c.list + 1] = p end
         end
     end)
     panel_cache = c
     return c
 end
 
--- The board cursor's position, from the first cursor widget with a readable slot.
--- 0,0 counts as UNSET (live 2026-07-03: every canvas slot on this screen reads 0,0 —
--- the board positions everything via render transforms, unreadable by reflection),
--- so a bogus "nearest to the origin" socket is never announced.
+-- The board cursor's live position, from the first cursor widget with a real
+-- transform/slot position.
 local CURSOR_MEMBERS = { "WL_PanelCursor", "WL_Img_Curs_Fing00", "WL_EmbCursorFrame" }
 local function cursor_xy(frame)
     for _, m in ipairs(CURSOR_MEMBERS) do
         local w
         pcall(function() w = frame[m] end)
-        if Core.valid(w) then
-            local x, y = slot_xy(w)
-            if x and not (x == 0 and y == 0) then return x, y, m end
-        end
+        local x, y = widget_xy(w)
+        if x then return x, y, m end
     end
 end
 
--- The hovered socket. PRIMARY: the native hovered index in the board host's
--- non-reflected tail (pinned live via the tail diff, see native_offsets.commuBoard);
--- bounds-checked against the socket list, so a wrong read means silence, never a
--- wrong socket. Fallbacks: a panel's ActiveAnim when it singles one out, else the
--- nearest socket to the cursor position (dead as long as slots read 0,0).
-local OFF = require("native_offsets")
-
+-- The hovered socket: the NEAREST socket to the live cursor, both positioned via
+-- raw RenderTransform reads. (The native tail guess +0x500 froze while moving —
+-- see native_offsets history — so geometry is primary; a panel's ActiveAnim as the
+-- no-cursor fallback.)
 local function board_selected(frame, pc)
-    local hov = Mem.i32(board, OFF.commuBoard.hoverIndex)
-    if hov and hov >= 0 and hov < #pc.list then return hov + 1, "native" end
+    local cx, cy, src = cursor_xy(frame)
+    if cx then
+        local best, bd
+        for i, p in ipairs(pc.list) do
+            local x, y = widget_xy(p)
+            if x then
+                local d = (x - cx) ^ 2 + (y - cy) ^ 2
+                if not bd or d < bd then bd, best = d, i end
+            end
+        end
+        if best then return best, "near:" .. src end
+    end
     local idx = unique_match(pc.list, function(p) return anim_playing(p, p.ActiveAnim) end)
     if idx then return idx, "anim" end
-    local cx, cy = cursor_xy(frame)
-    if not cx then return nil, nil end
-    local best, bd
-    for i, xy in ipairs(pc.xy) do
-        if xy.x then
-            local d = (xy.x - cx) ^ 2 + (xy.y - cy) ^ 2
-            if not bd or d < bd then bd, best = d, i end
-        end
-    end
-    return best, "near"
+    return nil, nil
 end
 
 -- What a socket sounds like: its emblem's character + level (+ leader pedestal),
@@ -349,11 +346,22 @@ local function dump_tail_changes(frame)
                 local n = 0
                 for off = 0, w.len - 4, 4 do
                     local a, b = le_i32(prev, off + 1), le_i32(cur, off + 1)
-                    if a and b and a ~= b and b >= -1 and b <= 2000 then
-                        n = n + 1
-                        if n <= 16 then
-                            lines[#lines + 1] = string.format("%s+0x%X=%d(was %d)",
-                                w.key, w.from + off, b, a)
+                    if a and b and a ~= b then
+                        -- log ints in index-like range, and float-looking values too
+                        -- (the cursor coordinates are floats — the int-only filter
+                        -- missed every movement on the first pass)
+                        local fa = string.unpack("<f", prev, off + 1)
+                        local fb = string.unpack("<f", cur, off + 1)
+                        local as_int = b >= -1 and b <= 2000
+                        local as_float = fb == fb and math.abs(fb) < 100000
+                            and (math.abs(fb) > 1e-3 or fb == 0)
+                        if as_int or as_float then
+                            n = n + 1
+                            if n <= 16 then
+                                lines[#lines + 1] = as_int
+                                    and string.format("%s+0x%X=%d(was %d)", w.key, w.from + off, b, a)
+                                    or string.format("%s+0x%X=%.1ff(was %.1f)", w.key, w.from + off, fb, fa)
+                            end
                         end
                     end
                 end
@@ -374,15 +382,13 @@ local function dump_board(frame, pc, idx, how, title)
     local f = io.open(dump_path(), "a")
     if not f then return end
     local cx, cy, src = cursor_xy(frame)
-    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s hov=%s flag=%s cursor=%s,%s via %s\n",
+    f:write(string.format("[%d] board '%s' sockets=%d sel=%s how=%s cursor=%s,%s via %s\n",
         os.time(), tostring(title), #pc.list, tostring(idx), tostring(how),
-        tostring(Mem.i32(board, OFF.commuBoard.hoverIndex)),
-        tostring(Mem.i32(board, OFF.commuBoard.hoverFlag)),
         tostring(cx), tostring(cy), tostring(src)))
     for i, p in ipairs(pc.list) do
-        local xy = pc.xy[i]
+        local x, y = widget_xy(p)
         f:write(string.format("  %02d xy=%s,%s active=%s label=%s\n", i,
-            tostring(xy.x), tostring(xy.y),
+            tostring(x), tostring(y),
             tostring(anim_playing(p, p.ActiveAnim)),
             panel_label(p, i, #pc.list)))
     end

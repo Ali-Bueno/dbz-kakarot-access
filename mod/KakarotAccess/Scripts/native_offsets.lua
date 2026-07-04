@@ -88,18 +88,14 @@ return {
     },
 
     -- Community board (Start_Commu_Brd_C -> UAT_UICommunityBoard): the free cursor over
-    -- the emblem sockets. Every canvas-slot position on this screen reads 0,0 (render-
-    -- transform driven), so the hovered socket is only in the non-reflected gap
-    -- 0x4F0..0x5E0. PINNED by the in-adapter tail diff (dump_community.txt 2026-07-03):
-    -- moving the cursor between sockets stepped 0x500 7 -> 10 (11 sockets, 0-based)
-    -- while 0x4F8 tracked a coordinate (402 <- 898) and 0x5D8 flipped 1/-1 (on/off a
-    -- socket). 0x500 assumed = hovered WL_PanelTbl index; bounds-checked on read, so a
-    -- wrong meaning yields silence, not a wrong announcement.
-    commuBoard = {
-        hoverIndex = 0x500,  -- int32, hovered socket index into WL_PanelTbl (0-based)
-        hoverFlag  = 0x5D8,  -- int32, 1 = cursor on a socket, -1 = off (diagnostic)
-        cursorX    = 0x4F8,  -- int32-ish coordinate (diagnostic only)
-    },
+    -- the emblem sockets. HISTORY: the tail diff once showed 0x500 step 7 -> 10 and it
+    -- was wired as the hovered index — WRONG: live it froze at 10 while the cursor
+    -- moved (2026-07-04; probably the board's release level, SetReleaseLevel). The
+    -- working source is GEOMETRY instead: RenderTransform.Translation read RAW at
+    -- UWidget+0x90/+0x94 (UMG.hpp) on the cursor widgets and each socket panel —
+    -- reflection on RenderTransform aborts, raw mem reads are safe. Kept here only
+    -- as documentation; screen_community reads the transforms directly.
+    commuBoard = {},
 
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named
