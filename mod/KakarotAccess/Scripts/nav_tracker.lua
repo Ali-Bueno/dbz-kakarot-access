@@ -49,8 +49,13 @@ local MAX_INTERVAL_MS = 850           -- ping period when at FAR_DIST (XV2 value
 local VOL_SLOPE = 0.6                 -- volume = 1 - VOL_SLOPE * t (XV2 value)
 local BEHIND_PITCH_SLOPE = 0.3        -- pitch = 1 + fb * slope when behind (XV2)
 local PITCH_MIN = 0.6                 -- clamp for the behind pitch (XV2 value)
-local ARRIVE_DIST = 8 * M             -- 3D arrival radius (XV2 used 4 m; quest
-                                      -- triggers here are larger areas)
+local ARRIVE_DIST = 8 * M             -- 3D arrival radius for AUTO quest targets (large
+                                      -- trigger areas)
+local ARRIVE_DIST_MANUAL = 1.5 * M   -- TIGHT arrival for hand-picked targets: a
+                                      -- collectible / NPC must be reached precisely
+                                      -- (within interact range) — 8 m would announce
+                                      -- "arrived" while still metres away (the user hit
+                                      -- this: a 6 m collectible read as reached).
 local REARM_DIST = 12 * M             -- re-arm the arrival cue past this
 local WAYPOINT_DIST = 5 * M           -- horizontal radius to advance a route point
 local WAYPOINT_VERT = 6 * M           -- vertical slack for waypoint advance (flight)
@@ -76,7 +81,8 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
 local GROUP_ORDER = {
-    "quests", "npc", "fishing", "gathering", "shops", "minigames", "dragonball", "other",
+    "quests", "collectibles", "npc", "fishing", "gathering", "shops", "minigames",
+    "dragonball", "other",
 }
 local ICON_GROUP = {
     -- quests (no distance limit)
@@ -110,7 +116,13 @@ local ICON_NOUN = {
     [1] = "cat_food_shop", [2] = "cat_cooking_shop", [3] = "cat_material_shop",
     [58] = "cat_restaurant",
 }
-local RADAR_GLOBAL_CAP = 300 * 100   -- fallback distance limit (m) for non-quest icons
+local RADAR_NPC_CAP = 300 * 100   -- distance limit for the NPC direct-scan (drops the far
+                                  -- parked-character pool ~2600 m away)
+local RADAR_MAP_CAP = 1000 * 100  -- cap for the game's OWN minimap icons: shows the LOCAL
+                                  -- area's gather/shop/minigame/fishing markers without
+                                  -- listing the regional ones 2-3 km away (clutter). A
+                                  -- hard 300 m was too tight; 5 km too loose. Quests: no
+                                  -- limit at all.
 
 -- ---- state ---------------------------------------------------------------------
 local on = true                -- master switch (F3); radar auto-tracks while on
@@ -523,16 +535,18 @@ local function step()
 
     -- Arrival on TRUE 3D distance to the objective (not the route corner).
     local d3 = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2 + (tz - pz) ^ 2)
-    if d3 <= ARRIVE_DIST then
+    local arrive_r = target.manual and ARRIVE_DIST_MANUAL or ARRIVE_DIST
+    if d3 <= arrive_r then
         if not arrived then
             arrived = true
             Audio.arrival()
-            Speech.say(I18n.t("nav_arrived"), false)
+            -- Hand-picked target: you're right on it — prompt the interact button so a
+            -- collectible/NPC can be grabbed/talked to. Auto quest target: plain arrival.
+            Speech.say(target.manual and I18n.t("nav_arrived_pickup") or I18n.t("nav_arrived"), false)
             -- A hand-picked (manual) target STOPS on arrival: the beacon goes quiet, the
             -- target is dropped, AND the auto-scan is suppressed so it can't immediately
-            -- re-acquire the same spot when you walk away (the bug the user hit). To
-            -- track again, re-pick from the R2 menu or press F3. (Auto quest targets
-            -- keep the re-arm behavior — the quest system moves the marker.)
+            -- re-acquire the same spot when you walk away. To track again, re-pick from
+            -- the R3 menu or press F3. (Auto quest targets keep the re-arm behavior.)
             if target.manual then
                 drop_target()
                 auto_suppressed = true
@@ -778,8 +792,16 @@ end
 -- can be diagnosed offline (is a category ABSENT from the minimap, or being FILTERED?).
 local RADAR_DEBUG = false
 
--- Known NPC UniqueId/CharacterName token → spoken name. Proper nouns (no localization).
--- Extend as the diagnostic (dump_radar.txt `name=`) reveals the real ids the game uses.
+-- Named NPC UniqueId → spoken name. The game identifies field characters by codes:
+--   Cpl0NN = the main/party characters (Cpl001 Goku, Cpl002 Gohan, …) — recognizable.
+--   Npc0NN = anonymous townsfolk — no meaningful name, spoken as the generic "character"
+--            noun (distance disambiguates them).
+-- Story NPCs may carry a descriptive UniqueId; NPC_NAMES word-matches those. Extend as
+-- the diagnostic (dump_radar.txt `name=`) reveals the real ids.
+local CPL_NAMES = {
+    Cpl001 = "Goku", Cpl002 = "Gohan", Cpl003 = "Piccolo", Cpl004 = "Krillin",
+    Cpl005 = "Vegeta", Cpl006 = "Trunks", Cpl007 = "Gotenks", Cpl008 = "Goten",
+}
 local NPC_NAMES = {
     chichi = "Chi-Chi", gohan = "Gohan", goku = "Goku", krillin = "Krillin",
     kuririn = "Krillin", piccolo = "Piccolo", bulma = "Bulma", roshi = "Master Roshi",
@@ -789,14 +811,12 @@ local NPC_NAMES = {
     dende = "Dende", mrpopo = "Mr. Popo", popo = "Mr. Popo", kamisama = "Kami",
 }
 
--- Best spoken name for a field NPC from its UniqueId (FName), mapped through NPC_NAMES;
--- unknown ids are cleaned (underscores→spaces) and spoken raw so the user can still tell
--- entries apart and report the token. nil = generic noun.
--- IMPORTANT: read ONLY UniqueId — it's a reflected member of AQuestCharacter. Do NOT
--- touch CharacterName here: AQuestCharacter does NOT declare it (it lives on the sibling
--- AAT_Character), and reading a non-existent property on this game raises a C++
--- exception pcall CANNOT catch — which froze the game (it aborted right after the R2/R3
--- menu had blocked the pad, so the neutral pad stuck). See do_open's block ordering too.
+-- Best spoken name for a field NPC from its UniqueId (FName). nil = fall back to the
+-- generic "character" noun (anonymous townsfolk — the game has no real name for them).
+-- IMPORTANT: read ONLY UniqueId — it's a reflected member. Do NOT touch CharacterName:
+-- QuestCharacterBase does NOT declare it, and reading a non-existent property on this
+-- game raises a C++ exception pcall CANNOT catch — which froze the game (it aborted
+-- right after the menu had blocked the pad, leaving a stuck neutral pad).
 local function npc_name(npc)
     local raw
     pcall(function()
@@ -804,12 +824,15 @@ local function npc_name(npc)
         if u then raw = u:ToString() end
     end)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
-    -- normalize for the lookup: lowercase, drop non-letters
+    if CPL_NAMES[raw] then return CPL_NAMES[raw] end
+    -- descriptive story ids: word-match known characters
     local key = raw:lower():gsub("[^%a]", "")
     for tok, nm in pairs(NPC_NAMES) do
         if key:find(tok, 1, true) then return nm end
     end
-    -- unknown: clean the raw id for speech (strip a leading npc_/chr_ prefix, _→space)
+    -- anonymous "Npc0NN": no useful name → generic "character" noun (nil)
+    if raw:match("^[Nn]pc%d") then return nil end
+    -- some other descriptive id: clean it and speak it raw
     local cleaned = raw:gsub("^[%a]-_", ""):gsub("_", " ")
     return cleaned ~= "" and cleaned or nil
 end
@@ -837,12 +860,18 @@ function Nav.list_targets()
         local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
         local kept = true
         if grp ~= "quests" then
-            local cap = math.max(RADAR_GLOBAL_CAP, range or 0)
+            -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
+            -- parked pool / collectibles across the map); minimap icons get the wide cap
+            -- (the game curated them for the sighted player, often km away).
+            local cap = (src == "questchar" or src == "collectible") and RADAR_NPC_CAP
+                or math.max(RADAR_MAP_CAP, range or 0)
             if d > cap then kept = false end
         end
         if diag then
-            diag[#diag + 1] = string.format("  grp=%s noun=%s name=%s d=%.0f range=%s kept=%s src=%s",
-                grp, noun, tostring(name), d, tostring(range), tostring(kept), src)
+            local cls = "?"
+            pcall(function() cls = actor:GetClass():GetFName():ToString() end)
+            diag[#diag + 1] = string.format("  grp=%s noun=%s name=%s cls=%s d=%.0f range=%s kept=%s src=%s",
+                grp, noun, tostring(name), cls, d, tostring(range), tostring(kept), src)
         end
         if not kept then return end
         seen[key] = true
@@ -898,14 +927,91 @@ function Nav.list_targets()
             end
         end
     end
+    -- 4) collectibles / field points that are NOT minimap icons: Field Memories (the
+    -- glowing white flashback items that unlock Z Encyclopedia entries — e.g. the one in
+    -- Goku's house after cooking), item pickups, and access-point items (chests, ore).
+    -- Classify by class name; distance-capped like NPCs so far collectibles don't clutter.
+    do
+        -- A collected / inactive collectible is typically hidden — skip hidden actors so
+        -- a just-collected Field Memory drops out of the list (best-effort: if IsHidden
+        -- isn't callable it defaults to visible, i.e. no filtering).
+        local function visible_actor(a)
+            local hidden = false
+            pcall(function() hidden = a:IsHidden() end)
+            return hidden ~= true
+        end
+        for _, cls in ipairs({ "FieldActionPointActor", "PlacementObjectInfo", "AccessPointItemBase" }) do
+            for _, a in pairs(FindAllOf(cls) or {}) do
+                if Core.valid(a) and visible_actor(a) then
+                    local cn = "?"
+                    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                    local noun = cn:find("Memories", 1, true) and "cat_memory" or "cat_item"
+                    add_target(a, "collectibles", noun, nil, "collectible")
+                end
+            end
+        end
+    end
 
     if diag then
+        -- Probe nearby actor classes that are NOT minimap icons, to see what's actually
+        -- trackable near the player (e.g. gatherable field items — apples/herbs/ore —
+        -- and the raw NPC ids so their cryptic names can be mapped or bettered).
+        local function probe(cls, off)
+            local out = {}
+            pcall(function()
+                for _, a in pairs(FindAllOf(cls) or {}) do
+                    if Core.valid(a) then
+                        local x, y, z = actor_pos(a)
+                        if x then
+                            local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                            if d <= 500 * 100 then
+                                local nm = ""
+                                if off then pcall(function() nm = a.UniqueId:ToString() end) end
+                                out[#out + 1] = string.format("%.0fm %s %s",
+                                    d, a:GetClass():GetFName():ToString(), nm)
+                            end
+                        end
+                    end
+                end
+            end)
+            table.sort(out)
+            return out
+        end
+        local pr = {}
+        for _, c in ipairs({ "PlacementObjectInfo", "PlacementObjectInfo_Recyclable",
+                             "AccessPointItemBase", "AccessPointBase", "ChestAccessPoint",
+                             "TreasureAccessPoint", "FieldActionPointActor", "QuestCharacter" }) do
+            local list = probe(c, c == "QuestCharacter")
+            pr[#pr + 1] = string.format("  probe %s: %d within 500m", c, #list)
+            for i = 1, math.min(#list, 12) do pr[#pr + 1] = "    " .. list[i] end
+        end
+        -- The player's InteractComponent = the game's OWN "what can I examine/talk to
+        -- right now" list (class-agnostic). If "search the house" examine spots aren't
+        -- scannable actors, THIS is how we'd detect them: stand next to one and see if
+        -- TalkObjectArray populates. Dump its state.
+        pcall(function()
+            local ic = pawn.InteractComponent
+            if not Core.valid(ic) then pr[#pr + 1] = "  InteractComponent: nil" return end
+            local n = 0
+            pcall(function() n = #ic.TalkObjectArray end)
+            pr[#pr + 1] = string.format("  InteractComponent.TalkObjectArray: %d", n)
+            pcall(function()
+                for i = 1, n do
+                    local o = ic.TalkObjectArray[i]
+                    local cls, owner = "?", "?"
+                    pcall(function() cls = o:GetClass():GetFName():ToString() end)
+                    pcall(function() owner = o:GetOuter():GetFName():ToString() end)
+                    pr[#pr + 1] = string.format("    talkobj[%d] %s outer=%s", i, cls, owner)
+                end
+            end)
+        end)
         local src = debug.getinfo(1, "S").source:sub(2)
         local dir = src:match("^(.*)[/\\]") or "."
         local f = io.open(dir .. "\\dumps\\dump_radar.txt", "a")
         if f then
             f:write(string.format("[%d] list_targets: %d candidates\n", os.time(), #diag))
             f:write(table.concat(diag, "\n") .. "\n")
+            f:write(table.concat(pr, "\n") .. "\n")
             f:close()
         end
     end

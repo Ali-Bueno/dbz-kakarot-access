@@ -30,6 +30,9 @@ local RadarMenu = require("radar_menu")
 --  * dialogue (story subtitles / NPC talk) sits above the info overlays so a line beats an
 --    idle loading/tutorial screen.
 Registry.register(require("screen_choicelist"))
+-- Field Memory / story-recap viewer (Field_Memory_C): a titled paged narration overlay.
+-- High priority — it's a full-screen reader that pauses the game.
+Registry.register(require("screen_memory"))
 Registry.register(require("screen_dialog"))
 Registry.register(require("screen_pause"))
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
