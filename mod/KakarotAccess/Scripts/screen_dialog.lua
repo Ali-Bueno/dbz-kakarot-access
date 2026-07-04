@@ -45,7 +45,9 @@ local function message(w)
     for _, m in ipairs(MESSAGE_MEMBERS) do
         local t
         pcall(function() t = node_speech(w[m]) end)
-        if t then parts[#parts + 1] = t end
+        -- consecutive-duplicate guard: the Win02 info box repeats its header as the
+        -- subtitle ("Z Warrior Community, Z Warrior Community" read live)
+        if t and t ~= parts[#parts] then parts[#parts + 1] = t end
     end
     if #parts == 0 then return nil end
     return table.concat(parts, ", ")
@@ -169,6 +171,57 @@ end
 -- top-level widgets, so we tie them to a shown window rather than trusting their own
 -- IsVisible — otherwise pooled stale confirmations (still IsVisible under a collapsed
 -- ancestor) would keep this adapter "active" over the pause menu / tutorials.
+-- DEBUG: when a window is up, append its class, message and EVERY content/choice
+-- pool row (class + texts + highlight flag) to dumps/dump_dialog.txt on each message
+-- change — for pinning windows whose selectable rows aren't read yet (live case:
+-- a first-time community notice with 2 side-by-side options that stayed silent).
+-- Turn OFF once those rows are identified.
+local DEBUG = true
+local last_dumped = nil
+
+local DUMP_POOLS = {
+    "WL_ItemPlateCtn", "WL_TextCmuCtn", "WL_LinkListPlateCtn", "WL_CheckPlateCtn",
+    "WL_TextPlateCtn", "UIChoice_List", "Relation_List", "WL_StatePlateCtn",
+}
+local ROW_TEXTS = {
+    "Txt_Choice", "ItemName", "ItemNum", "WL_CharName", "WL_LevelTitle",
+    "TxtList", "LinkNameText", "TxtName", "TxtNum",
+}
+
+local function dump_window(msg)
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\dump_dialog.txt", "a")
+    if not f then return end
+    local wname = "?"
+    pcall(function() wname = win:GetFullName():match("^%S+ (%S+)") or "?" end)
+    f:write(string.format("[%d] win=%s msg=%s\n", os.time(), wname, tostring(msg)))
+    for _, pool in ipairs(DUMP_POOLS) do
+        pcall(function()
+            local arr = win[pool]
+            for i = 1, #arr do
+                local row = arr[i]
+                if Core.valid(row) and Core.on_screen(row) then
+                    local cls = row:GetFullName():match("^(%S+)") or "?"
+                    local texts = {}
+                    for _, m in ipairs(ROW_TEXTS) do
+                        local t
+                        pcall(function() t = Core.read_text(row[m]) end)
+                        if t then texts[#texts + 1] = m .. "=" .. t end
+                    end
+                    local hi = ""
+                    pcall(function()
+                        if Core.is_visible(row.Img_Xwin01_List) then hi = " HIGHLIGHT" end
+                    end)
+                    f:write(string.format("  %s[%d] %s %s%s\n", pool, i, cls,
+                        table.concat(texts, " "), hi))
+                end
+            end
+        end)
+    end
+    f:close()
+end
+
 -- The last fully-announced no-choice notice still on screen. NOT cleared by reset()
 -- (the registry resets adapters on every switch — clearing it there would make a
 -- released notice re-claim and re-announce in a loop).
@@ -184,6 +237,10 @@ function Dialog.is_active()
         return false
     end
     local labels, sel = choices()
+    if DEBUG and msg ~= last_dumped then
+        last_dumped = msg
+        dump_window(msg)
+    end
     -- A NOTICE (no choices) owns the screen only until it has been announced; then it
     -- RELEASES the tick so an interactive screen underneath keeps reading — the
     -- community board's tutorial popups PERSIST until the task is done and were muting

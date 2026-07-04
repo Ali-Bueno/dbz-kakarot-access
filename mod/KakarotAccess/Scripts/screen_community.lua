@@ -54,6 +54,7 @@ local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same s
 local last_title = nil      -- board title, gates the spoken board summary
 local panel_cache = nil     -- { key, list = {panel...}, xy = {{x,y}...} } per board
 local last_detect_sig = nil -- DEBUG: last screen-classification signature dumped
+local board_found = false   -- DEBUG: Start_Commu_Brd_C host seen (even if frame hidden)
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -375,15 +376,30 @@ function Commu.is_active()
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     local m = det and "detail" or nil
     if not m then
+        -- BOARD before GRID: the emblem grid stays rendered (21 visible slots)
+        -- UNDERNEATH the board, so grid-first read "Soul Emblems, Goku, 1 of 21"
+        -- while the board was the real screen (live 2026-07-03). The board host is
+        -- the BLUEPRINT class (pak index: Start_Commu/Start_Commu_Brd) — FindAllOf
+        -- on the native AT_UICommunityBoard found NOTHING live. It only owns the
+        -- screen while its panel frame is really rendered (pooled-closed collapses).
+        board = Core.first_on_screen("Start_Commu_Brd_C", tick)
+        board_found = board ~= nil
+        if board then
+            local frame
+            pcall(function() frame = board.WL_BrdFrame end)
+            if Core.valid(frame) and Core.on_screen(frame) then
+                m = "board"
+            else
+                board = nil   -- host up but frame not rendered (or wrong base class)
+            end
+        end
+    end
+    if not m then
         grid = Core.first_on_screen("AT_UICommunityStart", tick)
         if grid then
             grid_slots = slots()
             if #grid_slots > 0 then m = "grid" end
         end
-    end
-    if not m then
-        board = Core.first_on_screen("AT_UICommunityBoard", tick)
-        if board then m = "board" end
     end
     if m ~= mode then
         ann:reset()
@@ -393,9 +409,9 @@ function Commu.is_active()
     -- DEBUG: record HOW the screen was classified whenever that changes — if the board
     -- never activates, this line is the evidence (host not found vs shadowed vs silent).
     if DEBUG then
-        local sig = string.format("mode=%s det=%s grid=%s slots=%s board=%s",
+        local sig = string.format("mode=%s det=%s grid=%s slots=%s board=%s(found=%s)",
             tostring(m), tostring(det ~= nil), tostring(grid ~= nil),
-            grid_slots and #grid_slots or "-", tostring(board ~= nil))
+            grid_slots and #grid_slots or "-", tostring(board ~= nil), tostring(board_found))
         if sig ~= last_detect_sig then
             last_detect_sig = sig
             local f = io.open(dump_path(), "a")
