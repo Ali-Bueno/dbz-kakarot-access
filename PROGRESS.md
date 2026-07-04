@@ -85,7 +85,49 @@ DEBUG off. **Verify**: grid reads "Goku, community level 3, 1 of 21" / "Not
 acquired, 8 of 21"; detail on A; Sort options on X; the received-emblems notice
 rows.
 
-### COMMUNITY BOARD — CURSOR PINNED NATIVELY (2026-07-03, late) — PENDING final verify
+### COMMUNITY BOARD — cursor UNREADABLE so far; NEXT-SESSION ATTACK PLAN (2026-07-04)
+
+Status: the board's SUMMARY (title, overall level, to-next-rank, rank, active skills)
+and the PLACED emblems + a "press confirm to open Soul Emblems" hint are read on entry
+(commit 53606ef, `screen_community.board_update`). The live FREE CURSOR over the sockets
+is NOT tracked — the user can still complete the tutorial by pressing confirm on an
+empty socket → the accessible Soul Emblems grid opens → pick the emblem.
+
+WHY the cursor is unread (all verified live 2026-07-04, dump_community.txt):
+- Host is `Start_Commu_Brd_C` (ONE instance, we read the right one). Frame =
+  `.WL_BrdFrame` (UAT_UICommunityBoard_PanelFrame). Sockets `WL_PanelTbl` (11), each
+  `WL_Emblem` face → character name via CHAR_TOKENS; labels are CORRECT.
+- `WL_PanelCursor.RenderTransform` (0x90) stayed **542,319 frozen** across a full
+  "3 left, 3 down" move pass. Socket panels' RenderTransforms are in a DIFFERENT space
+  (-400..300) — so nearest-to-cursor was always wrong anyway.
+- A wide memory diff of **0x8C0 bytes** (host 0x3F0..0x760 + frame 0x430..0x950) showed
+  **ZERO change** while the pad moved. So the selected-socket index is NOT in the
+  widget memory — like battle pause, it's in the native input/logic layer.
+
+**NEXT-SESSION ATTACK PLAN (in priority order):**
+1. **CONFIRM THE INPUT FIRST (cheap, do before any RE):** the user was in the COMMUNITY
+   TUTORIAL, whose popups persist and may FREEZE the cursor. Re-test on a NORMAL board
+   (tutorial done) and re-run the wide diff. If something changes now, the whole "native"
+   conclusion was a tutorial artifact. If still frozen, continue below.
+2. **Cursor by SLOT, not transform:** read `WL_PanelCursor`'s CanvasPanelSlot position
+   (Slot.LayoutData.Offsets or Slot Position), not RenderTransform — a UMG cursor often
+   moves via slot. If THAT tracks the stick, replicate the hit-test: nearest socket by
+   the panels' RenderTransforms (already dumped: 1:-60,138 2:306,-182 3:33,-171 …) +
+   the board's reflected `HitRange`/`HitBaseOffset`/`CursorAdjust`.
+3. **Scan the objects we did NOT cover:** `UATCommunityManager` (ActorComponent),
+   `UAT_UICommunityManager`, and the FULL memory of each `UAT_UICommunityBoard_Panel`
+   (we only read their transform/scale). Diff while moving.
+4. **Ghidra (the pause/world-menu method):** `code/ghidra/find_ufunc.java` on the board's
+   UFunctions — `CheckHovered`, `MouseClickDecide`, `SetSelectTab` — to see which field
+   holds the hovered-socket index (or confirm it's computed on the fly from the cursor +
+   HitRange, in which case #2 is the real fix). Board host is UAT_UICommunityBoard;
+   HitRange/HitBaseOffset/CursorAdjust/GridInterval* are its reflected hit-test params.
+
+DECISION LOG so a repeat isn't tried: geometry-nearest (cursor in wrong space, dead),
+panel scale (=leader pedestal, not selection), native +0x500 (=froze at 10, was the
+release-level guess), RenderTransform of cursor (frozen). Don't re-try these.
+
+### COMMUNITY BOARD — CURSOR PINNED NATIVELY (2026-07-03, late) — SUPERSEDED (see above)
 
 Iteration findings (dump_community.txt + dump_dialog.txt, user passes):
 - Board host = **`Start_Commu_Brd_C`** (pak index; FindAllOf on native AT_UICommunityBoard
