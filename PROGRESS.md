@@ -85,6 +85,23 @@ DEBUG off. **Verify**: grid reads "Goku, community level 3, 1 of 21" / "Not
 acquired, 8 of 21"; detail on A; Sort options on X; the received-emblems notice
 rows.
 
+### COMMUNITY BOARD — CURSOR PINNED NATIVELY (2026-07-03, late) — PENDING final verify
+
+Iteration findings (dump_community.txt + dump_dialog.txt, user passes):
+- Board host = **`Start_Commu_Brd_C`** (pak index; FindAllOf on native AT_UICommunityBoard
+  finds NOTHING). Grid stays rendered UNDER the board → board checked FIRST (frame
+  on_screen gated). Title + 11 socket labels verified perfect in the dump.
+- **Every canvas slot on the board reads 0,0** (render-transform positioning) → geometry
+  dead. The in-adapter TAIL DIFF (memdiff technique, auto on cursor move) pinned the
+  hovered socket: **`Start_Commu_Brd_C +0x500`** (0-based into WL_PanelTbl; 0x5D8 flips
+  1/-1 on/off socket; 0x4F8 = coordinate). In native_offsets.commuBoard; board_selected
+  reads it bounds-checked (silence, never a wrong socket).
+- **Notice-release verified working**: dump_dialog captured the full window flow (boot
+  messages, meal Yes/No with highlight, Soul Emblems Received with Goku/Gohan rows) —
+  window-owned choices and Cmu rows all read. The "2 side options" on the community
+  notice are NOT window rows (dump shows none) — likely the board's LB/RB tabs beneath.
+- DEBUG still ON in screen_community + screen_dialog for one more verify pass; then off.
+
 ### COMMUNITY BOARD + perf fix + dialogue choices + telops (2026-07-03, evening) — PENDING verify
 
 - **GRID INPUT LAG FIXED** (user: "omega delay" on the emblem grid). Causes: the old
