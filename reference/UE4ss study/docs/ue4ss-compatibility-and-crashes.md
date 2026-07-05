@@ -148,6 +148,25 @@ GuiConsoleVisible = 1
 GraphicsAPI = opengl
 ```
 
+## Lifecycle hooks that crash Kakarot (2026-07-04)
+
+`RegisterLoadMapPreHook` / `RegisterLoadMapPostHook` **must not be used on this
+UE4SS build + game** (UE 4.21, SteamStub-packed exe, UE4SS 3.0.1 Beta): registration
+*succeeds* (no Lua error), but the native `UEngine::LoadMap` trampoline lands on a
+wrong address and the game hard-crashes at the FIRST map load — UE4SS.log ends right
+after `Event loop start`, with no crash text.
+
+`NotifyOnNewObject("/Script/Engine.World", cb)` is **too noisy** as a map-change
+signal: every STREAMED sublevel package constructs its own UWorld, so it fired 127
+times in 3 minutes of normal play (bursts of ~25 during loads/cutscenes) — constant
+false "transitions" (and, if each fire flushes caches, FindAllOf-refill lag).
+
+The working signal is `NotifyOnNewObject("/Script/Engine.GameModeBase", cb)`: the
+engine spawns exactly ONE GameMode per map load (Kakarot: `AATTitleGameMode` on the
+title map, `BP_ATGameModeMain_C` in the field) and streaming never spawns one. It
+fires mid-map-switch after the old world's objects are freed but before any Lua tick
+can run — the right moment to flush cached UObject references.
+
 ## The Kakarot resolution, in order
 
 1. Crash at startup → read crash dump: UE4SS frame + memcpy → suspected hooks (wrong).

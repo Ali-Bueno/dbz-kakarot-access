@@ -57,6 +57,11 @@ Registry.register(require("screen_options"))
 -- index, so screen_cooking would otherwise activate and shadow this. Its rows go
 -- Collapsed (on_screen=false) once you pick a mode, so it stays inactive over the recipe
 -- list and shop item list — no overlap with those readers.
+-- Super Attack training shop (Shop_Training_C) — talking to a training NPC (Krillin).
+-- Registered BEFORE the shop group: the training menu opens OVER the shop-top, which can
+-- stay on_screen underneath, so training (the foreground screen) must win. It gates on
+-- Shop_Training_C being on_screen, so it never activates over a regular shop.
+Registry.register(require("screen_training"))
 Registry.register(require("screen_shoplist"))
 Registry.register(require("screen_cooking"))
 Registry.register(require("screen_shop"))
@@ -107,8 +112,14 @@ function App.toggle()
 end
 
 -- Read the on-screen contextual button prompts (the keyhelp bar) on demand.
--- Touches live UObjects, so it runs on the game thread.
-function App.read_keyhelp() ExecuteInGameThread(Keyhelp.announce) end
+-- Touches live UObjects, so it runs on the game thread — and stays inert during a
+-- level transition (same teardown-abort risk as the loops).
+function App.read_keyhelp()
+    ExecuteInGameThread(function()
+        if require("transition").active() then return end
+        Keyhelp.announce()
+    end)
+end
 
 -- Announce an overworld menu section from its EXCmnHeaderFontType enum value. Called by the
 -- SetFontType hook in main.lua (already on the game thread, already pcall-guarded there).

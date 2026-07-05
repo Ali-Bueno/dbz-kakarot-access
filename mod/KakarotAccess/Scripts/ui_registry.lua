@@ -6,6 +6,7 @@
 -- adapter's update(). Adding a screen = register it; no engine changes.
 
 local Core = require("ui_core")
+local Transition = require("transition")
 
 local Registry = {}
 
@@ -25,6 +26,15 @@ function Registry.register(adapter)
 end
 
 local function step()
+    -- Transition gate FIRST (pure Lua): during a map switch the adapters' cached
+    -- widgets are dying, and even an is_active() probe can be an uncatchable abort.
+    -- Drop the active adapter so the post-load screen announces fresh.
+    if Transition.active() then
+        if active and active.reset then active.reset() end
+        active, pending, pending_n = nil, nil, 0
+        return
+    end
+
     local cur = nil
     for _, a in ipairs(adapters) do
         if a.is_active() then cur = a break end

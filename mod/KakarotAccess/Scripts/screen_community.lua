@@ -32,6 +32,7 @@ local I18n = require("i18n")
 local Speech = require("speech")
 local Mem = require("mem")
 local OFF = require("native_offsets")
+local Transition = require("transition")
 
 local BOARD = OFF.commuBoard
 
@@ -410,6 +411,10 @@ local function clear_state()
     last_title, panel_cache = nil, nil
     last_sub = nil
 end
+
+-- Map-switch flush (transition.lua): panel_cache holds live widget refs across ticks —
+-- drop them so a level change can't leave dangling pointers here. Pure Lua.
+Transition.on_begin("screen_community", clear_state)
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
 -- the board ALTERNATE with the A "Switch" button and can both report on_screen — the

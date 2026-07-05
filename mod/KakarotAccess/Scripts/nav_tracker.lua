@@ -28,6 +28,7 @@ local Speech = require("speech")
 local Audio = require("audio")
 local I18n = require("i18n")
 local Registry = require("ui_registry")
+local Transition = require("transition")
 
 local Nav = {}
 
@@ -279,9 +280,53 @@ local function icon_info(actor)
     return t, range
 end
 
--- MAIN/SUB quest priority from the icon type, or nil for anything else.
+-- Raw EMapIcon of an actor's ATMapIconComponent, IGNORING bShowMapIcon. A NAVI-guided
+-- objective usually has bShowMapIcon=false (the navi arrow replaces the static map
+-- icon), yet the component still carries the real MapIconType. Reading it through the
+-- bShowMapIcon-gated map_icon_type/icon_info returned nil for every navi'd quest, which
+-- then fell through to the MAINQUEST default — so EVERY tracked quest, including sub /
+-- secondary story, was announced as "main quest" (user report 2026-07-04). Use this for
+-- CLASSIFICATION (type only); keep the gated readers where icon VISIBILITY matters.
+local function map_icon_type_any(actor)
+    local cls = icon_component_class()
+    if not cls then return nil end
+    local t
+    pcall(function()
+        local comp = actor:GetComponentByClass(cls)
+        if comp and comp:IsValid() then t = tonumber(comp.MapIconType) end
+    end)
+    return t
+end
+
+-- The guided objective's MAIN/SUB kind, read from the navi WIDGET (not the target
+-- actor's EMapIcon). The game drives a UWidgetSwitcher whose active index is the
+-- EMapNaviIcon (AT_enums: 0 PLAYER_NAVI, 1 MAIN_QUEST, 2 SUB_QUEST, 3 DLC6_QUEST). The
+-- navi target actor often has no ATMapIconComponent type (or a main-coded one), so
+-- reading the actor announced EVERY tracked quest as "main" even after switching to the
+-- bShowMapIcon-agnostic actor read — the WIDGET is the game's real main/sub signal.
+-- Returns an equivalent EMapIcon quest type (24 main / 26 sub) or nil if not a quest.
+local function navi_quest_icon(icon)
+    local idx
+    pcall(function()
+        local sw = icon.WL_NaviIconSw
+        if not (sw and sw:IsValid()) then return end
+        local s = sw.WL_NaviIconSwitcher
+        if s and s:IsValid() then idx = tonumber(s.ActiveWidgetIndex) end
+        if not (idx and idx >= 1 and idx <= 3) then
+            local b = sw.WL_NaviBaseSwitcher
+            if b and b:IsValid() then idx = tonumber(b.ActiveWidgetIndex) end
+        end
+    end)
+    if idx == 1 then return 24 end   -- MAIN_QUEST
+    if idx == 2 then return 26 end   -- SUB_QUEST
+    if idx == 3 then return 59 end   -- DLC6_QUEST (sub story)
+    return nil
+end
+
+-- MAIN/SUB quest priority from the icon type, or nil for anything else. Uses the
+-- bShowMapIcon-agnostic reader so a navi'd quest (static icon hidden) still classifies.
 local function quest_pri(actor)
-    local t = map_icon_type(actor)
+    local t = map_icon_type_any(actor)
     if t and MAIN_QUEST_ICONS[t] then return PRI_MAIN end
     if t and SUB_QUEST_ICONS[t] then return PRI_SUB end
     return nil
@@ -366,12 +411,105 @@ end
 
 -- ---- NavMesh route (the "perfect path" improvement) --------------------------------
 
+-- Snap box for projecting an off-mesh point onto the NavMesh (half-extents, UE units).
+-- Wide + TALL on Z: the player often stands slightly off the walkable surface and an
+-- item can sit on a ledge/step, so a point a few metres off the mesh still resolves.
+-- This is the key reason FindPath returned nothing (endpoints off-mesh) in the tight
+-- on-foot spots where a route matters most (user 2026-07-04).
+local NAV_PROJECT_EXTENT = { X = 250, Y = 250, Z = 600 }
+
+-- Project a world point onto the NavMesh; returns {x,y,z} or nil if it can't snap.
+local function project_to_nav(navsys, ctx, x, y, z)
+    local out
+    pcall(function()
+        local p = navsys:ProjectPointToNavigation(ctx, { X = x, Y = y, Z = z }, nil, nil,
+            NAV_PROJECT_EXTENT)
+        -- A failed projection returns (0,0,0); reject that so we keep the raw point.
+        if p and not (p.X == 0 and p.Y == 0 and p.Z == 0) then
+            out = { x = p.X, y = p.Y, z = p.Z }
+        end
+    end)
+    return out
+end
+
+-- ROOT CAUSE of "no path" in this game: it builds NavMesh ONLY around navigation
+-- invokers (bGenerateNavigationOnlyAroundNavigationInvokers = true) — i.e. tiles exist
+-- only near active AI/NPCs. Out in the field, away from mobs, there are NO tiles, so
+-- FindPath returns nothing no matter how we project. The fix is to register the PLAYER
+-- as a navigation invoker, which forces tiles to generate around him. Radius covers the
+-- nearby-obstacle case (the tight on-foot spots where a route matters); far objectives
+-- keep the straight-line beacon until you get close and tiles fill in. Tiles take a few
+-- frames to build after registering, so the first path may be empty — the periodic
+-- repath then succeeds.
+local NAV_INVOKER_GEN = 6000       -- uu (~60 m) tile-generation radius around the player
+local NAV_INVOKER_REMOVAL = 8000   -- uu; must be >= gen (tiles past this are freed)
+local invoker_key = nil            -- pawn address we've registered (nil = not registered)
+local invoker_nav = nil            -- the live nav system we registered with (for unregister)
+
+-- The LIVE UNavigationSystemV1 for the pawn's world (NOT the CDO): registering an invoker
+-- and generating tiles need the world instance. Falls back to the CDO for the stateless
+-- static calls (project / findpath) if the getter fails.
+local function live_navsys(ctx)
+    local cdo = StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
+    if not (cdo and cdo:IsValid()) then return nil end
+    local nav
+    pcall(function() nav = cdo:GetNavigationSystem(ctx) end)
+    if nav and nav:IsValid() then return nav end
+    return cdo
+end
+
+-- Register the player pawn as a nav invoker once (per pawn). Idempotent by address.
+-- Mark registered BEFORE the reflected call: if RegisterNavigationInvoker ever raised
+-- an uncatchable C++ abort on this game, marking first bounds the damage to a SINGLE
+-- dead tick instead of aborting the nav loop every tick (which would silence the
+-- beacon). Worst case the invoker isn't actually set → route falls back to straight line.
+local function ensure_invoker(navsys, pawn)
+    local key = tostring(pawn:GetAddress())
+    if invoker_key == key then return end
+    invoker_key, invoker_nav = key, navsys
+    pcall(function() navsys:RegisterNavigationInvoker(pawn, NAV_INVOKER_GEN, NAV_INVOKER_REMOVAL) end)
+end
+
+-- Stop forcing tile generation (route turned off / level change). Best-effort.
+local function clear_invoker()
+    if invoker_key and Core.valid(invoker_nav) then
+        local pc = FindFirstOf("PlayerController")
+        pcall(function()
+            local pw = pc and pc.Pawn
+            if pw then invoker_nav:UnregisterNavigationInvoker(pw) end
+        end)
+    end
+    invoker_key, invoker_nav = nil, nil
+end
+
+-- Is it safe to make the NavMesh reflected calls on this game? They are unverified and
+-- this game turns bad property/function access into an UNCATCHABLE C++ abort that pcall
+-- can't trap — which, in the per-3s route loop, would blip the beacon repeatedly. So a
+-- persistent one-shot probe (survives hot reload via _G): mark "testing" BEFORE the
+-- first call; if we ever re-enter still "testing", the previous attempt aborted mid-way
+-- → mark "bad" and never touch the NavMesh again this session (straight-line fallback).
+-- Reaching the end once marks it "ok" (proven safe) forever.
+local function nav_native_bad()
+    local st = _G.__KakarotRouteNative
+    if st == "bad" then return true end
+    if st == "testing" then _G.__KakarotRouteNative = "bad"; return true end  -- prev abort
+    return false
+end
+
 local function compute_route(pawn, px, py, pz, tx, ty, tz)
+    if nav_native_bad() then return nil end
+    local probing = _G.__KakarotRouteNative == nil
+    if probing then _G.__KakarotRouteNative = "testing" end
     local ok, pts = pcall(function()
-        local navsys = StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
-        if not navsys or not navsys:IsValid() then return nil end
+        local navsys = live_navsys(pawn)
+        if not navsys then return nil end
+        ensure_invoker(navsys, pawn)
+        -- Snap both endpoints onto the mesh first — FindPath returns nothing when either
+        -- end is off-mesh, which was the common failure. Fall back to the raw point.
+        local s = project_to_nav(navsys, pawn, px, py, pz) or { x = px, y = py, z = pz }
+        local e = project_to_nav(navsys, pawn, tx, ty, tz) or { x = tx, y = ty, z = tz }
         local path = navsys:FindPathToLocationSynchronously(pawn,
-            { X = px, Y = py, Z = pz }, { X = tx, Y = ty, Z = tz }, nil, nil)
+            { X = s.x, Y = s.y, Z = s.z }, { X = e.x, Y = e.y, Z = e.z }, nil, nil)
         -- NOTE: we don't call the path's reflected IsValid() — UE4SS shadows it with
         -- its own UObject validity check. An unusable path just has <2 PathPoints.
         if not path then return nil end
@@ -385,6 +523,9 @@ local function compute_route(pawn, px, py, pz, tx, ty, tz)
         end
         return out
     end)
+    -- Reached here → the reflected calls did NOT abort the process (even if pcall caught a
+    -- plain Lua error). Mark the NavMesh path verified-safe so the probe never disables it.
+    _G.__KakarotRouteNative = "ok"
     if ok and pts then return pts end
     return nil
 end
@@ -455,12 +596,39 @@ local function world_alive()
     return Core.valid(mm) and Core.on_screen(mm)
 end
 
+-- Map-switch flush (transition.lua): the tracked actor, the minimap widget and the
+-- navi icon list all lived in the dead level — nil them before any tick could probe
+-- a freed object. Pure Lua + native audio stop only.
+Transition.on_begin("nav_tracker", function()
+    drop_target()
+    mm_cache, navi_icons = nil, nil
+    mm_retry, navi_next = 0, 0
+    route_fails = 0          -- the new level may have a NavMesh even if this one didn't
+    world_gone = 0
+    invoker_key, invoker_nav = nil, nil   -- pawn/nav system are new next level; re-register
+    gated_prev = true        -- audio is being stopped right here
+    Audio.stop()
+end)
+
 
 local function step()
     tick = tick + 1
     if not on then return end
 
-    -- UI gate FIRST, touching NO engine object at all (it's a pure Lua check): while
+    -- TRANSITION GATE FIRST (pure Lua): a map switch just happened (return to title,
+    -- cutscene-driven map change) — every cached engine reference is dying or already
+    -- freed, and even probing one is an uncatchable abort. Fully inert until the new
+    -- level has settled (transition.lua's grace period).
+    if Transition.active() then
+        if not gated_prev then
+            gated_prev = true
+            Audio.stop()
+        end
+        route, route_idx = nil, 0
+        return
+    end
+
+    -- UI gate next, touching NO engine object at all (it's a pure Lua check): while
     -- a pausing menu/dialog/loading screen owns the display, this loop goes fully
     -- inert. SAFETY-CRITICAL, not just comfort: "return to title" tears the level
     -- down BEHIND its confirm dialog + loading screen, and even probing the
@@ -497,6 +665,18 @@ local function step()
     if not pawn then return end
     local px, py, pz = actor_pos(pawn)
     if not px then return end
+
+    -- Register the player as a NavMesh invoker as soon as we're free-roaming (route mode
+    -- only), so tiles are already building before a target is picked. Runs only until
+    -- registered (guarded by pawn key), so it's a one-off cost, not per-tick. Goes through
+    -- the same one-shot native-safety probe as compute_route (this may be the FIRST nav
+    -- reflected call, before any target): if it aborts, the route feature self-disables.
+    if route_mode and not invoker_key and not nav_native_bad() then
+        if _G.__KakarotRouteNative == nil then _G.__KakarotRouteNative = "testing" end
+        local ns = live_navsys(pawn)
+        if ns then ensure_invoker(ns, pawn) end
+        _G.__KakarotRouteNative = "ok"
+    end
 
     -- Re-scan the game's guidance markers ~1/s (even when idle — scanning every
     -- tick would hammer reflection): picks up a fresh quest marker automatically
@@ -625,8 +805,11 @@ function Nav.start()
         if not busy then
             busy = true
             ExecuteInGameThread(function()
-                local ok, err = pcall(step)
+                -- busy cleared on ENTRY: an uncatchable C++ error killing this callback
+                -- must not leave the guard stuck and the radar silent for the session
+                -- (see ui_core.loop for the full rationale).
                 busy = false
+                local ok, err = pcall(step)
                 if not ok then print("[KakarotAccess] nav step error: " .. tostring(err) .. "\n") end
             end)
         end
@@ -689,8 +872,8 @@ end
 -- A companion target is MANUAL: the auto-scan won't steal it back.
 function Nav.cycle_companion()
     ExecuteInGameThread(function()
-        -- ui_muted FIRST (pure Lua), then the world gate — see Nav.where.
-        if ui_muted() or not world_alive() then
+        -- transition + ui_muted FIRST (pure Lua), then the world gate — see Nav.where.
+        if Transition.active() or ui_muted() or not world_alive() then
             Speech.say(I18n.t("nav_no_companion"), true)
             return
         end
@@ -726,7 +909,10 @@ end
 function Nav.toggle_route()
     route_mode = not route_mode
     route_fails = 0   -- re-arm pathfinding attempts
-    if not route_mode then route, route_idx = nil, 0 end
+    if not route_mode then
+        route, route_idx = nil, 0
+        clear_invoker()   -- stop forcing tile generation when route guidance is off
+    end
     Speech.say(I18n.t(route_mode and "nav_route_on" or "nav_route_off"), true)
     return route_mode
 end
@@ -734,9 +920,10 @@ end
 -- F5: on-demand "where is it?" — type, distance, clock direction, above/below.
 function Nav.where()
     ExecuteInGameThread(function()
-        -- ui_muted FIRST (pure Lua — probing ANY engine object during a menu-covered
+        -- transition + ui_muted FIRST (pure Lua — probing ANY engine object during a
         -- level teardown can abort), then the world gate, then the target.
-        if ui_muted() or not world_alive() or not target or not Core.valid(target.actor) then
+        if Transition.active() or ui_muted() or not world_alive()
+            or not target or not Core.valid(target.actor) then
             Speech.say(I18n.t("nav_no_target"), true)
             return
         end
@@ -777,7 +964,7 @@ end
 -- open in combat or block combat input. Pure-Lua ui_muted is checked first (probing
 -- the world during a menu-covered teardown can abort).
 function Nav.field_ready()
-    return not ui_muted() and world_alive()
+    return not Transition.active() and not ui_muted() and world_alive()
 end
 
 -- Snapshot the currently navigable field targets, grouped into the L1/R1 categories.
@@ -790,7 +977,14 @@ end
 -- Diagnostic: dump every minimap candidate (type/group/dist/range/kept) to
 -- dumps/dump_radar.txt each time the R2 menu opens — so "only fishing + quests show"
 -- can be diagnosed offline (is a category ABSENT from the minimap, or being FILTERED?).
-local RADAR_DEBUG = false
+local RADAR_DEBUG = false  -- heavy diagnostic: FindAllOf probes + UniqueId/InteractComponent
+                          -- reflection. Reads UniqueId on arbitrary actors, which can raise
+                          -- the uncatchable C++ abort — leave OFF in normal play (turning it
+                          -- on stranded do_open and R3 stopped opening, 2026-07-04).
+local NAVI_DEBUG = false   -- light + SAFE navi main/sub diagnostic. CONFIRMED 2026-07-04:
+                          -- switcher index 1→MAIN(24), 2→SUB(26); actorEMapIcon was always
+                          -- nil (why it used to default to main). navi_quest_icon is correct.
+                          -- Only safe reads (switcher index + component type); no UniqueId.
 
 -- Named NPC UniqueId → spoken name. The game identifies field characters by codes:
 --   Cpl0NN = the main/party characters (Cpl001 Goku, Cpl002 Gohan, …) — recognizable.
@@ -870,8 +1064,12 @@ function Nav.list_targets()
         if diag then
             local cls = "?"
             pcall(function() cls = actor:GetClass():GetFName():ToString() end)
-            diag[#diag + 1] = string.format("  grp=%s noun=%s name=%s cls=%s d=%.0f range=%s kept=%s src=%s",
-                grp, noun, tostring(name), cls, d, tostring(range), tostring(kept), src)
+            local hid, ht = "?", "?"
+            pcall(function() hid = tostring(actor.bHidden) end)
+            pcall(function() ht = tostring(tonumber(actor.CurrentHiddenType)) end)
+            diag[#diag + 1] = string.format(
+                "  grp=%s noun=%s name=%s cls=%s d=%.0f range=%s kept=%s src=%s bHidden=%s hiddenType=%s",
+                grp, noun, tostring(name), cls, d, tostring(range), tostring(kept), src, hid, ht)
         end
         if not kept then return end
         seen[key] = true
@@ -895,7 +1093,11 @@ function Nav.list_targets()
             if Core.valid(icon) and icon_in_use(icon) then
                 local ok, ta = pcall(function() return icon.TargetActor end)
                 if ok and Core.valid(ta) then
-                    add_icon(ta, (icon_info(ta)) or 24, "navi")   -- default MAINQUEST if untyped
+                    -- Classify from the navi WIDGET's EMapNaviIcon switcher (the game's
+                    -- real main/sub signal); fall back to the target's EMapIcon type
+                    -- (bShowMapIcon-agnostic), then the MAINQUEST default only if both
+                    -- are unavailable. Reading the actor alone made every quest "main".
+                    add_icon(ta, navi_quest_icon(icon) or map_icon_type_any(ta) or 24, "navi")
                 end
             end
         end
@@ -918,11 +1120,23 @@ function Nav.list_targets()
     end
     -- 3) talkable field NPCs (Chi-Chi, shopkeepers, quest givers): AQuestCharacter uses
     -- a MobIconComponent, NOT the ATMapIconComponent, so it's absent from MapIconList
-    -- above. Scan them directly; the distance cap drops the game's far parked pool.
+    -- above. Scan them directly. Beyond the distance cap, filter by PRESENCE: the game
+    -- keeps a pool of preloaded characters (Trunks, etc.) who are NOT part of the current
+    -- story beat and are kept HIDDEN by its "absence observer" (AQuestCharacter.
+    -- CurrentHiddenType != 0, or bHidden). Skipping those stops future characters like
+    -- Trunks from being tracked before they appear in the story (user report 2026-07-04).
     do
+        local function npc_present(npc)
+            local hidden = false
+            pcall(function() hidden = npc.bHidden end)
+            if hidden == true or hidden == 1 then return false end
+            local ht = 0
+            pcall(function() ht = tonumber(npc.CurrentHiddenType) or 0 end)
+            return ht == 0
+        end
         local npcs = FindAllOf("QuestCharacter") or {}
         for _, npc in pairs(npcs) do
-            if Core.valid(npc) then
+            if Core.valid(npc) and npc_present(npc) then
                 add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
             end
         end
@@ -933,12 +1147,15 @@ function Nav.list_targets()
     -- Classify by class name; distance-capped like NPCs so far collectibles don't clutter.
     do
         -- A collected / inactive collectible is typically hidden — skip hidden actors so
-        -- a just-collected Field Memory drops out of the list (best-effort: if IsHidden
-        -- isn't callable it defaults to visible, i.e. no filtering).
+        -- a just-collected Field Memory drops out of the list. Read the REFLECTED AActor
+        -- property bHidden (CXX dump @0x90). Do NOT call IsHidden(): it is NOT reflected
+        -- in this game, and calling a non-existent member raises the uncatchable C++
+        -- error that killed this whole loop (seen live 2026-07-04 — the R3 menu went
+        -- dead for the session; same lesson as CharacterName in npc_name above).
         local function visible_actor(a)
             local hidden = false
-            pcall(function() hidden = a:IsHidden() end)
-            return hidden ~= true
+            pcall(function() hidden = a.bHidden end)
+            return not (hidden == true or hidden == 1)
         end
         for _, cls in ipairs({ "FieldActionPointActor", "PlacementObjectInfo", "AccessPointItemBase" }) do
             for _, a in pairs(FindAllOf(cls) or {}) do
@@ -948,6 +1165,49 @@ function Nav.list_targets()
                     local noun = cn:find("Memories", 1, true) and "cat_memory" or "cat_item"
                     add_target(a, "collectibles", noun, nil, "collectible")
                 end
+            end
+        end
+    end
+
+    -- SAFE navi-type diagnostic (NAVI_DEBUG): for each in-use quest arrow, the two
+    -- switcher indices (EMapNaviIcon: 1 MAIN, 2 SUB, 3 DLC6), what navi_quest_icon
+    -- resolved, and the target's own EMapIcon — so a wrong main/sub label is pinned to
+    -- the exact source (widget switcher vs actor type). ONLY safe pcall'd reads; NO
+    -- UniqueId (that abort is what killed R3 when RADAR_DEBUG was on).
+    if NAVI_DEBUG then
+        local lines = {}
+        local icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
+        for _, icon in pairs(icons) do
+            if Core.valid(icon) and icon_in_use(icon) then
+                local iidx, bidx = "?", "?"
+                pcall(function()
+                    local sw = icon.WL_NaviIconSw
+                    if sw and sw:IsValid() then
+                        local s = sw.WL_NaviIconSwitcher
+                        if s and s:IsValid() then iidx = tostring(tonumber(s.ActiveWidgetIndex)) end
+                        local b = sw.WL_NaviBaseSwitcher
+                        if b and b:IsValid() then bidx = tostring(tonumber(b.ActiveWidgetIndex)) end
+                    end
+                end)
+                local resolved, atype = "nil", "nil"
+                pcall(function() resolved = tostring(navi_quest_icon(icon)) end)
+                pcall(function()
+                    local ta = icon.TargetActor
+                    if Core.valid(ta) then atype = tostring(map_icon_type_any(ta)) end
+                end)
+                lines[#lines + 1] = string.format(
+                    "  NAVI iconSwitcher=%s baseSwitcher=%s resolved=%s actorEMapIcon=%s",
+                    iidx, bidx, resolved, atype)
+            end
+        end
+        if #lines > 0 then
+            local src = debug.getinfo(1, "S").source:sub(2)
+            local dir = src:match("^(.*)[/\\]") or "."
+            local f = io.open(dir .. "\\dumps\\dump_radar.txt", "a")
+            if f then
+                f:write(string.format("[%d] navi types: %d\n", os.time(), #lines))
+                f:write(table.concat(lines, "\n") .. "\n")
+                f:close()
             end
         end
     end
@@ -1092,10 +1352,11 @@ function Nav.dump()
         -- Full radar state, so a silent radar can be diagnosed from this file alone.
         -- ui_muted is checked FIRST and short-circuits: with a menu up we must not
         -- probe the minimap at all (level teardown hides behind menus).
+        local trans = Transition.active()
         local muted = ui_muted()
-        f:write(string.format("on=%s route_mode=%s ui_muted=%s world_alive=%s adapter_index=%s\n",
-            tostring(on), tostring(route_mode), tostring(muted),
-            tostring(not muted and world_alive()),
+        f:write(string.format("on=%s route_mode=%s transition=%s ui_muted=%s world_alive=%s adapter_index=%s\n",
+            tostring(on), tostring(route_mode), tostring(trans), tostring(muted),
+            tostring(not trans and not muted and world_alive()),
             tostring(Registry.active_index and Registry.active_index())))
         -- KeyConfig button-resolver state (for the fishing/QTE button announcements).
         pcall(function()
@@ -1108,9 +1369,11 @@ function Nav.dump()
                 st.max, st.sum / st.n, st.n))
             _G.__KakarotStepStats = nil
         end
-        -- Gates: with a menu up or the world hidden, actor reads below could abort.
-        if muted or not world_alive() then
-            f:write("GATED (" .. (muted and "ui" or "world") .. ") — actor sections skipped\n")
+        -- Gates: mid-transition, with a menu up or the world hidden, actor reads
+        -- below could abort.
+        if trans or muted or not world_alive() then
+            f:write("GATED (" .. (trans and "transition" or muted and "ui" or "world")
+                .. ") — actor sections skipped\n")
             f:write("current target: " .. (target and (target.label .. " " .. target.key) or "none") .. "\n")
             f:close()
             Speech.say("nav dump written (gated)", true)
@@ -1207,10 +1470,17 @@ function Nav.dump()
                     i, c.d / M, c.actor:GetFullName()))
             end
         end
-        -- NavMesh probe: can the engine path from the player to the player?
+        -- NavMesh probe: invoker state + whether tiles are still building + can the
+        -- engine path a short hop from the player? (10 m ahead.) If "building=true",
+        -- retry the probe a moment later; if invoker=nil the registration never ran.
         if pawn and px then
+            local ns = live_navsys(pawn)
+            local building = "?"
+            if ns then pcall(function() building = tostring(ns:IsNavigationBeingBuilt(pawn)) end) end
+            f:write(string.format("nav invoker registered=%s building=%s\n",
+                tostring(invoker_key ~= nil), building))
             local pts = compute_route(pawn, px, py, pz, px + 10 * M, py, pz)
-            f:write("navmesh probe: " .. (pts and (#pts .. " points") or "no path") .. "\n")
+            f:write("navmesh probe (10m ahead): " .. (pts and (#pts .. " points") or "no path") .. "\n")
         end
         f:write("current target: " .. (target and (target.label .. " " .. target.key) or "none") .. "\n")
         f:close()

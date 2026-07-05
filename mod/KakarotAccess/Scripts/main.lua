@@ -127,6 +127,18 @@ RegisterKeyBind(Key.R, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function()
     Speech.say("Mod reloaded", true)
 end)
 
+-- Global transition gate: a new-UWorld notify flags "map switch in progress" so every
+-- loop goes inert and every UObject cache is flushed before any tick could probe a
+-- freed object of the old level (an uncatchable abort — the recurring return-to-title
+-- / post-cutscene crash). NOT a LoadMap hook: that trampoline crashes this game (see
+-- transition.lua). Registered ONCE here (a reload must not re-register); the callback
+-- reaches the current module instance through _G.
+pcall(function()
+    if require("transition").install() then
+        print("[" .. MOD .. "] Transition gate (world notify) registered.\n")
+    end
+end)
+
 -- Field-menu section reader — the mod's ONE RegisterHook, in its own file so it can be
 -- disabled by simply deleting header_hook.lua (see that file). Registered ONCE here (a reload
 -- must not re-register it); the whole thing is pcall'd so even a failure to install can't stop

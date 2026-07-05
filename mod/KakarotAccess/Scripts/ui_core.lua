@@ -13,6 +13,7 @@
 -- polling-fallback path the strategy doc allows.
 
 local Speech = require("speech")
+local Transition = require("transition")
 
 local Core = {}
 
@@ -112,10 +113,28 @@ local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-
                             -- (raised from 20: the periodic absent-class FindAllOf scans
                             -- were the main source of gameplay lag spikes, 2026-07-03)
 
+-- Per-tick FindAllOf budget — the fix for the periodic menu-navigation lag SPIKE
+-- (2026-07-04). Each absent class backs off for ABSENT_BACKOFF ticks, but ~20 adapters
+-- probe on the SAME poll loop, so their back-offs expire on the SAME tick and that one
+-- tick runs 20 full UObject-array scans at once (felt as a stutter every few seconds
+-- while navigating). Capping scans per tick spreads that work: deferred classes get no
+-- back-off, so they simply retry next tick until a slot frees. This ALSO self-staggers
+-- steady state — once served, each class's fresh back-off expires on a different tick.
+-- Reset once per poll tick by Core.loop (before the step runs).
+local scan_budget = 0
+local SCANS_PER_TICK = 3
+function Core.begin_scan_tick() scan_budget = SCANS_PER_TICK end
+local function scan_allowed()
+    if scan_budget <= 0 then return false end
+    scan_budget = scan_budget - 1
+    return true
+end
+
 function Core.cached_live(cls_name, tick)
     local c = live_cache[cls_name]
     if Core.valid(c) then return c end
     if tick and live_backoff[cls_name] and tick < live_backoff[cls_name] then return nil end
+    if not scan_allowed() then return nil end   -- budget spent: defer, retry next tick (no back-off)
     c = Core.first_live(cls_name)
     live_cache[cls_name] = c
     if not c and tick then live_backoff[cls_name] = tick + ABSENT_BACKOFF end
@@ -135,12 +154,24 @@ local REFRESH_EVERY = 100  -- ticks (~10s) between full re-scans of a class list
 function Core.cached_all(cls_name, tick)
     local c = all_cache[cls_name]
     if not c or (tick and (not all_next[cls_name] or tick >= all_next[cls_name])) then
+        -- Honour the per-tick scan budget (see Core.cached_live): if it's spent, reuse
+        -- the stale list (or {} on first sight) and try the refresh on a later tick.
+        -- Callers already validity/visibility-check every entry, so stale is harmless.
+        if not scan_allowed() then return c or {} end
         c = FindAllOf(cls_name) or {}
         all_cache[cls_name] = c
         if tick then all_next[cls_name] = tick + REFRESH_EVERY end
     end
     return c
 end
+
+-- Drop every cached widget reference. Run at each map switch (transition.lua): some
+-- cached widgets are per-level (the field HUD family), and probing a freed one after
+-- the level died — even just IsValid — is an uncatchable C++ abort. Pure Lua.
+Transition.on_begin("ui_core", function()
+    live_cache, live_backoff = {}, {}
+    all_cache, all_next = {}, {}
+end)
 
 -- First currently on-screen instance of a class, or nil. Use this instead of cached_live
 -- when a class has SEVERAL pooled instances and the active (visible) one ALTERNATES between
@@ -256,6 +287,16 @@ function Core.loop(step)
         if not busy then
             busy = true
             ExecuteInGameThread(function()
+                -- Clear the queue guard on ENTRY, not exit: some engine errors on this
+                -- game are C++ exceptions pcall cannot catch — they kill this callback
+                -- mid-flight, and a still-true `busy` would silence the loop for the
+                -- whole session (seen live 2026-07-04 with the radar menu). Clearing
+                -- here keeps the anti-pile-up purpose (the game thread runs this
+                -- atomically, so at most one extra step queues while we run).
+                busy = false
+                -- One FindAllOf budget per poll tick (see Core.cached_live) — bounds the
+                -- per-tick scan cost so simultaneous back-off expiries can't spike.
+                Core.begin_scan_tick()
                 -- Step timing telemetry (read via Ctrl+F5's nav dump): the max/avg
                 -- game-thread cost of one reader tick, to pin lag spikes with data.
                 local t0 = os.clock()
@@ -266,7 +307,6 @@ function Core.loop(step)
                 if dt > st.max then st.max = dt end
                 st.n = st.n + 1
                 st.sum = st.sum + dt
-                busy = false
                 if not ok then print("[KakarotAccess] UI step error: " .. tostring(err) .. "\n") end
             end)
         end

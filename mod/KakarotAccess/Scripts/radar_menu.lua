@@ -27,6 +27,7 @@ local Input = require("input")
 local Speech = require("speech")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
+local Transition = require("transition")
 
 local Menu = {}
 
@@ -105,6 +106,17 @@ end
 -- ---- per-tick step (game thread) ----------------------------------------------------
 
 local function step()
+    -- Transition gate FIRST (pure Lua + native pad calls only): a map switch is in
+    -- progress — close the menu, drop the actor refs in `cats`, and NEVER leave the
+    -- pad blocked across a level change.
+    if Transition.active() then
+        if blocked then Input.block(false) end
+        blocked, open, draining = false, false, false
+        cats = {}
+        prev_btn = 0
+        return
+    end
+
     local snap = Input.read()
     if not snap then
         -- pad lost — never leave the game blocked
@@ -181,8 +193,11 @@ function Menu.start()
         if not busy then
             busy = true
             ExecuteInGameThread(function()
-                local ok, err = pcall(step)
+                -- busy cleared on ENTRY: an uncatchable C++ error killing this callback
+                -- must not leave the guard stuck and R3 dead for the session — exactly
+                -- what happened live 2026-07-04 (see ui_core.loop for the rationale).
                 busy = false
+                local ok, err = pcall(step)
                 if not ok then
                     -- never strand the pad in a blocked state on an error
                     if blocked then Input.block(false) end

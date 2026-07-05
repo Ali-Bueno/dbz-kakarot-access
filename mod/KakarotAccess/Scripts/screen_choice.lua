@@ -49,7 +49,17 @@ end
 local function row_hover(c)
     local hov = false
     pcall(function() hov = Core.is_visible(c.HoverImage) or Core.is_visible(c.Dmy_Choice_Hover) end)
-    return hov
+    if hov then return true end
+    -- Some choice rows don't toggle a hover image at all: the Yes/No embedded in a quest
+    -- accept window (Quest_Sub → Choice_Win01 → Choice_Cmd00/01) marks the SELECTED row
+    -- by PLAYING its loop animation (Anim_Loop native / Loop blueprint), exactly like the
+    -- community-board emblem cursor. Without this the selection never resolves, so moving
+    -- between options announced nothing (Roshi's "help find the book?" — user 2026-07-04).
+    pcall(function()
+        hov = (Core.valid(c.Anim_Loop) and c:IsAnimationPlaying(c.Anim_Loop))
+            or (Core.valid(c.Loop) and c:IsAnimationPlaying(c.Loop))
+    end)
+    return hov == true
 end
 
 -- The active choice window (message prompt + fixed Yes/No), if one is on screen.
