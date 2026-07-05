@@ -24,7 +24,9 @@ local Choice = {}
 -- Diagnostics: if the NPC response menu still reads wrong/silent, this writes what it
 -- found (window class + message, each row's class/label/hover) to dumps/dump_choice.txt
 -- on every prompt change. Turn OFF once confirmed working in-game.
-local DEBUG = false
+local DEBUG = false  -- selection signal identified 2026-07-04 (HoverImage
+                     -- ColorAndOpacity.A = 1 selected / 0 not); dump left in for future
+                     -- variants. Set true to append per-row signals to dump_choice.txt.
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -47,14 +49,21 @@ local function row_label(c)
     return label
 end
 local function row_hover(c)
+    -- SELECTED option: its HoverImage (native) / Dmy_Choice_Hover (blueprint) has
+    -- ColorAndOpacity.A ≈ 1; the unselected one ≈ 0. BOTH stay IsVisible()==true, so a
+    -- plain visibility check can't tell them apart — that was the bug (moving Yes/No
+    -- never re-announced). Verified via dump_choice.txt on Roshi's "help find the book?"
+    -- (2026-07-04): selected colA=1.00, other colA=0.00; LinkImage is the inverse; the
+    -- loop animation flickers so it's unreliable on its own.
+    local a
+    pcall(function() a = c.HoverImage.ColorAndOpacity.A end)
+    if a == nil then pcall(function() a = c.Dmy_Choice_Hover.ColorAndOpacity.A end) end
+    if type(a) == "number" then return a >= 0.5 end
+    -- Fallback for an unknown choice-row variant with no HoverImage: visibility, then the
+    -- loop animation (native Anim_Loop / blueprint Loop).
     local hov = false
     pcall(function() hov = Core.is_visible(c.HoverImage) or Core.is_visible(c.Dmy_Choice_Hover) end)
     if hov then return true end
-    -- Some choice rows don't toggle a hover image at all: the Yes/No embedded in a quest
-    -- accept window (Quest_Sub → Choice_Win01 → Choice_Cmd00/01) marks the SELECTED row
-    -- by PLAYING its loop animation (Anim_Loop native / Loop blueprint), exactly like the
-    -- community-board emblem cursor. Without this the selection never resolves, so moving
-    -- between options announced nothing (Roshi's "help find the book?" — user 2026-07-04).
     pcall(function()
         hov = (Core.valid(c.Anim_Loop) and c:IsAnimationPlaying(c.Anim_Loop))
             or (Core.valid(c.Loop) and c:IsAnimationPlaying(c.Loop))
@@ -127,24 +136,54 @@ local function context(win)
     return nil
 end
 
-local last_dumped = nil
-local function dump(win, labels, sel, ctx)
+-- Diagnostic: per-row SELECTION signals — for pinning what distinguishes the highlighted
+-- option (Roshi's Yes/No: "Yes" has a gold border) from the rest. For each on-screen
+-- choice row: label + HoverImage/LinkImage/ShadowImage visibility, render opacity and
+-- ColorAndOpacity.A, and whether the Loop/Anim_Loop animation is playing. Appended
+-- whenever the combined signature CHANGES, so moving Yes<->No records both states in one
+-- session. Read dumps/dump_choice.txt to see which field flips with the cursor.
+local function img_sig(c, name)
+    local o
+    if not pcall(function() o = c[name] end) or not Core.valid(o) then return name .. "=nil" end
+    local vis, op, a, ba = "?", "?", "?", "?"
+    pcall(function() vis = tostring(Core.is_visible(o)) end)
+    pcall(function() op = string.format("%.2f", o.RenderOpacity) end)
+    pcall(function() a = string.format("%.2f", o.ColorAndOpacity.A) end)
+    pcall(function() ba = string.format("%.2f", o.BrushColor.A) end)
+    return string.format("%s(vis=%s op=%s colA=%s brA=%s)", name, vis, op, a, ba)
+end
+
+local function anim_sig(c)
+    local loop = "?"
+    pcall(function()
+        local a = Core.valid(c.Anim_Loop) and c.Anim_Loop or (Core.valid(c.Loop) and c.Loop or nil)
+        if a then loop = tostring(c:IsAnimationPlaying(a)) else loop = "noanim" end
+    end)
+    return "loop=" .. loop
+end
+
+local function row_sig(c)
+    return string.format("%s | %s %s %s %s",
+        tostring(row_label(c)), img_sig(c, "HoverImage"), img_sig(c, "Dmy_Choice_Hover"),
+        img_sig(c, "LinkImage"), anim_sig(c))
+end
+
+local last_sig = nil
+local function dump_signals(win, ctx)
+    local rows = all_rows()
+    local parts = {}
+    for _, c in ipairs(rows) do parts[#parts + 1] = row_sig(c) end
+    local sig = table.concat(parts, " || ")
+    if sig == last_sig then return end
+    last_sig = sig
     local src = debug.getinfo(1, "S").source:sub(2)
     local dir = src:match("^(.*)[/\\]") or "."
     local f = io.open(dir .. "\\dumps\\dump_choice.txt", "a")
     if not f then return end
     local wn = "none"
     if Core.valid(win) then pcall(function() wn = win:GetFullName():match("^%S+ (%S+)") or "?" end) end
-    f:write(string.format("[%d] win=%s ctx=%s sel=%s labels=[%s]\n",
-        os.time(), wn, tostring(ctx), tostring(sel), table.concat(labels, " | ")))
-    for _, cls in ipairs(ROW_CLASSES) do
-        for _, c in ipairs(Core.cached_all(cls, tick)) do
-            if Core.on_screen(c) then
-                f:write(string.format("  %s label=%s hover=%s\n",
-                    cls, tostring(row_label(c)), tostring(row_hover(c))))
-            end
-        end
-    end
+    f:write(string.format("[%d] win=%s ctx=%s\n", os.time(), wn, tostring(ctx)))
+    for _, p in ipairs(parts) do f:write("  " .. p .. "\n") end
     f:close()
 end
 
@@ -156,10 +195,7 @@ function Choice.is_active()
     -- The prompt is resolved once per activation (it doesn't change mid-choice).
     local ctx = (state and state.ctx) or context(win)
     state = { labels = labels, sel = sel, ctx = ctx }
-    if DEBUG and ctx ~= last_dumped then
-        last_dumped = ctx
-        pcall(dump, win, labels, sel, ctx)
-    end
+    if DEBUG then pcall(dump_signals, win, ctx) end
     return true
 end
 

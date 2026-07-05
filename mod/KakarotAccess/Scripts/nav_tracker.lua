@@ -29,6 +29,7 @@ local Audio = require("audio")
 local I18n = require("i18n")
 local Registry = require("ui_registry")
 local Transition = require("transition")
+local Ray = require("raycast")
 
 local Nav = {}
 
@@ -530,18 +531,77 @@ local function compute_route(pawn, px, py, pz, tx, ty, tz)
     return nil
 end
 
--- Current guidance point: the next route corner, or the target itself.
--- Advances corners as the player passes them.
-local function guidance_point(px, py, pz, tx, ty, tz)
-    if not route_mode or not route then return tx, ty, tz end
-    while route_idx <= #route do
-        local wp = route[route_idx]
-        local dh = math.sqrt((wp.x - px) ^ 2 + (wp.y - py) ^ 2)
-        if dh <= WAYPOINT_DIST and math.abs(wp.z - pz) <= WAYPOINT_VERT then
-            route_idx = route_idx + 1
-        else
-            return wp.x, wp.y, wp.z
+-- ---- raycast obstacle avoidance (used when there is no NavMesh route) --------------
+-- Area02 has no NavMesh, so when pathfinding yields nothing we steer the beacon around
+-- obstacles with collision rays: probe straight at the objective; if blocked within
+-- LOOKAHEAD, fan out and point the beacon at the nearest CLEAR bearing that still heads
+-- roughly toward the objective. No auto-move — the player still walks it themselves.
+local AVOID_LOOKAHEAD = 4 * M     -- ray length: detect a wall ~4 m ahead
+local AVOID_HEIGHT = 1.0 * M      -- cast from chest height so flat ground isn't hit
+local AVOID_OFFSETS = { 25, -25, 50, -50, 75, -75, 100, -100, 130, -130 }  -- deg to test
+
+-- Rotate a unit ground vector by `deg` (left-handed UE ground plane).
+local function rotate2d(nx, ny, deg)
+    local r = math.rad(deg)
+    local c, s = math.cos(r), math.sin(r)
+    return nx * c - ny * s, nx * s + ny * c
+end
+
+-- Is the segment from the player (at chest height) along (nx,ny) for `dist` clear?
+-- Returns true/false, or nil if the trace API is unavailable.
+local function bearing_clear(pawn, px, py, pz, nx, ny, dist)
+    local sz = pz + AVOID_HEIGHT
+    return Ray.clear(pawn, px, py, sz, px + nx * dist, py + ny * dist, sz)
+end
+
+-- The steered guidance direction to reach (tx,ty) around obstacles, or nil to go direct.
+-- One-shot native-safety probe (shared _G flag with the NavMesh calls' sibling): if the
+-- first trace aborts uncatchably, disable avoidance for the session.
+local avoid_steering = false      -- currently routing around something (for the spoken cue)
+local avoid_cued = false           -- edge-gate for the "going around" announcement
+local function steer_around(pawn, px, py, pz, tx, ty, tz)
+    if _G.__KakarotRayNative == "bad" then return nil end
+    if _G.__KakarotRayNative == "testing" then _G.__KakarotRayNative = "bad"; return nil end
+    local dx, dy = tx - px, ty - py
+    local dh = math.sqrt(dx * dx + dy * dy)
+    if dh < AVOID_LOOKAHEAD then avoid_steering = false; return nil end  -- close: go direct
+    local nx, ny = dx / dh, dy / dh
+    if _G.__KakarotRayNative == nil then _G.__KakarotRayNative = "testing" end
+    local direct = bearing_clear(pawn, px, py, pz, nx, ny, AVOID_LOOKAHEAD)
+    _G.__KakarotRayNative = "ok"   -- reached here → the trace call didn't abort
+    if direct == nil then return nil end            -- trace unavailable → go direct
+    if direct then avoid_steering = false; return nil end  -- clear ahead → go direct
+    -- Blocked: find the nearest clear bearing that still heads toward the objective.
+    for _, off in ipairs(AVOID_OFFSETS) do
+        local rx, ry = rotate2d(nx, ny, off)
+        if bearing_clear(pawn, px, py, pz, rx, ry, AVOID_LOOKAHEAD) then
+            avoid_steering = true
+            return px + rx * AVOID_LOOKAHEAD, py + ry * AVOID_LOOKAHEAD, pz
         end
+    end
+    avoid_steering = false
+    return nil   -- boxed in on all sides → fall back to the direct beacon
+end
+
+-- Current guidance point: the next route corner, else a raycast-steered point around an
+-- obstacle, else the target itself. Advances corners as the player passes them.
+local function guidance_point(pawn, px, py, pz, tx, ty, tz)
+    if route_mode and route then
+        while route_idx <= #route do
+            local wp = route[route_idx]
+            local dh = math.sqrt((wp.x - px) ^ 2 + (wp.y - py) ^ 2)
+            if dh <= WAYPOINT_DIST and math.abs(wp.z - pz) <= WAYPOINT_VERT then
+                route_idx = route_idx + 1
+            else
+                return wp.x, wp.y, wp.z
+            end
+        end
+        return tx, ty, tz
+    end
+    -- No NavMesh route: raycast obstacle avoidance (route_mode is the master switch).
+    if route_mode and pawn then
+        local gx, gy, gz = steer_around(pawn, px, py, pz, tx, ty, tz)
+        if gx then return gx, gy, gz end
     end
     return tx, ty, tz
 end
@@ -606,6 +666,7 @@ Transition.on_begin("nav_tracker", function()
     route_fails = 0          -- the new level may have a NavMesh even if this one didn't
     world_gone = 0
     invoker_key, invoker_nav = nil, nil   -- pawn/nav system are new next level; re-register
+    avoid_steering, avoid_cued = false, false
     gated_prev = true        -- audio is being stopped right here
     Audio.stop()
 end)
@@ -737,7 +798,17 @@ local function step()
     if arrived and d3 > REARM_DIST then arrived = false end
 
     refresh_route(pawn, px, py, pz, tx, ty, tz, false)
-    local gx, gy, gz = guidance_point(px, py, pz, tx, ty, tz)
+    local gx, gy, gz = guidance_point(pawn, px, py, pz, tx, ty, tz)
+
+    -- Spoken cue when the beacon starts routing around an obstacle (so a sudden change in
+    -- the beacon's direction is understood as "go around", not a wrong turn). Edge-gated:
+    -- announced once when steering begins, re-armed when the way is clear again.
+    if avoid_steering and not avoid_cued then
+        avoid_cued = true
+        Speech.say(I18n.t("nav_around"), false)
+    elseif not avoid_steering and avoid_cued then
+        avoid_cued = false
+    end
 
     -- Direction to the CURRENT guidance point, camera-relative (ground plane).
     local dx, dy = gx - px, gy - py
@@ -1481,6 +1552,27 @@ function Nav.dump()
                 tostring(invoker_key ~= nil), building))
             local pts = compute_route(pawn, px, py, pz, px + 10 * M, py, pz)
             f:write("navmesh probe (10m ahead): " .. (pts and (#pts .. " points") or "no path") .. "\n")
+        end
+        -- RAYCAST probe (obstacle avoidance): cast a ray CAMERA-FORWARD at chest height,
+        -- 5 m, against each object type separately, so we can confirm the trace API works
+        -- and WHICH collision channel detects walls. Point the camera at a wall up close
+        -- and at open space, then Ctrl+F5 each — the wall should read blocked, open clear.
+        if pawn and px then
+            local fx, fy = camera_forward()
+            if fx then
+                local sz = pz + AVOID_HEIGHT
+                local d = 5 * M
+                for _, ot in ipairs({ 1, 2, 3, 4, 5, 6 }) do
+                    local blocked, dist = Ray.probe(pawn, px, py, sz,
+                        px + fx * d, py + fy * d, sz, { ot })
+                    f:write(string.format("raycast objType=%d -> %s%s\n", ot,
+                        (blocked == nil and "API-UNAVAILABLE"
+                            or blocked and "BLOCKED" or "clear"),
+                        (dist and string.format(" dist=%.0f", dist) or "")))
+                end
+            else
+                f:write("raycast probe: no camera forward\n")
+            end
         end
         f:write("current target: " .. (target and (target.label .. " " .. target.key) or "none") .. "\n")
         f:close()

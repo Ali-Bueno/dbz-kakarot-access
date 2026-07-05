@@ -1,0 +1,66 @@
+-- Raycast helper: line-of-sight probing for the audio-radar obstacle avoidance.
+--
+-- Area02 (the overworld) has no NavMesh (verified 2026-07-04), so the "route around
+-- obstacles" guidance can't come from pathfinding. Instead we cast collision rays with
+-- the engine's KismetSystemLibrary and steer the beacon toward a clear bearing (see
+-- nav_tracker.steer_around). This module ONLY does the trace; the steering math lives
+-- in nav_tracker.
+--
+-- CAUTION: LineTrace is a reflected engine call, unverified on this game, and a bad
+-- reflected call here is an uncatchable C++ abort. Every call is pcall-guarded AND the
+-- caller wraps the first use in a one-shot native-safety probe (like the NavMesh calls).
+--
+-- Collision channel: EObjectTypeQuery is an opaque per-game enum. Default UE mapping is
+-- 1 = WorldStatic (level geometry: buildings, walls, terrain), 2 = WorldDynamic. We
+-- trace against both by default; the Ctrl+F5 nav dump reports each so the right one can
+-- be confirmed in-game and narrowed if needed.
+
+local Core = require("ui_core")
+
+local Ray = {}
+
+Ray.OBJECT_TYPES = { 1, 2 }              -- WorldStatic + WorldDynamic (tunable)
+local NO_COLOR = { R = 0, G = 0, B = 0, A = 0 }
+
+local ksl_cache
+local function ksl()
+    if Core.valid(ksl_cache) then return ksl_cache end
+    ksl_cache = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    if Core.valid(ksl_cache) then return ksl_cache end
+    ksl_cache = nil
+    return nil
+end
+
+-- Cast a ray start->end against `objtypes` (defaults to WorldStatic+WorldDynamic).
+-- Returns: blocked(boolean), distance(number|nil), or nil when the trace API is
+-- unavailable / the call didn't behave (so the caller can disable the feature).
+--   ctx = a world-context UObject (the player pawn).
+-- UE4SS returns the OutHit out-param as a second return value AFTER the bool; we pass
+-- every non-out arg in order (OutHit skipped) and read the bool, then best-effort the
+-- hit distance.
+function Ray.probe(ctx, sx, sy, sz, ex, ey, ez, objtypes)
+    local k = ksl()
+    if not k or not Core.valid(ctx) then return nil end
+    local a = { X = sx, Y = sy, Z = sz }
+    local b = { X = ex, Y = ey, Z = ez }
+    local types = objtypes or Ray.OBJECT_TYPES
+    local hit, out
+    local ok = pcall(function()
+        hit, out = k:LineTraceSingleForObjects(ctx, a, b, types, false, {}, 0,
+            true, NO_COLOR, NO_COLOR, 0.0)
+    end)
+    if not ok or type(hit) ~= "boolean" then return nil end
+    local dist
+    if hit and out then pcall(function() dist = tonumber(out.Distance) end) end
+    return hit, dist
+end
+
+-- Convenience: is the straight segment CLEAR (nothing blocking)? Returns true/false,
+-- or nil if the trace API is unavailable (distinct from "clear" so the caller can tell).
+function Ray.clear(ctx, sx, sy, sz, ex, ey, ez, objtypes)
+    local blocked = Ray.probe(ctx, sx, sy, sz, ex, ey, ez, objtypes)
+    if blocked == nil then return nil end
+    return not blocked
+end
+
+return Ray
