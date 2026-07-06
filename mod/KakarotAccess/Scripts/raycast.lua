@@ -63,4 +63,34 @@ function Ray.clear(ctx, sx, sy, sz, ex, ey, ez, objtypes)
     return not blocked
 end
 
+-- Channel-based variant (KismetSystemLibrary.LineTraceSingle): same shape as probe()
+-- but traces ONE ETraceTypeQuery channel (0 = TraceTypeQuery1 = Visibility in the
+-- default UE mapping) instead of an object-type array. Separate entry point so the
+-- caller can fuse-test each reflected overload on its own: ForObjects aborts
+-- uncatchably on some maps (Area02 + Area04, 2026-07-06) and its
+-- TArray<EObjectTypeQuery> marshalling is the prime suspect — this overload swaps
+-- that for a plain enum.
+function Ray.probe_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
+    local k = ksl()
+    if not k or not Core.valid(ctx) then return nil end
+    local a = { X = sx, Y = sy, Z = sz }
+    local b = { X = ex, Y = ey, Z = ez }
+    local hit, out
+    local ok = pcall(function()
+        hit, out = k:LineTraceSingle(ctx, a, b, channel or 0, false, {}, 0,
+            true, NO_COLOR, NO_COLOR, 0.0)
+    end)
+    if not ok or type(hit) ~= "boolean" then return nil end
+    local dist
+    if hit and out then pcall(function() dist = tonumber(out.Distance) end) end
+    return hit, dist
+end
+
+-- clear() over the channel overload; same nil-vs-boolean contract.
+function Ray.clear_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
+    local blocked = Ray.probe_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
+    if blocked == nil then return nil end
+    return not blocked
+end
+
 return Ray

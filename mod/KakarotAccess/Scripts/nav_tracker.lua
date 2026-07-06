@@ -68,6 +68,16 @@ local REPATH_MS = 3000                -- NavMesh path refresh period
 local DIR_CUE_MS = 3000               -- min gap between spoken direction words (XV2)
 local ELEV_DIST = 12 * M              -- |dz| that counts as above/below
 local ELEV_CUE_MS = 7000              -- min gap between elevation words (XV2)
+local DIST_CUE_MS = 8000              -- max silence before a distance-only cue: every
+                                      -- spoken cue carries the distance (user request
+                                      -- 2026-07-06, "am I getting closer?"), and when
+                                      -- nothing else fires (straight approach, no
+                                      -- direction change) a bare "N meters" fills in
+local STEALTH_CUE_MS = 2500           -- min gap between facing-zone words (deer hunt)
+local STEALTH_CONE = 0.34             -- |dot| above this = clearly front/behind (~±70°)
+local AIM_ALIGN_PAN = 0.12            -- |pan| below this = camera centered on the target
+                                      -- (~±7°, matches the field Ki-blast reticle slack)
+local AIM_RANGE = 60 * M              -- aim cue only within Ki-blast range
 local ENEMY_ALERT_DIST = 50 * M       -- proximity radius for the spoken enemy warning
 local ENEMY_CUE_MS = 8000             -- min gap between enemy warnings (anti-spam)
 local ENEMY_CLOSER_FACTOR = 0.5       -- re-announce the SAME enemy only when this much closer
@@ -198,6 +208,9 @@ local arrived = false
 local last_ping_ms = 0
 local last_dir_cue, last_dir_ms = nil, -DIR_CUE_MS
 local last_elev_ms = -ELEV_CUE_MS
+local last_dist_ms = 0         -- last spoken cue that included the distance
+local last_stealth_zone, last_stealth_ms = nil, -STEALTH_CUE_MS
+local was_on_target = false    -- aim-alignment cue edge-gate
 local gated_prev = false
 local world_gone = 0           -- consecutive ticks with the world gate closed
 local WORLD_DROP_TICKS = 50    -- ~5 s hidden -> assume level change/battle, drop target
@@ -218,6 +231,8 @@ local last_enemy_key = nil     -- enemy proximity alert: edge-gate per enemy act
 local last_enemy_d = 0
 local last_enemy_ms = -ENEMY_CUE_MS
 local enemy_cache, enemy_next = nil, 0   -- cached field-enemy actor list (sparse rescan)
+local last_aim_key = nil       -- field aim announcer: edge-gate per locked actor
+local mob_base_cls = nil       -- cached UClass AT_MobBase (wild animals/robots tree)
 
 local route = nil              -- array of {x,y,z} NavMesh corners, or nil
 local route_idx = 0
@@ -504,17 +519,47 @@ end
 local NAV_PROJECT_EXTENT = { X = 250, Y = 250, Z = 600 }
 
 -- Project a world point onto the NavMesh; returns {x,y,z} or nil if it can't snap.
-local function project_to_nav(navsys, ctx, x, y, z)
+-- navdata (optional): pin the projection to ONE RecastNavMesh — with three agent
+-- meshes on a map, projecting against "any" can resolve on a mesh the path query
+-- won't use.
+-- CAUTION: this MUST stay on the FVector-returning overload. K2_ProjectPointToNavigation
+-- (bool + FVector& out) ABORTS UNCATCHABLY on this game — tried 2026-07-06, it killed
+-- the dump mid-file; same pattern as the LineTrace overloads (FHitResult& out): on this
+-- game/UE4SS 3.0.1, reflected calls with out-params are the abort family. Trade-off:
+-- this overload returns the INPUT point unchanged on failure, so a "projection" is not
+-- proof of mesh under the point — only the (0,0,0) case is a detectable failure.
+local function project_to_nav(navsys, ctx, x, y, z, navdata)
     local out
     pcall(function()
-        local p = navsys:ProjectPointToNavigation(ctx, { X = x, Y = y, Z = z }, nil, nil,
-            NAV_PROJECT_EXTENT)
-        -- A failed projection returns (0,0,0); reject that so we keep the raw point.
+        local p = navsys:ProjectPointToNavigation(ctx, { X = x, Y = y, Z = z }, navdata,
+            nil, NAV_PROJECT_EXTENT)
         if p and not (p.X == 0 and p.Y == 0 and p.Z == 0) then
             out = { x = p.X, y = p.Y, z = p.Z }
         end
     end)
     return out
+end
+
+-- The level's HUMAN RecastNavMesh actor. This game ships one mesh per agent type
+-- (RecastNavMesh-Human / -Dinosaur / -Animal, dump 2026-07-06) and a plain pawn
+-- PathfindingContext produced an EMPTY path (PathPoints=0, partial=false) even with
+-- both endpoints projected — the query ran on the wrong mesh. PathfindingContext
+-- also accepts a NavigationData ACTOR, which pins the query to that exact mesh.
+-- Cached (a level actor: MUST be flushed on transition, see the flush below).
+local human_mesh = nil
+local function human_nav_data()
+    if Core.valid(human_mesh) then return human_mesh end
+    human_mesh = nil
+    pcall(function()
+        for _, a in pairs(FindAllOf("RecastNavMesh") or {}) do
+            if Core.valid(a) then
+                local nm = a:GetFName():ToString()
+                if nm:find("Human", 1, true) then human_mesh = a return end
+                human_mesh = human_mesh or a   -- any mesh beats none
+            end
+        end
+    end)
+    return human_mesh
 end
 
 -- ROOT CAUSE of "no path" in this game: it builds NavMesh ONLY around navigation
@@ -589,12 +634,15 @@ local function compute_route(pawn, px, py, pz, tx, ty, tz)
         local navsys = live_navsys(pawn)
         if not navsys then return nil end
         ensure_invoker(navsys, pawn)
+        -- Pin projection AND query to the Human mesh (see human_nav_data): with a
+        -- plain pawn context the query came back EMPTY on the multi-agent maps.
+        local mesh = human_nav_data()
         -- Snap both endpoints onto the mesh first — FindPath returns nothing when either
         -- end is off-mesh, which was the common failure. Fall back to the raw point.
-        local s = project_to_nav(navsys, pawn, px, py, pz) or { x = px, y = py, z = pz }
-        local e = project_to_nav(navsys, pawn, tx, ty, tz) or { x = tx, y = ty, z = tz }
+        local s = project_to_nav(navsys, pawn, px, py, pz, mesh) or { x = px, y = py, z = pz }
+        local e = project_to_nav(navsys, pawn, tx, ty, tz, mesh) or { x = tx, y = ty, z = tz }
         local path = navsys:FindPathToLocationSynchronously(pawn,
-            { X = s.x, Y = s.y, Z = s.z }, { X = e.x, Y = e.y, Z = e.z }, nil, nil)
+            { X = s.x, Y = s.y, Z = s.z }, { X = e.x, Y = e.y, Z = e.z }, mesh or pawn, nil)
         -- NOTE: we don't call the path's reflected IsValid() — UE4SS shadows it with
         -- its own UObject validity check. An unusable path just has <2 PathPoints.
         if not path then return nil end
@@ -632,37 +680,55 @@ local function rotate2d(nx, ny, deg)
 end
 
 -- Is the segment from the player (at chest height) along (nx,ny) for `dist` clear?
--- Returns true/false, or nil if the trace API is unavailable.
-local function bearing_clear(pawn, px, py, pz, nx, ny, dist)
+-- Returns true/false, or nil if the trace API is unavailable. `api` picks the trace
+-- overload (see ray_api): "objects" = LineTraceSingleForObjects, "channel" =
+-- LineTraceSingle on the Visibility channel.
+local RAY_CHANNEL = 0   -- ETraceTypeQuery: 0 = TraceTypeQuery1 = Visibility (default UE map)
+local function bearing_clear(pawn, px, py, pz, nx, ny, dist, api)
     local sz = pz + AVOID_HEIGHT
+    if api == "channel" then
+        return Ray.clear_channel(pawn, px, py, sz, px + nx * dist, py + ny * dist, sz,
+            RAY_CHANNEL)
+    end
     return Ray.clear(pawn, px, py, sz, px + nx * dist, py + ny * dist, sz)
 end
 
+-- Which trace overload is still usable here? ForObjects first (validated where it
+-- works), else the channel overload: ForObjects aborts uncatchably on some maps
+-- (Area02 + Area04, 2026-07-06 — TArray marshalling suspected) where the simpler
+-- LineTraceSingle may survive. EACH overload has its own abort fuse, so fusing one
+-- falls through to the other instead of killing avoidance outright.
+local function ray_api()
+    if _G.__KakarotRayNative ~= "bad" then return "__KakarotRayNative", "objects" end
+    if _G.__KakarotRayChan ~= "bad" then return "__KakarotRayChan", "channel" end
+    return nil
+end
+
 -- The steered guidance direction to reach (tx,ty) around obstacles, or nil to go direct.
--- One-shot native-safety probe (shared _G flag with the NavMesh calls' sibling): if the
--- first trace aborts uncatchably, disable avoidance for the session.
 local avoid_steering = false      -- currently routing around something (for the spoken cue)
 local avoid_cued = false           -- edge-gate for the "going around" announcement
 local function steer_around(pawn, px, py, pz, tx, ty, tz)
-    if _G.__KakarotRayNative == "bad" then return nil end
+    local fuse, api = ray_api()
+    if not fuse then return nil end   -- every overload fused on this map
     -- Re-entered while still "testing": the PREVIOUS tick's trace aborted uncatchably
-    -- mid-flight — disable raycast for the session. This is armed around EVERY trace
-    -- batch (not only the first): the trace API proved area-DEPENDENT (worked on the
-    -- 07-04 map, aborts in Area02, dump 2026-07-06) — a per-session one-shot "ok"
-    -- would leave the loop aborting every tick in a bad area, silencing the beacon.
-    if _G.__KakarotRayNative == "testing" then _G.__KakarotRayNative = "bad"; return nil end
+    -- mid-flight — fuse THIS overload. Armed around EVERY trace batch (not only the
+    -- first): the abort proved area-dependent (worked on the 07-04 map, aborts in
+    -- Area02/Area04) — a per-session one-shot "ok" would leave the loop aborting
+    -- every tick in a bad area, silencing the beacon. Next tick ray_api falls
+    -- through to the next overload, if any survives.
+    if _G[fuse] == "testing" then _G[fuse] = "bad"; return nil end
     local dx, dy = tx - px, ty - py
     local dh = math.sqrt(dx * dx + dy * dy)
     if dh < AVOID_LOOKAHEAD then avoid_steering = false; return nil end  -- close: go direct
     local nx, ny = dx / dh, dy / dh
-    _G.__KakarotRayNative = "testing"
-    local direct = bearing_clear(pawn, px, py, pz, nx, ny, AVOID_LOOKAHEAD)
+    _G[fuse] = "testing"
+    local direct = bearing_clear(pawn, px, py, pz, nx, ny, AVOID_LOOKAHEAD, api)
     if direct == nil then
-        _G.__KakarotRayNative = "ok"
+        _G[fuse] = "ok"
         return nil                                  -- trace unavailable → go direct
     end
     if direct then
-        _G.__KakarotRayNative = "ok"
+        _G[fuse] = "ok"
         avoid_steering = false
         return nil                                  -- clear ahead → go direct
     end
@@ -670,13 +736,13 @@ local function steer_around(pawn, px, py, pz, tx, ty, tz)
     local gx, gy
     for _, off in ipairs(AVOID_OFFSETS) do
         local rx, ry = rotate2d(nx, ny, off)
-        if bearing_clear(pawn, px, py, pz, rx, ry, AVOID_LOOKAHEAD) then
+        if bearing_clear(pawn, px, py, pz, rx, ry, AVOID_LOOKAHEAD, api) then
             avoid_steering = true
             gx, gy = px + rx * AVOID_LOOKAHEAD, py + ry * AVOID_LOOKAHEAD
             break
         end
     end
-    _G.__KakarotRayNative = "ok"   -- the whole batch completed without aborting
+    _G[fuse] = "ok"   -- the whole batch completed without aborting
     if gx then return gx, gy, pz end
     avoid_steering = false
     return nil   -- boxed in on all sides → fall back to the direct beacon
@@ -742,6 +808,8 @@ local function drop_target()
     target, route, route_idx = nil, nil, 0
     arrived, target_missing = false, 0
     companion_idx = 0   -- a dropped manual target reverts to quest mode
+    last_stealth_zone = nil
+    was_on_target = false
 end
 
 -- WORLD GATE — safety-critical. The minimap is the game's own "the world is alive
@@ -763,11 +831,19 @@ Transition.on_begin("nav_tracker", function()
     mm_cache, navi_icons = nil, nil
     mm_retry, navi_next = 0, 0
     route_fails = 0          -- the new level may have a NavMesh even if this one didn't
+    -- The trace API is AREA-dependent (works on some maps, aborts uncatchably on
+    -- others): a "bad" fuse tripped in the old map must not keep obstacle avoidance
+    -- dead in the new one — clear BOTH overload fuses so the new area re-probes
+    -- (steer_around arms the testing fuse around every batch anyway, so a bad area
+    -- re-trips in one tick).
+    _G.__KakarotRayNative, _G.__KakarotRayChan = nil, nil
     world_gone = 0
     invoker_key, invoker_nav = nil, nil   -- pawn/nav system are new next level; re-register
+    human_mesh = nil         -- a LEVEL actor: probing it after teardown is the abort
     avoid_steering, avoid_cued = false, false
     chain_wait, chain_seen = nil, {}   -- the sweep's actors lived in the dead level
     last_enemy_key = nil
+    last_aim_key = nil
     enemy_cache, enemy_next = nil, 0
     gated_prev = true        -- audio is being stopped right here
     Audio.stop()
@@ -885,7 +961,21 @@ local function enemy_probe(px, py, pz)
                             pcall(function() st = tostring(tonumber(p.SpawnType)) end)
                         end
                     end
-                    lines[#lines + 1] = string.format("  %s d=%.0fm spawnType=%s", cn, d / M, st)
+                    -- Class ancestry (UE4SS-level reads, not game reflection — safe):
+                    -- the wild field creatures are A0NN_BP_C pawns, NOT AT_Characters
+                    -- (probe 2026-07-06), and the radar needs their common BASE class
+                    -- to track them without fragile name patterns.
+                    local chain = {}
+                    pcall(function()
+                        local c2 = p:GetClass()
+                        for _ = 1, 5 do
+                            c2 = c2:GetSuperStruct()
+                            if not (c2 and c2:IsValid()) then break end
+                            chain[#chain + 1] = c2:GetFName():ToString()
+                        end
+                    end)
+                    lines[#lines + 1] = string.format("  %s d=%.0fm spawnType=%s super=%s",
+                        cn, d / M, st, table.concat(chain, "<"))
                 end
             end
         end
@@ -904,6 +994,59 @@ local function enemy_probe(px, py, pz)
         f:write(table.concat(lines, "\n") .. "\n")
         f:close()
     end)
+end
+
+-- Field AIM announcer ("am I aiming at the dinosaur?" — user request 2026-07-06, the
+-- dino-hunt quest): the field targeting locks its victim into the player's
+-- ULockonComponent (AAT_Character.LockonList @0x920; m_xActors TArray @0x100 — both
+-- reflected, CXX dump). Speak whenever the LOCKED actor appears or changes:
+-- "apuntando a <noun>, N metros" (noun: AT_MobBase tree = animal; AT_Character
+-- SpawnType = the enemy noun; else generic character). Silent when the lock clears;
+-- re-locking the same actor re-announces (the edge-gate resets on empty).
+local function aim_watch(pawn, px, py, pz)
+    local locked
+    pcall(function()
+        local comp = pawn.LockonList
+        if comp and comp:IsValid() then
+            local arr = comp.m_xActors
+            if arr and #arr > 0 then
+                local a = arr[1]
+                if a and a:IsValid() then locked = a end
+            end
+        end
+    end)
+    if not locked then last_aim_key = nil return end
+    local key = tostring(locked:GetAddress())
+    if key == last_aim_key then return end
+    last_aim_key = key
+    local noun = "cat_npc"
+    if mob_base_cls == nil then
+        local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_MobBase") end)
+        mob_base_cls = (ok and c) or false
+    end
+    local ismob = false
+    if mob_base_cls then
+        local ok, v = pcall(function() return locked:IsA(mob_base_cls) end)
+        ismob = ok and v == true
+    end
+    if ismob then
+        noun = "cat_animal"
+    else
+        if at_char_cls == nil then
+            local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_Character") end)
+            at_char_cls = (ok and c) or false
+        end
+        if at_char_cls then
+            local ok, isat = pcall(function() return locked:IsA(at_char_cls) end)
+            if ok and isat then
+                noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(locked) or 0] or "cat_npc"
+            end
+        end
+    end
+    local x, y, z = actor_pos(locked)
+    local d = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+    Speech.say(string.format("%s %s%s", I18n.t("nav_aiming"), I18n.t(noun),
+        d and (", " .. string.format(I18n.t("nav_meters"), meters(d))) or ""), true)
 end
 
 -- Spoken proximity warning for the nearest field enemy: "<enemy noun>, <direction>,
@@ -1016,6 +1159,10 @@ local function step()
         if ns then ensure_invoker(ns, pawn) end
         _G.__KakarotRouteNative = "ok"
     end
+
+    -- Field aim announcer: per tick (one guarded property chain — cheap), so the
+    -- "aiming at X" cue lands the instant the game locks a target.
+    aim_watch(pawn, px, py, pz)
 
     -- Chained pickup sweep: waiting for the reached collectible to be taken, then
     -- retarget the next one (see chain_step). Enemy proximity warning on the same
@@ -1172,6 +1319,10 @@ local function step()
 
     -- Sparse spoken cues, XV2 style: the dominant direction word when it CHANGES
     -- (throttled), and above/below when the objective is clearly off our level.
+    -- Every cue carries the CURRENT distance ("ahead, 120 meters" — user request
+    -- 2026-07-06), and a distance-only cue fills long silences (straight approach,
+    -- nothing changing) so the player can always tell whether they're closing in.
+    local dist_txt = string.format(I18n.t("nav_meters"), meters(d3))
     local dir
     if math.abs(fb) >= math.abs(pan) then
         dir = fb >= 0 and "nav_ahead" or "nav_behind"
@@ -1180,12 +1331,60 @@ local function step()
     end
     if dir ~= last_dir_cue and ms - last_dir_ms >= DIR_CUE_MS then
         last_dir_cue, last_dir_ms = dir, ms
-        Speech.say(I18n.t(dir), false)
+        last_dist_ms = ms
+        Speech.say(string.format("%s, %s", I18n.t(dir), dist_txt), false)
     end
     local dz = tz - pz
     if math.abs(dz) >= ELEV_DIST and ms - last_elev_ms >= ELEV_CUE_MS then
         last_elev_ms = ms
-        Speech.say(I18n.t(dz > 0 and "nav_up" or "nav_down"), false)
+        last_dist_ms = ms
+        Speech.say(string.format("%s, %s", I18n.t(dz > 0 and "nav_up" or "nav_down"), dist_txt), false)
+    end
+    if ms - last_dist_ms >= DIST_CUE_MS then
+        last_dist_ms = ms
+        Speech.say(dist_txt, false)
+    end
+
+    -- AIM-ALIGNMENT cue (user request 2026-07-06, the dino hunt: "how do I know I'm
+    -- aiming at it?"): field Ki blasts go where the camera points, and the game's
+    -- LockonComponent stays EMPTY during field aiming (tried first) — so this is
+    -- OUR geometric reticle: while tracking an enemies-group target, the moment the
+    -- camera yaw centers on it (|pan| within the reticle slack) inside Ki-blast
+    -- range, say "on target" (interrupting — the shot window is short); re-arms
+    -- when the aim drifts off. pan/fb here are already camera-relative.
+    if target.grp == "enemies" then
+        local on_target = fb > 0 and math.abs(pan) <= AIM_ALIGN_PAN and d3 <= AIM_RANGE
+        if on_target and not was_on_target then
+            Speech.say(I18n.t("nav_on_target"), true)
+        end
+        was_on_target = on_target
+    end
+
+    -- Stealth aid for hunted animals / field enemies (user request 2026-07-06, the
+    -- deer hunt: "approach from behind so they don't see you"): while tracking a
+    -- target picked from the enemies category, speak which side of ITS facing the
+    -- player is on whenever that zone changes — "behind" = safe approach, "in front"
+    -- = it can see you. K2_GetActorRotation is the reflected sibling of the
+    -- K2_GetActorLocation call the whole tracker already relies on.
+    if target.grp == "enemies" then
+        local rot
+        pcall(function() rot = target.actor:K2_GetActorRotation() end)
+        if rot then
+            local yaw = math.rad(rot.Yaw or 0)
+            local fwx, fwy = math.cos(yaw), math.sin(yaw)   -- the animal's forward
+            local vx, vy = px - tx, py - ty                 -- animal -> player
+            local vh = math.sqrt(vx * vx + vy * vy)
+            if vh > 1 then
+                local dot = (vx * fwx + vy * fwy) / vh
+                local zone = dot > STEALTH_CONE and "nav_stealth_front"
+                    or dot < -STEALTH_CONE and "nav_stealth_back"
+                    or "nav_stealth_side"
+                if zone ~= last_stealth_zone and ms - last_stealth_ms >= STEALTH_CUE_MS then
+                    last_stealth_zone, last_stealth_ms = zone, ms
+                    Speech.say(I18n.t(zone), false)
+                end
+            end
+        end
     end
 end
 
@@ -1313,6 +1512,10 @@ function Nav.toggle_route()
     if not route_mode then
         route, route_idx = nil, 0
         clear_invoker()   -- stop forcing tile generation when route guidance is off
+    else
+        -- Manual escape hatch (Shift+F3 off->on): also re-arm the raycast fuses, so
+        -- obstacle avoidance can be re-probed on the spot without a map change.
+        _G.__KakarotRayNative, _G.__KakarotRayChan = nil, nil
     end
     Speech.say(I18n.t(route_mode and "nav_route_on" or "nav_route_off"), true)
     return route_mode
@@ -1393,9 +1596,15 @@ local NAVI_DEBUG = false   -- light + SAFE navi main/sub diagnostic. CONFIRMED 2
 --            noun (distance disambiguates them).
 -- Story NPCs may carry a descriptive UniqueId; NPC_NAMES word-matches those. Extend as
 -- the diagnostic (dump_radar.txt `name=`) reveals the real ids.
+-- ONLY ids verified in play — the old guessed table (Cpl003..Cpl008 assumed to follow
+-- the character-select order) announced "Trunks/Goten/Gotenks" for characters who
+-- can't even appear yet (user report 2026-07-06). The game's own resolver
+-- (game_character_name below) is consulted FIRST; this map is the offline fallback.
+-- Verified: Cpl001/Cpl002 = the intro/wasteland player pawns; Cpl009 = the quest
+-- character at Gohan's bonfire (Yajirobe); Cpl011 = the playable pawn of the
+-- "Gohan's guardian" chapter and the C011 half of the Gohan/Piccolo demo pair.
 local CPL_NAMES = {
-    Cpl001 = "Goku", Cpl002 = "Gohan", Cpl003 = "Piccolo", Cpl004 = "Krillin",
-    Cpl005 = "Vegeta", Cpl006 = "Trunks", Cpl007 = "Gotenks", Cpl008 = "Goten",
+    Cpl001 = "Goku", Cpl002 = "Gohan", Cpl009 = "Yajirobe", Cpl011 = "Piccolo",
 }
 local NPC_NAMES = {
     chichi = "Chi-Chi", gohan = "Gohan", goku = "Goku", krillin = "Krillin",
@@ -1405,6 +1614,33 @@ local NPC_NAMES = {
     trunks = "Trunks", korin = "Korin", karin = "Korin", yajirobe = "Yajirobe",
     dende = "Dende", mrpopo = "Mr. Popo", popo = "Mr. Popo", kamisama = "Kami",
 }
+
+-- The game's OWN id -> display-name resolver: UAT_BlueprintFunctionLibrary::
+-- GetCharacterName(FString) -> FString (CXX dump, AT.hpp — a static blueprint library,
+-- called on its CDO). This is the authoritative source for what a sighted player sees;
+-- returns "" for ids it doesn't know. Cached per id (it's a reflected call into a
+-- game-side table lookup).
+local name_lib, name_cache = nil, {}
+local function game_character_name(id)
+    local hit = name_cache[id]
+    if hit ~= nil then return hit or nil end   -- false = known miss
+    if name_lib == nil then
+        local ok, lib = pcall(function()
+            return StaticFindObject("/Script/AT.Default__AT_BlueprintFunctionLibrary")
+        end)
+        name_lib = (ok and lib and lib:IsValid()) and lib or false
+    end
+    local nm
+    if name_lib then
+        pcall(function()
+            local s = name_lib:GetCharacterName(id)
+            if type(s) == "string" then nm = s elseif s then nm = s:ToString() end
+        end)
+    end
+    if nm == "" then nm = nil end
+    name_cache[id] = nm or false
+    return nm
+end
 
 -- Best spoken name for a field NPC from its UniqueId (FName). nil = fall back to the
 -- generic "character" noun (anonymous townsfolk — the game has no real name for them).
@@ -1419,6 +1655,9 @@ local function npc_name(npc)
         if u then raw = u:ToString() end
     end)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
+    -- The game's own resolver first (authoritative); hand-verified map second.
+    local live = game_character_name(raw)
+    if live then return live end
     if CPL_NAMES[raw] then return CPL_NAMES[raw] end
     -- descriptive story ids: word-match known characters
     local key = raw:lower():gsub("[^%a]", "")
@@ -1556,10 +1795,15 @@ function Nav.list_targets()
             pcall(function() ht = tonumber(npc.CurrentHiddenType) or 0 end)
             return ht == 0
         end
-        local npcs = FindAllOf("QuestCharacter") or {}
-        for _, npc in pairs(npcs) do
-            if Core.valid(npc) and npc_present(npc) then
-                add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
+        -- Scan the native base AND the blueprint subclass: FindAllOf on a native base
+        -- can find NOTHING on this game (community-board lesson) — Yajirobe by the
+        -- bonfire was a QuestCharacterBase_C the "QuestCharacter" scan never returned
+        -- (dump 2026-07-06). add_target dedupes by address when both scans hit.
+        for _, cls in ipairs({ "QuestCharacter", "QuestCharacterBase_C" }) do
+            for _, npc in pairs(FindAllOf(cls) or {}) do
+                if Core.valid(npc) and npc_present(npc) then
+                    add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
+                end
             end
         end
     end
@@ -1707,6 +1951,26 @@ function Nav.list_targets()
     -- list does not carry the roaming enemies. Tight distance cap like NPCs.
     for _, e in ipairs(enemies_list()) do
         add_target(e.actor, "enemies", e.noun, nil, "enemy")
+    end
+    -- 5b) wild field animals (deer, wolves, the early robots…): AT_MobBase pawns — a
+    -- SEPARATE class tree from AT_Character (lineage probe 2026-07-06: A009b_BP_C <
+    -- A009_BP_C < AnimalMob_Pawn_C < AT_MobAnimalBase < AT_MobBase < NpcPawn), which is
+    -- why the SpawnType scan never saw them. Needed for the hunt quests ("catch N
+    -- deer"). Native-base FindAllOf can come up empty on this game (community-board
+    -- lesson) → also scan the blueprint animal base; add_target dedupes by address.
+    -- SAFETY: position/bHidden only — SpawnType/InteractState are NOT declared on this
+    -- tree and reading them is the uncatchable abort. Picker only, NOT the proximity
+    -- alert (passive deer everywhere would make it spam).
+    for _, cls in ipairs({ "AT_MobBase", "AnimalMob_Pawn_C" }) do
+        for _, a in pairs(FindAllOf(cls) or {}) do
+            if Core.valid(a) then
+                local hidden = false
+                pcall(function() hidden = a.bHidden end)
+                if not (hidden == true or hidden == 1) then
+                    add_target(a, "enemies", "cat_animal", nil, "enemy")
+                end
+            end
+        end
     end
 
     -- SAFE navi-type diagnostic (NAVI_DEBUG): for each in-use quest arrow, the two
@@ -2024,6 +2288,44 @@ function Nav.dump()
             end
         end
         f:write(string.format("navi icon instances: %d\n", n))
+        -- Sibling probe for each ACTIVE navi target: every actor of the target's class,
+        -- sorted by NAME, with position + distance. Story events often mark the intended
+        -- walking route with a numbered trigger CHAIN (C01_03002_AutoMoveTrigger_001..N):
+        -- listing the whole chain maps the walkable route offline when NavMesh and
+        -- raycast can't guide (walk-only Gohan beat stuck 42 m short, 2026-07-06).
+        do
+            local done = {}
+            for _, icon in pairs(icons) do
+                if Core.valid(icon) and icon_in_use(icon) then
+                    local ok, ta = pcall(function() return icon.TargetActor end)
+                    if ok and Core.valid(ta) then
+                        local cls
+                        pcall(function() cls = ta:GetClass():GetFName():ToString() end)
+                        if cls and not done[cls] then
+                            done[cls] = true
+                            local sib = {}
+                            for _, a in pairs(FindAllOf(cls) or {}) do
+                                if Core.valid(a) then
+                                    local x, y, z = actor_pos(a)
+                                    if x then
+                                        local nm = "?"
+                                        pcall(function() nm = a:GetFName():ToString() end)
+                                        sib[#sib + 1] = { nm = nm, x = x, y = y, z = z,
+                                            d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) }
+                                    end
+                                end
+                            end
+                            table.sort(sib, function(a, b) return a.nm < b.nm end)
+                            f:write(string.format("navi target siblings (%s): %d\n", cls, #sib))
+                            for _, s in ipairs(sib) do
+                                f:write(string.format("  sibling %s d=%.0fm pos=%.0f %.0f %.0f\n",
+                                    s.nm, s.d / M, s.x, s.y, s.z))
+                            end
+                        end
+                    end
+                end
+            end
+        end
         -- Regular minimap icons (the fallback source): list every entry that has a
         -- typed map-icon component; count the untyped rest.
         if Core.valid(mm) then
@@ -2071,39 +2373,146 @@ function Nav.dump()
             if ns then pcall(function() building = tostring(ns:IsNavigationBeingBuilt(pawn)) end) end
             f:write(string.format("nav invoker registered=%s building=%s\n",
                 tostring(invoker_key ~= nil), building))
+            -- SAFE coverage reads FIRST — the FindPath probe below can abort the dump
+            -- mid-file (it did on 2026-07-06 when the projection used the K2_ overload),
+            -- and losing the coverage map with it left the diagnosis blind.
+            for _, cls in ipairs({ "RecastNavMesh", "NavMeshBoundsVolume" }) do
+                local cnt = 0
+                pcall(function()
+                    for _, a in pairs(FindAllOf(cls) or {}) do
+                        if Core.valid(a) then cnt = cnt + 1 end
+                    end
+                end)
+                f:write(string.format("navdata %s: %d\n", cls, cnt))
+            end
+            pcall(function()
+                for _, a in pairs(FindAllOf("RecastNavMesh") or {}) do
+                    if Core.valid(a) then
+                        local x, y, z = actor_pos(a)
+                        local nm = "?"
+                        pcall(function() nm = a:GetFName():ToString() end)
+                        f:write(string.format("  recast %s d=%s pos=%s %s %s\n", nm,
+                            x and string.format("%.0fm", math.sqrt((x - px) ^ 2
+                                + (y - py) ^ 2 + (z - pz) ^ 2) / M) or "?",
+                            tostring(x), tostring(y), tostring(z)))
+                    end
+                end
+            end)
+            -- NavMeshBoundsVolume coverage map: distance + position + scale of every
+            -- volume. If they cluster around towns/NPC areas instead of covering the
+            -- map, the baked meshes are partial — the route feature then works inside
+            -- those zones and falls back to the straight beacon elsewhere.
+            pcall(function()
+                for _, a in pairs(FindAllOf("NavMeshBoundsVolume") or {}) do
+                    if Core.valid(a) then
+                        local x, y, z = actor_pos(a)
+                        local sc = "?"
+                        pcall(function()
+                            local s = a:GetActorScale3D()
+                            sc = string.format("%.0f %.0f %.0f", s.X, s.Y, s.Z)
+                        end)
+                        f:write(string.format("  navvol d=%s pos=%s %s %s scale=%s\n",
+                            x and string.format("%.0fm", math.sqrt((x - px) ^ 2
+                                + (y - py) ^ 2 + (z - pz) ^ 2) / M) or "?",
+                            tostring(x), tostring(y), tostring(z), sc))
+                    end
+                end
+            end)
+            local pp = ns and project_to_nav(ns, pawn, px, py, pz)
+            f:write("project player -> " .. (pp and string.format("%.0f %.0f %.0f",
+                pp.x, pp.y, pp.z) or "nil") .. "\n")
             local pts = compute_route(pawn, px, py, pz, px + 10 * M, py, pz)
             f:write("navmesh probe (10m ahead): " .. (pts and (#pts .. " points") or "no path") .. "\n")
+            -- VERBOSE FindPath probe: projection resolves on this map yet FindPath
+            -- yields nothing even with the pawn PathfindingContext (2026-07-06) — log
+            -- every stage (unbuffered) so the exact failure is visible: nil path
+            -- object vs empty PathPoints vs a Lua-level call error, plus the path's
+            -- own GetDebugString/IsPartial verdict when one comes back.
+            if ns and not nav_native_bad() then
+                local okp, perr = pcall(function()
+                    local s = project_to_nav(ns, pawn, px, py, pz) or { x = px, y = py, z = pz }
+                    local e = project_to_nav(ns, pawn, px + 10 * M, py, pz)
+                    f:write("  findpath proj_end=" .. (e and "ok" or "NIL(using raw)") .. "\n")
+                    e = e or { x = px + 10 * M, y = py, z = pz }
+                    local path = ns:FindPathToLocationSynchronously(pawn,
+                        { X = s.x, Y = s.y, Z = s.z }, { X = e.x, Y = e.y, Z = e.z },
+                        pawn, nil)
+                    if not path then f:write("  findpath -> NIL path object\n") return end
+                    f:write("  findpath obj=" .. path:GetFullName() .. "\n")
+                    local n2 = "?"
+                    pcall(function() n2 = tostring(#path.PathPoints) end)
+                    f:write("  findpath PathPoints=" .. n2 .. "\n")
+                    pcall(function()
+                        local ds = path:GetDebugString()
+                        f:write("  findpath partial=" .. tostring(path:IsPartial())
+                            .. " debug=" .. tostring(ds and ds:ToString()) .. "\n")
+                    end)
+                    -- Per-mesh query: PathfindingContext accepts a NavigationData
+                    -- ACTOR, pinning the query to that exact mesh — this tells which
+                    -- of the agent meshes (Human/Dinosaur/Animal) can actually answer
+                    -- a walk query here.
+                    for _, a in pairs(FindAllOf("RecastNavMesh") or {}) do
+                        if Core.valid(a) then
+                            local nm = "?"
+                            pcall(function() nm = a:GetFName():ToString() end)
+                            local s2 = project_to_nav(ns, pawn, px, py, pz, a) or s
+                            local e2 = project_to_nav(ns, pawn, px + 10 * M, py, pz, a) or e
+                            local p2 = ns:FindPathToLocationSynchronously(pawn,
+                                { X = s2.x, Y = s2.y, Z = s2.z },
+                                { X = e2.x, Y = e2.y, Z = e2.z }, a, nil)
+                            local c2 = "nil"
+                            if p2 then pcall(function() c2 = tostring(#p2.PathPoints) end) end
+                            f:write(string.format("  findpath via %s -> points=%s\n", nm, c2))
+                        end
+                    end
+                end)
+                if not okp then f:write("  findpath LUA-ERROR: " .. tostring(perr) .. "\n") end
+            end
         end
-        -- RAYCAST probe (obstacle avoidance): cast a ray CAMERA-FORWARD at chest height,
-        -- 5 m, against each object type separately, so we can confirm the trace API works
-        -- and WHICH collision channel detects walls. Behind the same one-shot native
-        -- fuse as steer_around: the trace API is AREA-dependent (aborted uncatchably in
-        -- Area02, killing this dump mid-file, 2026-07-06) — an abort here marks it bad
-        -- and the NEXT dump skips it and reaches the probes after this section.
+        -- RAYCAST probes (obstacle avoidance): cast a ray CAMERA-FORWARD at chest
+        -- height, 5 m, through BOTH reflected trace overloads, EACH behind its own
+        -- one-shot fuse (an abort marks only that overload bad; the next dump skips it
+        -- and still runs the other). ForObjects aborted uncatchably on Area02 AND
+        -- Area04 even freshly re-armed (2026-07-06) — the TArray<EObjectTypeQuery>
+        -- marshalling is the prime suspect, which the channel overload avoids. The
+        -- unbuffered writes show exactly which call died.
         if pawn and px then
-            if _G.__KakarotRayNative == "bad" then
-                f:write("raycast probe: SKIPPED (trace API aborted on this map)\n")
-            elseif _G.__KakarotRayNative == "testing" then
-                _G.__KakarotRayNative = "bad"
-                f:write("raycast probe: SKIPPED (previous trace aborted mid-flight)\n")
+            local rfx, rfy = camera_forward()
+            if not rfx then
+                f:write("raycast probe: no camera forward\n")
             else
-                local fx, fy = camera_forward()
-                if fx then
-                    local sz = pz + AVOID_HEIGHT
-                    local d = 5 * M
-                    _G.__KakarotRayNative = "testing"
-                    for _, ot in ipairs({ 1, 2, 3, 4, 5, 6 }) do
-                        local blocked, dist = Ray.probe(pawn, px, py, sz,
-                            px + fx * d, py + fy * d, sz, { ot })
-                        f:write(string.format("raycast objType=%d -> %s%s\n", ot,
+                local sz = pz + AVOID_HEIGHT
+                local d = 5 * M
+                local function stage(fuse, name, values, call)
+                    if _G[fuse] == "bad" then
+                        f:write(string.format("raycast %s: SKIPPED (aborted on this map)\n", name))
+                        return
+                    end
+                    if _G[fuse] == "testing" then
+                        _G[fuse] = "bad"
+                        f:write(string.format("raycast %s: SKIPPED (previous trace aborted mid-flight)\n", name))
+                        return
+                    end
+                    _G[fuse] = "testing"
+                    for _, v in ipairs(values) do
+                        local blocked, dist = call(v)
+                        f:write(string.format("raycast %s=%d -> %s%s\n", name, v,
                             (blocked == nil and "API-UNAVAILABLE"
                                 or blocked and "BLOCKED" or "clear"),
                             (dist and string.format(" dist=%.0f", dist) or "")))
                     end
-                    _G.__KakarotRayNative = "ok"
-                else
-                    f:write("raycast probe: no camera forward\n")
+                    _G[fuse] = "ok"
                 end
+                stage("__KakarotRayNative", "ForObjects objType", { 1, 2, 3, 4, 5, 6 },
+                    function(ot)
+                        return Ray.probe(pawn, px, py, sz,
+                            px + rfx * d, py + rfy * d, sz, { ot })
+                    end)
+                stage("__KakarotRayChan", "LineTraceSingle channel", { 0, 1, 2, 3 },
+                    function(ch)
+                        return Ray.probe_channel(pawn, px, py, sz,
+                            px + rfx * d, py + rfy * d, sz, ch)
+                    end)
             end
         end
         -- Collectible-state probe: every collectible-class actor within 150 m with its

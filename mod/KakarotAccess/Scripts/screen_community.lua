@@ -35,6 +35,7 @@ local OFF = require("native_offsets")
 local Transition = require("transition")
 
 local BOARD = OFF.commuBoard
+local GRID = OFF.commuGrid
 
 local Commu = {}
 
@@ -69,17 +70,23 @@ local function anim_playing(w, anim)
     return ok and p == true
 end
 
--- Index of the item a predicate singles out, or nil if it matches zero or several.
-local function unique_match(list, test)
-    local hit, n = nil, 0
+-- Index of the slot whose cursor anim started MOST RECENTLY (smallest playback time),
+-- or nil if none is playing. On a fast cursor move the PREVIOUS slot's transient
+-- AnimLoop is often still running, and the old require-a-UNIQUE-playing-anim rule held
+-- the stale slot until that anim ran out — the "huge delay" on emblem moves (user
+-- 2026-07-06). GetAnimationCurrentTime is reflected (UMG.hpp) and only called on
+-- slots already known to be playing.
+local function newest_playing(list)
+    local hit, best_t
     for i, s in ipairs(list) do
-        if test(s) then
-            n = n + 1
-            if n > 1 then return nil end
-            hit = i
+        if anim_playing(s, s.AnimLoop) then
+            local t
+            pcall(function() t = s:GetAnimationCurrentTime(s.AnimLoop) end)
+            t = t or math.huge
+            if not best_t or t < best_t then hit, best_t = i, t end
         end
     end
-    return n == 1 and hit or nil
+    return hit
 end
 
 -- ---- character identity from the emblem face --------------------------------
@@ -139,17 +146,22 @@ end
 -- ---- grid: slots + labels -----------------------------------------------------
 
 -- The grid's emblem slots (on-screen entries of EmbList.EmbAry, in array order —
--- matches the visual left-to-right, top-to-bottom layout).
+-- matches the visual left-to-right, top-to-bottom layout). Second return: map from
+-- the 0-based EmbAry index to the visible-list position, because the NATIVE cursor
+-- (GRID.cursorIndex) indexes the raw array.
 local function slots()
-    local out = {}
+    local out, byai = {}, {}
     pcall(function()
         local arr = grid.EmbList.EmbAry
         for i = 1, #arr do
             local s = arr[i]
-            if Core.valid(s) and Core.is_visible(s) then out[#out + 1] = s end
+            if Core.valid(s) and Core.is_visible(s) then
+                out[#out + 1] = s
+                byai[i - 1] = #out
+            end
         end
     end)
-    return out
+    return out, byai
 end
 
 -- What a grid slot sounds like: character name (acquired), "not acquired" ("?"
@@ -420,11 +432,11 @@ Transition.on_begin("screen_community", clear_state)
 -- the board ALTERNATE with the A "Switch" button and can both report on_screen — the
 -- grid only wins when it actually shows slots, otherwise the board would be shadowed
 -- into silence, which is exactly what happened live on the placement screen).
-local grid_slots = nil
+local grid_slots, grid_byai = nil, nil
 
 function Commu.is_active()
     tick = tick + 1
-    grid_slots = nil
+    grid_slots, grid_byai = nil, nil
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     local m = det and "detail" or nil
     if not m then
@@ -439,7 +451,19 @@ function Commu.is_active()
             local frame
             pcall(function() frame = board.WL_BrdFrame end)
             if Core.valid(frame) and Core.on_screen(frame) then
-                m = "board"
+                -- Board MODE 10 = the emblem GRID owns the input (confirm on a socket
+                -- opens it; the board stays rendered beneath, which is why board-first
+                -- shadowed it into silence — sockets read, emblems didn't, user
+                -- 2026-07-06). Hand the tick to the grid reader while it has slots;
+                -- every other rendered-frame mode stays with the board.
+                if Mem.i32(board, BOARD.mode) == 10 then
+                    grid = Core.first_on_screen("AT_UICommunityStart", tick)
+                    if grid then
+                        grid_slots, grid_byai = slots()
+                        if #grid_slots > 0 then m = "grid" end
+                    end
+                end
+                if not m then m = "board" end
             else
                 board = nil   -- host up but frame not rendered (or wrong base class)
             end
@@ -448,7 +472,7 @@ function Commu.is_active()
     if not m then
         grid = Core.first_on_screen("AT_UICommunityStart", tick)
         if grid then
-            grid_slots = slots()
+            grid_slots, grid_byai = slots()
             if #grid_slots > 0 then m = "grid" end
         end
     end
@@ -477,11 +501,21 @@ local function cached_label(idx, make)
 end
 
 local function grid_update()
-    local list = grid_slots or slots()
+    local list, byai = grid_slots, grid_byai
+    if not list then list, byai = slots() end
     if #list == 0 then return end
-    -- The AnimLoop signal only fires while the cursor MOVES — hold the last resolved
-    -- slot while idle so the state stays stable (and F1 repeat keeps working).
-    local idx = unique_match(list, function(s) return anim_playing(s, s.AnimLoop) end)
+    -- PRIMARY selection source: the NATIVE cursor slot (EmbList+0x3EC = row*7+col,
+    -- fully mapped by the two gridhunt passes 2026-07-06) — instant and complete.
+    -- The AnimLoop heuristic stays only as fallback (it trails the input and its
+    -- leave-anim made a row+anim hybrid alternate between adjacent slots).
+    local idx
+    local el
+    pcall(function() el = grid.EmbList end)
+    if Core.valid(el) then
+        local raw = Mem.i32(el, GRID.cursorIndex)
+        if raw and raw >= 0 then idx = (byai or {})[raw] end
+    end
+    if not idx then idx = newest_playing(list) end
     if idx then last_idx = idx else idx = last_idx end
     if not idx or not list[idx] then return end
     local label = cached_label(idx, function() return slot_label(list[idx], idx, #list) end)
@@ -610,6 +644,29 @@ local function dump_cursor_hunt(frame)
     if #lines == 0 then return end
     local f = io.open(dump_path(), "a")
     if f then f:write(string.format("[%d] hunt %s\n", os.time(), table.concat(lines, " "))) f:close() end
+end
+
+-- DEBUG grid-cursor hunt (2026-07-06): the emblem grid's AnimLoop signal lags a beat
+-- behind the input (spoken emblem trails the cursor even after the newest-anim fix),
+-- so hunt the NATIVE cursor index in the non-reflected tail gaps (the board's
+-- hoveredCache pattern): EmbList 0x398..0x418 (gap 0x3D0..0x3F0 between AnimOutL and
+-- PageChangeType is the prime suspect: page + cursor) and the host 0x3A0..0x448 (CXX
+-- dump layouts). Appends changed i32s to dumps/dump_community.txt per cursor move.
+-- OFF since 2026-07-06 (third pass): fully mapped — EmbList+0x3D0 col, +0x3D4 row,
+-- +0x3EC = the complete slot index (native_offsets.commuGrid), wired in grid_update.
+local DEBUG_GRID = false
+local function grid_hunt()
+    local lines = {}
+    local el
+    pcall(function() el = grid.EmbList end)
+    if Core.valid(el) then scan_addr("emblist", Mem.addr(el), 0x398, 0x80, lines) end
+    if Core.valid(grid) then scan_addr("gridhost", Mem.addr(grid), 0x3A0, 0xA8, lines) end
+    if #lines == 0 then return end
+    local f = io.open(dump_path(), "a")
+    if f then
+        f:write(string.format("[%d] gridhunt %s\n", os.time(), table.concat(lines, " ")))
+        f:close()
+    end
 end
 
 local last_held = false      -- emblem-in-hand edge detector
@@ -742,6 +799,7 @@ function Commu.update()
         if not name then return end
         ann:focus(I18n.header(5), nil, name, nil, detail_text)
     elseif mode == "grid" then
+        if DEBUG_GRID then grid_hunt() end
         grid_update()
     elseif mode == "board" then
         board_update()

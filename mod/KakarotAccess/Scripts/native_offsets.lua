@@ -15,6 +15,9 @@ return {
         selectedIndex = 0x4e4,   -- int32, the highlighted ring item  (CONFIRMED)
         subIndex      = 0x4ec,   -- int32, selected row of an OPEN submenu (System/Story)  (CONFIRMED
                                  -- via F4: stepped 0->1->2 in the System submenu; sibling of 0x4e4)
+        fixedSubIndex = 0x4e8,   -- int32, selected row of the FIXED-rows submenus (Community:
+                                 -- Board/Emblems — subIndex stays 0 there)  (CONFIRMED via subhunt
+                                 -- 2026-07-06: toggled 0<->1 exactly with the two rows)
         depthFlag     = 0x4dc,   -- int32 nav-depth flag  (CONFIRMED via labeled F4 snapshot):
                                  --   1 = browsing the RING (top level); 0 = INSIDE a submenu.
                                  -- The reliable ring-vs-submenu discriminator (the _Sub arrays and
@@ -127,6 +130,19 @@ return {
         panelPosY    = 0x3F4,   -- float PointerCenterOffset.Y
         panelBoardX  = 0x550,   -- float hidden board-layout position X
         panelBoardY  = 0x554,   -- float hidden board-layout position Y
+    },
+
+    -- Soul Emblems grid (AT_UICommunityStart): cursor state lives in the EmbList
+    -- widget's non-UPROPERTY gap (UAT_UICommunityStart_EmbList, 0x3D0..0x3F0 between
+    -- AnimOutL and PageChangeType). FULLY MAPPED by runtime diffing (gridhunt,
+    -- 2026-07-06, two passes — vertical then horizontal): +0x3D0 = column 0..6
+    -- (wraps 0->6 moving left), +0x3D4 = row 0..2, and +0x3EC = row*7+col = the
+    -- COMPLETE 0-based EmbAry slot index (verified across a row change: col 1,
+    -- row 0->1 => 0x3EC jumped 1->8).
+    commuGrid = {
+        cursorIndex = 0x3EC,   -- int32 on EmbList: full selected EmbAry slot  (CONFIRMED)
+        colIndex    = 0x3D0,   -- int32 on EmbList: cursor column 0..6  (CONFIRMED)
+        rowIndex    = 0x3D4,   -- int32 on EmbList: cursor row 0..2  (CONFIRMED)
     },
 
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member

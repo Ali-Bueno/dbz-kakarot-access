@@ -35,6 +35,16 @@ local SUBMENU_BY_SID = {
     [6] = "UIStartTopList06_Sub",  -- System: Save/Load/Options/Tutorial/Title
 }
 
+-- Submenus with NO reflected sub-list: the Community section has no
+-- UIStartTopList00_Sub member (CXX dump: only 04_Sub/06_Sub exist). Its rows are
+-- FIXED and follow the START_TOP_LIST_ID enum order (AT_enums.hpp: COMMUNITY_BOARD=7,
+-- COMMUNITY_EMBLEM=8 — matches the on-screen order, screenshot 2026-07-06); the
+-- native subIndex (+0x4ec) picks the row. The labels are image fonts, so the spoken
+-- names come from I18n.startlist like the ring's.
+local FIXED_SUB_BY_SID = {
+    [0] = { 7, 8 },   -- Community: Community Board / Soul Emblems
+}
+
 local ann = Core.make_announcer()
 local top, tick = nil, 0
 local cached_screen, cached_name = nil, nil
@@ -57,6 +67,32 @@ local function item_name(item)
     local sid = Mem.u8(item, OFF.startTopList.sectionId)
     if not sid then return nil, nil end
     return I18n.startlist(sid), sid
+end
+
+-- DEBUG hunt for the community submenu's REAL cursor. OFF since 2026-07-06: FOUND —
+-- +0x4E8 toggled 0<->1 exactly with the two rows (startTop.fixedSubIndex). Kept for
+-- the next fixed-rows submenu that needs mapping.
+local HUNT_SUB = false
+local hunt_prev = nil
+local function hunt_submenu()
+    local addr = Mem.addr(top)
+    if not addr then return end
+    local cur = Mem.at_bytes(addr, 0x4B0, 0x90)
+    if not cur then return end
+    local prev = hunt_prev
+    hunt_prev = cur
+    if not prev or prev == cur then return end
+    local parts = {}
+    for off = 0, 0x90 - 4, 4 do
+        local a = string.unpack("<i4", prev, off + 1)
+        local b = string.unpack("<i4", cur, off + 1)
+        if a ~= b then
+            parts[#parts + 1] = string.format("+0x%X=%d(was %d)", 0x4B0 + off, b, a)
+        end
+    end
+    if #parts > 0 then
+        pcall(function() require("dev_log").write("[subhunt] " .. table.concat(parts, " ")) end)
+    end
 end
 
 -- Resolve what is currently selected. The depth flag decides ring vs submenu.
@@ -82,11 +118,29 @@ local function resolve()
                 end
             end
         end
+        local fixed = FIXED_SUB_BY_SID[parent_sid]
+        if fixed then
+            if HUNT_SUB then hunt_submenu() end
+            -- These submenus use their OWN cursor field (+0x4e8) — subIndex stays 0
+            -- here (subhunt 2026-07-06).
+            local sub_idx = Mem.i32(top, OFF.startTop.fixedSubIndex)
+            local sid = sub_idx and fixed[sub_idx + 1]
+            local name = sid and I18n.startlist(sid)
+            if name then
+                return parent_name, name,
+                    string.format("FIXEDSUB sub=%s sid=%s", tostring(sub_idx), tostring(sid))
+            end
+        end
     end
 
     -- Ring level: screen is "Main menu"; the item is the hovered section.
+    -- dbg carries depth + raw subIndex: the community submenu stayed silent even with
+    -- the FIXEDSUB mapping (2026-07-06) — this shows whether its depth flag ever
+    -- drops to 0 (System-like) or stays 1 (Story-like, needs another signal).
     return I18n.t("main_menu"), parent_name,
-        string.format("ring=%s sid=%s", tostring(ring_idx), tostring(parent_sid))
+        string.format("ring=%s sid=%s depth=%s sub=%s", tostring(ring_idx),
+            tostring(parent_sid), tostring(depth),
+            tostring(Mem.i32(top, OFF.startTop.subIndex)))
 end
 
 -- The OPEN ring instance. The game pools SEVERAL Start_Top_C and can open the ring on
@@ -116,7 +170,7 @@ function Field.is_active()
     -- verifiable. DISABLED by default: the file append runs on the GAME THREAD per
     -- cursor move, and wrapping the ring quickly caused visible lag spikes
     -- (2026-07-03). The mapping is long since verified; re-enable only to re-map.
-    local DEBUG_LOG = false
+    local DEBUG_LOG = false  -- community submenu mapped 2026-07-06 (fixedSubIndex)
     if DEBUG_LOG and dbg ~= last_dbg then
         last_dbg = dbg
         pcall(function()
