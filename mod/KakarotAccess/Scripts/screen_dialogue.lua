@@ -27,7 +27,6 @@ Dialogue.nav_mute = false
 
 local ann = Core.make_announcer()
 local tick = 0
-local subs, talk = nil, nil
 local cached = nil   -- current "Speaker: line" computed in is_active, reused by update
 
 -- Speakable text of an Xcmn_MultiLineText_C node, with fallbacks: the plain mainTxt
@@ -51,12 +50,31 @@ end
 -- The current "Speaker: line" from a dialogue window, or nil when it isn't really on
 -- screen or has no line. on_screen (not raw IsVisible) so a pooled/faded-out window's
 -- stale text doesn't keep this adapter active and shadow whatever is underneath.
+-- ATOMICITY: the body is read BEFORE and AFTER the speaker — if it changed in
+-- between, the window is mid-transition and the read is retried next tick. Reading
+-- name and body at slightly different moments paired one line's speaker with the
+-- NEXT line's text (the "mixed subtitles" reports, 2026-07-06).
 local function line_from(w, name_prop, body_prop)
     if not Core.on_screen(w) then return nil end
     local body = node_text(w[body_prop])
     if not body then return nil end
     local speaker = node_text(w[name_prop])
+    if node_text(w[body_prop]) ~= body then return nil end   -- changed mid-read
     return speaker and (speaker .. ": " .. body) or body
+end
+
+-- The first instance of `cls` currently showing a line. The game pools SEVERAL
+-- instances of each dialogue widget (Xcmn_Subtitles_C_0.._2 live) and swaps which one
+-- it drives across scene changes — a single cached instance missed every line spoken
+-- through the others (narrator lines unread, 2026-07-06; the multi-instance lesson).
+local function line_from_any(cls, name_prop, body_prop)
+    for _, w in ipairs(Core.cached_all(cls, tick)) do
+        if Core.valid(w) then
+            local line = line_from(w, name_prop, body_prop)
+            if line then return line end
+        end
+    end
+    return nil
 end
 
 function Dialogue.is_active()
@@ -69,10 +87,8 @@ function Dialogue.is_active()
     local hdr = Core.cached_live("Xcmn_Header_C", tick)
     if Core.on_screen(hdr) then cached = nil return false end
 
-    subs = Core.cached_live("Xcmn_Subtitles_C", tick)   -- cheap: cached refs, no per-tick scan
-    talk = Core.cached_live("Field_Talk_Win_C", tick)
-    cached = line_from(subs, "Txt_Name", "Txt_Selif")
-        or line_from(talk, "Txt_Speaker", "Txt_Msg")
+    cached = line_from_any("Xcmn_Subtitles_C", "Txt_Name", "Txt_Selif")
+        or line_from_any("Field_Talk_Win_C", "Txt_Speaker", "Txt_Msg")
     return cached ~= nil
 end
 
