@@ -228,6 +228,148 @@ function Discover.run()
             if not any then out[#out + 1] = "-- " .. cls .. "  (not present)" ; flush() end
         end
 
+        -- 1b) ITEM PALETTE (Start_Item_Customize_C) — the register-palette popup. Runs
+        -- EARLY: the field-pause ring section below dies on an uncatchable image read
+        -- and silently truncates every section after it (seen in every dump today).
+        -- Neither the host nor the bar blueprint is in the CXX dump, so this enumerates
+        -- the live tree from the widget POOLS by path needle: per bar every Image/Border
+        -- (name + vis + enum + brush + slot offsets — the cursor must differ between two
+        -- dumps taken on different rows), and each bar's Xcmn_Btn_Plat state
+        -- (controller-id/key arrays + Dmy_Btn brushes) so the slot's face button can be
+        -- named.
+        out[#out + 1] = ""
+        out[#out + 1] = "==== item palette Start_Item_Customize_C (bars + cursor hunt) ===="
+        flush()
+        do
+            local pal = nil
+            for _, o in pairs(FindAllOf("Start_Item_Customize_C") or {}) do
+                if live(o) then pal = o break end
+            end
+            if not valid(pal) then
+                out[#out + 1] = "  (Start_Item_Customize_C not present)"
+                flush()
+            else
+                out[#out + 1] = string.format("  host enum=%s isvis=%s", vis_enum(pal), isvis(pal))
+                flush()
+                local prefix = pal:GetFullName():match("%s(.+)$") or pal:GetFullName()
+                -- NOTE: generic Image/Border pool sweeps ABORT uncatchably on this game
+                -- (two truncated runs), so instead: recover each live object from the
+                -- KNOWN-SAFE text pool by OUTER-walking, then CLASS-REFLECT its declared
+                -- property names (safe) and read exactly those (declared -> safe reads).
+                local widget_cls
+                pcall(function() widget_cls = StaticFindObject("/Script/UMG.Widget") end)
+                local function is_widget(o)
+                    if not (widget_cls and widget_cls:IsValid()) then return false end
+                    local ok, r = pcall(function() return o:IsA(widget_cls) end)
+                    return ok and r == true
+                end
+                -- Dump every ObjectProperty child of `obj` (own class + supers up to
+                -- UserWidget): name, class, and — for widgets — vis/enum/op (+ brush).
+                local function dump_children(label, obj)
+                    out[#out + 1] = string.format("  %s cls=%s", label, obj:GetClass():GetFullName())
+                    flush()
+                    local cls = obj:GetClass()
+                    while cls and cls:IsValid() do
+                        cls:ForEachProperty(function(prop)
+                            local pn, pt = "?", "?"
+                            pcall(function() pn = prop:GetFName():ToString() end)
+                            pcall(function() pt = prop:GetClass():GetFName():ToString() end)
+                            if pt == "ObjectProperty" then
+                                local child
+                                pcall(function() child = obj[pn] end)
+                                if child and child:IsValid() then
+                                    local ccls = "?"
+                                    pcall(function() ccls = child:GetClass():GetFName():ToString() end)
+                                    if is_widget(child) then
+                                        local extra = (ccls == "Image") and (" brush=" .. brush_of(child)) or ""
+                                        out[#out + 1] = string.format(
+                                            "    .%s (%s) vis=%s enum=%s op=%s%s",
+                                            pn, ccls, isvis(child), vis_enum(child), opacity(child), extra)
+                                    else
+                                        out[#out + 1] = string.format("    .%s (%s) [non-widget]", pn, ccls)
+                                    end
+                                    flush()
+                                end
+                            end
+                        end)
+                        local oks, sup = pcall(function() return cls:GetSuperStruct() end)
+                        cls = (oks and sup) or nil
+                        if cls and cls:IsValid() then
+                            local cn = "?"
+                            pcall(function() cn = cls:GetFName():ToString() end)
+                            if cn == "UserWidget" or cn == "Object" or cn == "CFUIUserWidget" then break end
+                        end
+                    end
+                end
+                -- The host's own declared children (a single MOVING cursor would be here).
+                dump_children("HOST", pal)
+                -- One bar per row, recovered by outer-walking from its Txt_List text box
+                -- (mainTxt -> tree -> Txt_List -> tree -> Start_Item_Bar0N).
+                local bars = {}
+                for _, o in pairs(FindAllOf("CFUIMultiLineTextBox") or {}) do
+                    if valid(o) then
+                        local fn = o:GetFullName()
+                        if fn:find(prefix, 1, true) and fn:find(".Txt_List.", 1, true) then
+                            local bi = fn:match("%.Start_Item_Bar0(%d)%.")
+                            if bi then
+                                local cur = o
+                                for _ = 1, 6 do
+                                    local oko, outer = pcall(function() return cur:GetOuter() end)
+                                    if not oko or not outer or not outer:IsValid() then break end
+                                    cur = outer
+                                    -- The bar WIDGET's full name ENDS at its own name.
+                                    if cur:GetFullName():match("%.Start_Item_Bar0" .. bi .. "$") then
+                                        bars[tonumber(bi) + 1] = cur
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                for i = 1, 4 do
+                    if bars[i] and bars[i]:IsValid() then
+                        dump_children(string.format("BAR%02d", i - 1), bars[i])
+                    else
+                        out[#out + 1] = string.format("  BAR%02d not recovered", i - 1)
+                        flush()
+                    end
+                end
+                -- Each bar's plat-button state (native UAT_UIXcmnPlatBtn members).
+                for _, o in pairs(FindAllOf("Xcmn_Btn_Plat_C") or {}) do
+                    if valid(o) then
+                        local fn = o:GetFullName()
+                        if fn:find(prefix, 1, true) then
+                            local ids = "-"
+                            pcall(function()
+                                local a, parts = o.CurrentDynamicAssignInputControllerId, {}
+                                for i = 1, #a do parts[#parts + 1] = a[i]:ToString() end
+                                ids = table.concat(parts, "|")
+                            end)
+                            local keys = "-"
+                            pcall(function()
+                                local a, parts = o.CurrentKeyIds, {}
+                                for i = 1, #a do parts[#parts + 1] = tostring(tonumber(a[i])) end
+                                keys = table.concat(parts, "|")
+                            end)
+                            out[#out + 1] = string.format(
+                                "  PLAT %s vis=%s ctrlIds=%s keyIds=%s",
+                                fn:sub(#prefix + 1):match("^[^%s]*") or "?", isvis(o), ids, keys)
+                            for i = 0, 3 do
+                                local img
+                                pcall(function() img = o["Dmy_Btn_" .. string.format("%02d", i)] end)
+                                if valid(img) then
+                                    out[#out + 1] = string.format("    Dmy_Btn_%02d vis=%s brush=%s",
+                                        i, isvis(img), brush_of(img))
+                                end
+                            end
+                            flush()
+                        end
+                    end
+                end
+            end
+        end
+
         -- 2c) TUTORIAL rows: the raw button-glyph markup (Txt_Btn plain + rich + reflected
         --     GetText) + action, so we can see where the glyph lives and why it isn't
         --     resolving to a button name. Runs BEFORE the pause section, which can truncate.

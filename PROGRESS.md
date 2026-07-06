@@ -538,3 +538,54 @@ anything → grab a screenshot and/or an F4 probe → build a `screen_<name>.lua
 - **Enums matter**: the overworld item byte was `START_TOP_LIST_ID`, not `EXCmnHeaderFontType` —
   always confirm the enum in the CXX dump (`AT_enums.hpp`) rather than assuming.
 - Keep the native surface tiny and data-driven (`native_offsets.lua`) so patches are cheap.
+
+
+---
+
+## Session 2026-07-06 — radar 2.0, shops, results, palette (all verified except radar batch)
+
+**Radar / nav (pending in-game verify of the batch):**
+- Collected-item filter (`AAccessPointBase.InteractState == State_Taken(11)`); respawns re-list.
+- Item names: `FieldActionPointActor.ActionName`; placed items speak their drop-table id when wordy.
+- New categories: **Sites** (Bonfire/campfire 64, TRAININGROOM 25, Turtle School 27, practice 15/16,
+  time machine 19, medical 45, wind tunnels via `FindAllOf("ATWindRoad")`, non-memory action points
+  moved here with their ActionName) and **Enemies** (`AT_Character.SpawnType` 1 encount / 2 quest /
+  3 boss — the minimap icon list does NOT carry roaming enemies).
+- Enemy proximity alert: nearest enemy ≤50 m → "enemy, left, below, N meters" (edge-gated + 8 s).
+- Chained sweep: reaching/collecting a hand-picked target auto-targets the next nearest of the same
+  category (visited-set so unreliable collected flags can't loop); B/F3/new pick ends it.
+- Ctrl+F5 dump: collectible state probe (cls/bHidden/InteractState ≤150 m), raw AT_Character
+  SpawnType probe (≤300 m), Start_Top instance list, adapter_index.
+
+**Screens (verified in-game):**
+- `screen_palette.lua` — item palette registration (Start_Item_Customize_C). Open gate = host
+  slate enum 0 (parks HitTestInvisible closed); selected row = `Pnl_Curs_All` visible (verified;
+  `Img_Win01_Curs00` is always visible — red herring); button via `A.platbtn_token`. Structure
+  came from **pak asset extraction** (unencrypted zlib pak v7 → uasset name table) after live
+  reflection/pool sweeps kept aborting — that technique is now the first move for blueprints
+  missing from the CXX dump (see the decompilation memory / dbz-kakarot reference).
+- `screen_results.lua` — story results: rank letters from `Image_Rank` brush texture names,
+  incremental read following the reveal animation.
+- `screen_shopcmn.lua` (food/material buy list: price, buy count, owned, detail+stock) and
+  `screen_shopinfo.lua` (information store) — both on the `Ins_Cursor_Fad` row highlight.
+- Items inventory FIXED: register by blueprint name `Start_Item_C` (FindAllOf on the native
+  `AT_UIItemMenu` finds nothing — community-board lesson); category tab + detail pane tooltip.
+- Super Attacks (Shop_Training) reads "Empty list" when no skills; Shop_Top mode list fallback to
+  direct `Xlist_Bar01_NN`; controls guide announces once (F1 repeats via `reannounce()`).
+
+**Core fixes:**
+- `Core.on_screen`: ancestor walk 8→24 + root `IsInViewport()` check (screens closed by
+  viewport removal, e.g. Shop_Cook_C, kept every gate true and silently shadowed the ring pause —
+  found via Ctrl+F5 `adapter_index`).
+- `screen_field` picks the enum-0 `Start_Top_C` instance (game pools several; cached_live locked
+  onto a stale one → mute ring after shops).
+- screen_cooking: live-detail gate + notice-release overlay (was the pause-shadowing adapter).
+
+**New key lessons:**
+- **Pak extraction first** for any blueprint not in the CXX dump: paks are unencrypted (v7, zlib);
+  the uasset name table gives every widget name + native base offline in one step.
+- Popup-over-menu widgets park **HitTestInvisible** when closed → gate on enum==0, not on_screen.
+- Version-stamp debug files (a silent missed reload is indistinguishable otherwise); cached
+  collect() must retry (the per-tick scan budget can return empty pools on the first attempt).
+- Generic pool sweeps (`FindAllOf("Image")`) and ForEachProperty VALUE reads abort uncatchably;
+  property NAMES via class reflection are safe, value reads only for members proven declared.

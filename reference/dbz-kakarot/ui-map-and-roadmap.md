@@ -9,6 +9,14 @@ Use this to decide, per screen, the robust read strategy — instead of guessing
 [input-icons-and-keyconfig.md](input-icons-and-keyconfig.md) and
 [ui-and-text-architecture.md](ui-and-text-architecture.md).
 
+> **Relationship to [the generic UI strategy](../ui-accessibility/generic-strategy.md):** this doc is
+> Kakarot's **Step 0 output** — the shared layers found by reading the game's code (dumps): the
+> selection signal (`GetSelectValue()` on `MenuListBase00/01/03` — one read inherited by every screen
+> embedding those lists, encapsulated in `ui_archetypes.lua`), the navigation hub (`UMenuManager`),
+> and the text chokepoint (`UCFUIXcmnMultiLineText`). The per-screen `screen_*.lua` adapters exist
+> only where §1 proves there is **no readable shared state** (family B: material/highlight-only
+> selection) — they are the strategy's legitimate quirk overrides, not screen-by-screen duplication.
+
 ---
 
 ## 1. Universal patterns

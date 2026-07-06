@@ -68,6 +68,9 @@ local REPATH_MS = 3000                -- NavMesh path refresh period
 local DIR_CUE_MS = 3000               -- min gap between spoken direction words (XV2)
 local ELEV_DIST = 12 * M              -- |dz| that counts as above/below
 local ELEV_CUE_MS = 7000              -- min gap between elevation words (XV2)
+local ENEMY_ALERT_DIST = 50 * M       -- proximity radius for the spoken enemy warning
+local ENEMY_CUE_MS = 8000             -- min gap between enemy warnings (anti-spam)
+local ENEMY_CLOSER_FACTOR = 0.5       -- re-announce the SAME enemy only when this much closer
 
 -- EMapIcon values (AT_enums.hpp) that mark QUEST objectives on the map.
 local MAIN_QUEST_ICONS = { [24] = true, [71] = true }   -- MAINQUEST_NO_BATTLE, MAINQUEST_RANGE_ONLY
@@ -83,8 +86,8 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
 local GROUP_ORDER = {
-    "quests", "collectibles", "npc", "fishing", "gathering", "shops", "minigames",
-    "dragonball", "other",
+    "quests", "collectibles", "npc", "enemies", "sites", "fishing", "gathering",
+    "shops", "minigames", "dragonball", "other",
 }
 local ICON_GROUP = {
     -- quests (no distance limit)
@@ -105,6 +108,34 @@ local ICON_GROUP = {
     [37] = "minigames",
     -- dragon balls
     [28] = "dragonball",
+    -- interactable SITES (EMapIcon names in AT_enums.hpp): places you use rather than
+    -- pick up — the cooking bonfire, training grounds/room, Turtle School, facilities.
+    [15] = "sites",   -- PRACTICE
+    [16] = "sites",   -- PRACTICE_BATTLE
+    [17] = "sites",   -- DEVELOPMENT
+    [19] = "sites",   -- TIME_MACHINE
+    [25] = "sites",   -- TRAININGROOM (learn Super Attacks)
+    [27] = "sites",   -- TURTLESCHOOL
+    [39] = "sites",   -- GroupBattlePractice
+    [43] = "sites",   -- Submarine
+    [44] = "sites",   -- SaiyanHangout
+    [45] = "sites",   -- MedicalRoom
+    [46] = "sites",   -- StoryReplay
+    [48] = "sites",   -- ClearedPractice
+    [57] = "sites",   -- ReturnToMain
+    [62] = "sites",   -- SkyseedPlatform
+    [64] = "sites",   -- Bonfire (campfire cooking)
+    [67] = "sites",   -- ToFloatingIsland
+    -- field ENEMIES (EMapIcon names in AT_enums.hpp)
+    [30] = "enemies", -- EVIL_ENEMY
+    [31] = "enemies", -- EVIL_ENEMY_BOSS
+    [32] = "enemies", -- ENEMIES_BASE
+    [34] = "enemies", -- EVIL_ENEMY_2
+    [35] = "enemies", -- EVIL_ENEMY_BOSS_2
+    [36] = "enemies", -- ENEMIES_AIRSHIP
+    [49] = "enemies", -- GRD_Enemy
+    [50] = "enemies", -- GRD_SuperEnemyGroup
+    [52] = "enemies", -- GRD_EnemyGroup
 }
 -- Per-EMapIcon spoken noun (i18n key) for the focused item; falls back to the group
 -- name when the type has no specific noun. Keeps items in a group distinguishable
@@ -117,7 +148,28 @@ local ICON_NOUN = {
     [28] = "cat_dragonball",
     [1] = "cat_food_shop", [2] = "cat_cooking_shop", [3] = "cat_material_shop",
     [58] = "cat_restaurant",
+    -- sites
+    [15] = "cat_practice", [16] = "cat_practice_battle", [17] = "cat_develop",
+    [19] = "cat_timemachine", [25] = "cat_trainroom", [27] = "cat_turtleschool",
+    [43] = "cat_submarine", [45] = "cat_medical", [46] = "cat_replay",
+    [62] = "cat_skyplatform", [64] = "cat_bonfire",
+    -- enemies
+    [30] = "cat_enemy", [34] = "cat_enemy", [49] = "cat_enemy",
+    [31] = "cat_enemy_boss", [35] = "cat_enemy_boss",
+    [32] = "cat_enemy_base", [36] = "cat_enemy_airship",
+    [50] = "cat_enemy_group", [52] = "cat_enemy_group",
 }
+-- EMapIcon types that are field enemies (for the proximity alert): derived from
+-- ICON_GROUP so the two can never drift apart.
+local ENEMY_ICONS = {}
+for t, g in pairs(ICON_GROUP) do
+    if g == "enemies" then ENEMY_ICONS[t] = true end
+end
+-- EAccessPointState::State_Taken (AT_enums.hpp): a collected access-point item keeps
+-- its actor until respawn with InteractState == Taken (bHidden stays false, which is
+-- why the old hidden-only filter kept listing collected items — user 2026-07-06); a
+-- respawn puts it back to State_Wait, so filtering on Taken also re-lists respawns.
+local STATE_TAKEN = 11
 local RADAR_NPC_CAP = 300 * 100   -- distance limit for the NPC direct-scan (drops the far
                                   -- parked-character pool ~2600 m away)
 local RADAR_MAP_CAP = 1000 * 100  -- cap for the game's OWN minimap icons: shows the LOCAL
@@ -146,6 +198,23 @@ local last_elev_ms = -ELEV_CUE_MS
 local gated_prev = false
 local world_gone = 0           -- consecutive ticks with the world gate closed
 local WORLD_DROP_TICKS = 50    -- ~5 s hidden -> assume level change/battle, drop target
+
+-- Dynamic chaining (user request 2026-07-06): after reaching a hand-picked item, sweep
+-- the category — retarget the nearest remaining item of the same group, on and on,
+-- until the player picks something else (R3) or stops (B / F3). Works for EVERY picker
+-- category except quests (those already have the auto-radar re-arm behavior).
+-- The advance trigger must NOT depend on a reliable "collected" flag (the game's taken
+-- state proved inconsistent across item kinds): advance when the reached actor is
+-- gone/hidden/Taken OR when the player simply walks away from the reached spot. A
+-- visited-key set guarantees forward progress even when an item never reports collected.
+local function chainable(grp) return grp ~= nil and grp ~= "quests" end
+local chain_wait = nil         -- { actor, key, grp, stateful } while at the reached item
+local chain_seen = {}          -- keys already visited in this sweep (never re-targeted)
+
+local last_enemy_key = nil     -- enemy proximity alert: edge-gate per enemy actor
+local last_enemy_d = 0
+local last_enemy_ms = -ENEMY_CUE_MS
+local enemy_cache, enemy_next = nil, 0   -- cached field-enemy actor list (sparse rescan)
 
 local route = nil              -- array of {x,y,z} NavMesh corners, or nil
 local route_idx = 0
@@ -667,9 +736,137 @@ Transition.on_begin("nav_tracker", function()
     world_gone = 0
     invoker_key, invoker_nav = nil, nil   -- pawn/nav system are new next level; re-register
     avoid_steering, avoid_cued = false, false
+    chain_wait, chain_seen = nil, {}   -- the sweep's actors lived in the dead level
+    last_enemy_key = nil
+    enemy_cache, enemy_next = nil, 0
     gated_prev = true        -- audio is being stopped right here
     Audio.stop()
 end)
+
+-- ---- dynamic target chaining + enemy proximity alert --------------------------------
+
+-- Retarget the nearest remaining item of `grp` (chained sweep), skipping every key
+-- already visited this sweep. Speaks the new target via set_manual_target; announces
+-- the sweep done (and ends it) when nothing is left. Game thread only; caller has
+-- already passed the world gates this tick.
+local function chain_to_next(grp)
+    local cats = Nav.list_targets()
+    for _, c in ipairs(cats) do
+        if c.key == grp then
+            for _, it in ipairs(c.items) do   -- nearest first
+                if not chain_seen[it.key] then
+                    Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
+                        it.grp, it.stateful, true)   -- true: keep the sweep's seen-set
+                    return
+                end
+            end
+        end
+    end
+    chain_seen = {}
+    Speech.say(I18n.t("radar_chain_done"), false)
+end
+
+-- While chain_wait is set: the player reached a hand-picked target. Advance the sweep
+-- when the reached actor is gone (freed / hidden / InteractState Taken — collected) OR
+-- when the player walks away from the spot: that "I'm done here" signal works for every
+-- category, including ones with no collected state at all (gathering volumes, NPCs).
+-- InteractState is read ONLY when the item was flagged stateful (an AAccessPointBase —
+-- see add_target), never on plain actors.
+local function chain_step(px, py, pz)
+    local a = chain_wait.actor
+    local advance = not Core.valid(a)
+    if not advance then
+        local hidden, st = false, nil
+        pcall(function() hidden = a.bHidden end)
+        if chain_wait.stateful then
+            pcall(function() st = tonumber(a.InteractState) end)
+        end
+        advance = (hidden == true or hidden == 1) or st == STATE_TAKEN
+    end
+    if not advance then
+        local x, y, z = actor_pos(a)
+        advance = x ~= nil
+            and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) > REARM_DIST
+    end
+    if advance then
+        local grp = chain_wait.grp
+        chain_wait = nil
+        chain_to_next(grp)
+    end
+end
+
+-- Field enemies = AAT_Character actors with a non-zero E_ENEMYSPAWN_TYPE (AT_enums:
+-- 1 ENCOUNT, 2 QUEST, 3 BOSS; SpawnType is reflected on AAT_Character @0xC78). The
+-- minimap MapIconList proved NOT to carry the roaming field enemies (the icon-based
+-- enemies category + proximity alert found nothing in play, user 2026-07-06), so
+-- they're scanned directly — on the same sparse cadence as the navi icons, because
+-- FindAllOf walks every UObject.
+local ENEMY_NOUN_BY_SPAWN = { [1] = "cat_enemy", [2] = "cat_enemy_quest", [3] = "cat_enemy_boss" }
+
+local function enemy_spawn_type(c)
+    local st
+    pcall(function() st = tonumber(c.SpawnType) end)
+    return st
+end
+
+-- The live field-enemy list { {actor, noun}, ... } (cached; entries re-validated by
+-- every user). The player/companions have SpawnType NONE (0) and drop out naturally.
+local function enemies_list()
+    if enemy_cache == nil or tick >= enemy_next then
+        enemy_cache = {}
+        enemy_next = tick + RESCAN_CLASSES
+        for _, c in pairs(FindAllOf("AT_Character") or {}) do
+            if Core.valid(c) then
+                local noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]
+                if noun then enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun } end
+            end
+        end
+    end
+    return enemy_cache
+end
+
+-- Spoken proximity warning for the nearest field enemy: "<enemy noun>, <direction>,
+-- <above/below>, N meters". Edge-gated per enemy actor (a NEW nearest enemy, or the
+-- same one at half the distance) + a hard time throttle.
+local function enemy_alert(px, py, pz)
+    local best, best_d2 = nil, ENEMY_ALERT_DIST * ENEMY_ALERT_DIST
+    for _, e in ipairs(enemies_list()) do
+        if Core.valid(e.actor) then
+            local x, y, z = actor_pos(e.actor)
+            if x then
+                local d2 = (x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2
+                if d2 < best_d2 then
+                    best = { actor = e.actor, x = x, y = y, z = z, noun = e.noun }
+                    best_d2 = d2
+                end
+            end
+        end
+    end
+    if not best then last_enemy_key = nil return end   -- re-arm once the area is clear
+    local ms = now_ms()
+    local key = tostring(best.actor:GetAddress())
+    local d = math.sqrt(best_d2)
+    if key == last_enemy_key and d > last_enemy_d * ENEMY_CLOSER_FACTOR then return end
+    if ms - last_enemy_ms < ENEMY_CUE_MS then return end
+    last_enemy_key, last_enemy_d, last_enemy_ms = key, d, ms
+    local parts = { I18n.t(best.noun) }
+    local dx, dy, dz = best.x - px, best.y - py, best.z - pz
+    local dh = math.sqrt(dx * dx + dy * dy)
+    local fx, fy = camera_forward()
+    if fx and dh > 1 then
+        local nx, ny = dx / dh, dy / dh
+        local pan = nx * -fy + ny * fx
+        local fb = nx * fx + ny * fy
+        parts[#parts + 1] = I18n.t(math.abs(fb) >= math.abs(pan)
+            and (fb >= 0 and "nav_ahead" or "nav_behind")
+            or (pan >= 0 and "nav_right" or "nav_left"))
+    end
+    if math.abs(dz) >= ELEV_DIST then
+        parts[#parts + 1] = I18n.t(dz > 0 and "nav_up" or "nav_down")
+    end
+    parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(d))
+    Speech.say(table.concat(parts, ", "), false)
+end
 
 
 local function step()
@@ -739,6 +936,12 @@ local function step()
         _G.__KakarotRouteNative = "ok"
     end
 
+    -- Chained pickup sweep: waiting for the reached collectible to be taken, then
+    -- retarget the next one (see chain_step). Enemy proximity warning on the same
+    -- sparse cadence as the scans (a per-tick icon sweep would hammer reflection).
+    if chain_wait then chain_step(px, py, pz) end
+    if tick % SCAN_EVERY == 0 then enemy_alert(px, py, pz) end
+
     -- Re-scan the game's guidance markers ~1/s (even when idle — scanning every
     -- tick would hammer reflection): picks up a fresh quest marker automatically
     -- (auto-track on accept), retargets when the current step is done, and drops
@@ -770,9 +973,40 @@ local function step()
     end
 
     if not target then return end
-    if not Core.valid(target.actor) then drop_target() return end
+
+    -- Sweep continuation for a hand-picked chainable target that is collected or
+    -- despawns MID-APPROACH (grabbed before the arrival radius fires, or the game
+    -- removed it): mark it visited and go straight to the next one — this is the
+    -- "pick it up -> the radar marks the next nearest by itself" flow.
+    local function chain_over()
+        chain_seen[target.key] = true
+        local grp = target.grp
+        drop_target()
+        auto_suppressed = true
+        chain_to_next(grp)
+    end
+    local sweeping = target.manual and chainable(target.grp)
+
+    if not Core.valid(target.actor) then
+        if sweeping then chain_over() else drop_target() end
+        return
+    end
+    if sweeping then
+        local hidden, st = false, nil
+        pcall(function() hidden = target.actor.bHidden end)
+        if target.stateful then
+            pcall(function() st = tonumber(target.actor.InteractState) end)
+        end
+        if (hidden == true or hidden == 1) or st == STATE_TAKEN then
+            chain_over()
+            return
+        end
+    end
     local tx, ty, tz = actor_pos(target.actor)
-    if not tx then drop_target() return end
+    if not tx then
+        if sweeping then chain_over() else drop_target() end
+        return
+    end
 
     -- Arrival on TRUE 3D distance to the objective (not the route corner).
     local d3 = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2 + (tz - pz) ^ 2)
@@ -788,7 +1022,15 @@ local function step()
             -- target is dropped, AND the auto-scan is suppressed so it can't immediately
             -- re-acquire the same spot when you walk away. To track again, re-pick from
             -- the R3 menu or press F3. (Auto quest targets keep the re-arm behavior.)
+            -- Chainable categories instead arm the sweep: mark this spot visited and,
+            -- once it's collected or the player walks off, retarget the next one
+            -- (chain_step).
             if target.manual then
+                if chainable(target.grp) then
+                    chain_seen[target.key] = true
+                    chain_wait = { actor = target.actor, key = target.key,
+                                   grp = target.grp, stateful = target.stateful }
+                end
                 drop_target()
                 auto_suppressed = true
             end
@@ -902,6 +1144,7 @@ function Nav.toggle()
     if not on then
         Audio.stop()
         drop_target()
+        chain_wait, chain_seen = nil, {}
         companion_idx = 0
         Speech.say(I18n.t("nav_off"), true)
     else
@@ -925,7 +1168,10 @@ local function companions(px, py, pz)
     local me_key = me and tostring(me:GetAddress()) or ""
     local out = {}
     for _, c in pairs(FindAllOf("AT_Character") or {}) do
-        if Core.valid(c) and tostring(c:GetAddress()) ~= me_key then
+        -- Exclude field ENEMIES (SpawnType != 0): Shift+F5 must cycle party members,
+        -- not the mob you're about to fight (they're AT_Character too).
+        if Core.valid(c) and tostring(c:GetAddress()) ~= me_key
+            and not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] then
             local x, y, z = actor_pos(c)
             if x then
                 local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
@@ -1115,8 +1361,10 @@ function Nav.list_targets()
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
     -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
     -- groups by max(global cap, range) — never tighter than the cap, so an already-shown
-    -- icon farther than its small reveal radius isn't wrongly dropped.
-    local function add_target(actor, grp, noun, range, src, name)
+    -- icon farther than its small reveal radius isn't wrongly dropped. stateful = the
+    -- actor carries AAccessPointBase.InteractState (safe to read Taken on it later —
+    -- the arrival-chaining check needs to know).
+    local function add_target(actor, grp, noun, range, src, name, stateful)
         if not Core.valid(actor) then return end
         local key = tostring(actor:GetAddress())
         if seen[key] then return end
@@ -1128,8 +1376,8 @@ function Nav.list_targets()
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
-            local cap = (src == "questchar" or src == "collectible") and RADAR_NPC_CAP
-                or math.max(RADAR_MAP_CAP, range or 0)
+            local cap = (src == "questchar" or src == "collectible" or src == "enemy")
+                and RADAR_NPC_CAP or math.max(RADAR_MAP_CAP, range or 0)
             if d > cap then kept = false end
         end
         if diag then
@@ -1146,7 +1394,8 @@ function Nav.list_targets()
         seen[key] = true
         groups[grp] = groups[grp] or { items = {} }
         groups[grp].items[#groups[grp].items + 1] =
-            { actor = actor, key = key, dist = d, noun = noun, name = name }
+            { actor = actor, key = key, dist = d, noun = noun, name = name,
+              grp = grp, stateful = stateful or nil }
     end
     -- Add by EMapIcon type (icons): derive group + noun from the type.
     local function add_icon(actor, t, src)
@@ -1228,16 +1477,94 @@ function Nav.list_targets()
             pcall(function() hidden = a.bHidden end)
             return not (hidden == true or hidden == 1)
         end
-        for _, cls in ipairs({ "FieldActionPointActor", "PlacementObjectInfo", "AccessPointItemBase" }) do
-            for _, a in pairs(FindAllOf(cls) or {}) do
-                if Core.valid(a) and visible_actor(a) then
+        -- Collected filter for AAccessPointBase-derived actors (see STATE_TAKEN above).
+        -- InteractState is declared on AAccessPointBase ONLY — FieldActionPointActor is
+        -- a plain AActor, and reading a non-existent property is the uncatchable abort,
+        -- so the caller must only pass access-point classes here.
+        local function not_taken(a)
+            local st
+            pcall(function() st = tonumber(a.InteractState) end)
+            return st ~= STATE_TAKEN
+        end
+        -- Spoken name for an action spot: the game's own ActionName (reflected FString
+        -- on AFieldActionPointActor @0x340). nil when empty -> generic noun.
+        local function action_name(a)
+            local s
+            pcall(function()
+                local v = a.ActionName
+                if type(v) == "string" then s = v
+                elseif v then s = v:ToString() end
+            end)
+            return (type(s) == "string" and s ~= "") and s or nil
+        end
+        -- Spoken name for a placed item: its drop-table id (APlacementObjectInfo.
+        -- ItemTableComponent.FieldItemDropData, FFieldItemData FixedId/NormalId — all
+        -- reflected, CXX dump). The id is game data, not localized text, so it is only
+        -- spoken when it reads as words (has a 3+ letter run); cryptic numeric codes
+        -- fall back to the generic "item" noun.
+        local function drop_item_name(a)
+            local raw
+            pcall(function()
+                local comp = a.ItemTableComponent
+                if not (comp and comp:IsValid()) then return end
+                local d = comp.FieldItemDropData
+                if not d then return end
+                for _, fld in ipairs({ "FixedId", "NormalId" }) do
+                    local id = d[fld]
+                    local s = id and id:ToString()
+                    if s and s ~= "" and s ~= "None" then raw = s return end
+                end
+            end)
+            if not raw then return nil end
+            local cleaned = raw:gsub("_", " ")
+            return cleaned:match("%a%a%a") and cleaned or nil
+        end
+        -- Per-class capabilities (which reflected properties EXIST — reading a property
+        -- a class doesn't declare is the uncatchable abort, so never probe blindly):
+        --   FieldActionPointActor (plain AActor + ActionName; Field Memories derive
+        --     from it) -> spoken name from ActionName, NO InteractState;
+        --   PlacementObjectInfo (AAccessPointBase + ItemTableComponent) -> item-id
+        --     name + Taken filter;
+        --   AccessPointItemBase (AAccessPointBase only) -> Taken filter, generic noun.
+        for _, c in ipairs({
+            { cls = "FieldActionPointActor", action = true },
+            { cls = "PlacementObjectInfo", item = true, state = true },
+            { cls = "AccessPointItemBase", state = true },
+        }) do
+            for _, a in pairs(FindAllOf(c.cls) or {}) do
+                if Core.valid(a) and visible_actor(a)
+                    and (not c.state or not_taken(a)) then
                     local cn = "?"
                     pcall(function() cn = a:GetClass():GetFName():ToString() end)
-                    local noun = cn:find("Memories", 1, true) and "cat_memory" or "cat_item"
-                    add_target(a, "collectibles", noun, nil, "collectible")
+                    local is_memory = cn:find("Memories", 1, true) ~= nil
+                    local grp = "collectibles"
+                    local noun = is_memory and "cat_memory" or "cat_item"
+                    if c.action and not is_memory then
+                        -- Non-memory action points are interactable SPOTS you use
+                        -- (train/meditate/examine — e.g. Piccolo's waterfall), not
+                        -- pickups: list them under Sites, labeled by their ActionName.
+                        grp, noun = "sites", "radar_cat_sites"
+                    end
+                    local name = (c.action and action_name(a))
+                        or (c.item and drop_item_name(a)) or nil
+                    add_target(a, grp, noun, nil, "collectible", name, c.state)
                 end
             end
         end
+    end
+    -- 4b) wind tunnels (AATWindRoad — the flight-boost spline routes; the actor origin
+    -- is the entrance). Direct scan: they carry a FieldPointComponent (WindPath), not a
+    -- minimap icon. Requested 2026-07-06.
+    for _, a in pairs(FindAllOf("ATWindRoad") or {}) do
+        if Core.valid(a) then
+            add_target(a, "sites", "cat_windroad", nil, "collectible")
+        end
+    end
+
+    -- 5) field enemies: the direct SpawnType scan (enemies_list) — the minimap icon
+    -- list does not carry the roaming enemies. Tight distance cap like NPCs.
+    for _, e in ipairs(enemies_list()) do
+        add_target(e.actor, "enemies", e.noun, nil, "enemy")
     end
 
     -- SAFE navi-type diagnostic (NAVI_DEBUG): for each in-use quest arrow, the two
@@ -1375,8 +1702,9 @@ end
 -- next tick (that's the base radar), but a hand-picked target stays gone until
 -- re-picked. Does NOT turn the whole radar off (F3 does that).
 function Nav.stop_tracking()
-    local had = target ~= nil
+    local had = target ~= nil or chain_wait ~= nil
     drop_target()
+    chain_wait, chain_seen = nil, {}   -- also ends a pending sweep
     auto_suppressed = true   -- stay quiet until re-pick / F3 (don't auto-grab a quest)
     Audio.stop()
     if had then Speech.say(I18n.t("nav_stopped"), true) end
@@ -1384,14 +1712,21 @@ end
 
 -- Commit a picker choice: track this actor as a MANUAL target (auto-scan won't steal
 -- it) and make sure the radar is on. Game-thread only (radar_menu calls it there).
-function Nav.set_manual_target(actor, key, label)
+-- grp/stateful come from the picker item (Nav.list_targets) and drive the arrival
+-- chaining (chainable + chain_step); both may be nil (companion tracking).
+-- keep_sweep = internal (chain_to_next): keep the sweep's visited set; a player pick
+-- starts a FRESH sweep instead.
+function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
     if not Core.valid(actor) then return false end
     on = true
     auto_suppressed = false   -- an explicit pick resumes normal tracking
     gated_prev = false
     companion_idx = 0
+    chain_wait = nil          -- an explicit pick replaces any pending sweep wait
+    if not keep_sweep then chain_seen = {} end
     target = { actor = actor, key = key or tostring(actor:GetAddress()),
-               pri = PRI_OTHER, label = label, manual = true }
+               pri = PRI_OTHER, label = label, manual = true,
+               grp = grp, stateful = stateful }
     arrived, target_missing = false, 0
     route, route_idx = nil, 0
     local pawn = player_pawn()
@@ -1439,6 +1774,23 @@ function Nav.dump()
             f:write(string.format("ui step ms: max=%.1f avg=%.2f over %d ticks\n",
                 st.max, st.sum / st.n, st.n))
             _G.__KakarotStepStats = nil
+        end
+        -- Ring-pause diagnostic (mute-pause reports): every Start_Top_C instance with
+        -- its own visibility enum + effective on_screen, so a wrong-instance latch vs a
+        -- shadowing adapter (adapter_index above) can be told apart from this dump
+        -- alone. Pooled GameInstance widgets are safe to probe behind menus; NOT during
+        -- a transition (hence the gate).
+        if not trans then
+            pcall(function()
+                for i, o in pairs(FindAllOf("Start_Top_C") or {}) do
+                    if Core.valid(o) then
+                        local e = "?"
+                        pcall(function() e = tostring(tonumber(o:GetVisibility())) end)
+                        f:write(string.format("  Start_Top_C[%s] enum=%s on_screen=%s %s\n",
+                            tostring(i), e, tostring(Core.on_screen(o)), o:GetFullName()))
+                    end
+                end
+            end)
         end
         -- Gates: mid-transition, with a menu up or the world hidden, actor reads
         -- below could abort.
@@ -1573,6 +1925,74 @@ function Nav.dump()
             else
                 f:write("raycast probe: no camera forward\n")
             end
+        end
+        -- Collectible-state probe: every collectible-class actor within 150 m with its
+        -- hidden/state fields. Diagnoses the "collected item still listed" reports:
+        -- collect the item, Ctrl+F5, and see which field (bHidden / InteractState /
+        -- actor gone) the game actually flips for THAT item kind.
+        for _, c in ipairs({
+            { cls = "FieldActionPointActor" },
+            { cls = "PlacementObjectInfo", state = true },
+            { cls = "AccessPointItemBase", state = true },
+        }) do
+            local n = 0
+            for _, a in pairs(FindAllOf(c.cls) or {}) do
+                if Core.valid(a) then
+                    local x, y, z = actor_pos(a)
+                    if x then
+                        local dd = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                        if dd <= 150 * M then
+                            n = n + 1
+                            local cn, hid, st = "?", "?", "-"
+                            pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                            pcall(function() hid = tostring(a.bHidden) end)
+                            if c.state then
+                                pcall(function() st = tostring(tonumber(a.InteractState)) end)
+                            end
+                            f:write(string.format(
+                                "  collectible[%s] d=%.0fm cls=%s bHidden=%s state=%s\n",
+                                c.cls, dd / M, cn, hid, st))
+                        end
+                    end
+                end
+            end
+            f:write(string.format("collectible probe %s: %d within 150m\n", c.cls, n))
+        end
+        -- Field-enemy probe (SpawnType scan): who is around and how far.
+        do
+            local list = enemies_list()
+            f:write(string.format("field enemies (SpawnType != 0): %d cached\n", #list))
+            for i, e in ipairs(list) do
+                if Core.valid(e.actor) then
+                    local x, y, z = actor_pos(e.actor)
+                    local dd = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                    f:write(string.format("  enemy[%d] %s d=%s %s\n", i, e.noun,
+                        dd and string.format("%.0fm", dd / M) or "?", e.actor:GetFullName()))
+                end
+            end
+        end
+        -- RAW AT_Character probe: EVERY character within 300 m with its class + raw
+        -- SpawnType. If roaming field enemies (the pre-Raditz robots read as nothing,
+        -- 2026-07-06) are NOT SpawnType!=0 AT_Characters, this shows what they ARE.
+        do
+            local n = 0
+            for _, c in pairs(FindAllOf("AT_Character") or {}) do
+                if Core.valid(c) then
+                    local x, y, z = actor_pos(c)
+                    if x then
+                        local dd = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                        if dd <= 300 * M then
+                            n = n + 1
+                            local cn, st = "?", "?"
+                            pcall(function() cn = c:GetClass():GetFName():ToString() end)
+                            pcall(function() st = tostring(tonumber(c.SpawnType)) end)
+                            f:write(string.format("  atchar d=%.0fm spawnType=%s cls=%s\n",
+                                dd / M, st, cn))
+                        end
+                    end
+                end
+            end
+            f:write(string.format("AT_Character within 300m: %d\n", n))
         end
         f:write("current target: " .. (target and (target.label .. " " .. target.key) or "none") .. "\n")
         f:close()

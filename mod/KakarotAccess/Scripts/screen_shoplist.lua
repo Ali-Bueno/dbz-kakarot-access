@@ -32,6 +32,11 @@ local last_sig = nil
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
 -- The on-screen rows of a host's ListBarCtn (raw array order = visual top-to-bottom).
+-- Fallback: the blueprint's DIRECT row properties Xlist_Bar01_00..03 (UShop_Top_C,
+-- Shop_Top.hpp) — the NPC-talk mode list ("Prepare a dish / Leave" on a second pooled
+-- Shop_Top_C instance) showed rows the native ListBarCtn array did not carry
+-- (user 2026-07-06), so read both sources.
+local BAR_COUNT = 4   -- Xlist_Bar01_00..03 (UShop_Top_C, Shop_Top.hpp)
 local function rows_of(h)
     local out = {}
     pcall(function()
@@ -41,6 +46,13 @@ local function rows_of(h)
             if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
         end
     end)
+    if #out == 0 then
+        for i = 0, BAR_COUNT - 1 do
+            local r
+            pcall(function() r = h["Xlist_Bar01_" .. string.format("%02d", i)] end)
+            if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
+        end
+    end
     return out
 end
 

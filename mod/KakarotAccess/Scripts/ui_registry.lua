@@ -94,9 +94,13 @@ function Registry.toggle()
 end
 
 -- Re-announce the current selection (F1): reset the active announcer so update()
--- speaks it again next tick.
+-- speaks it again next tick. An adapter that suppresses repeats on its own (the
+-- resident controls guide speaks each content only once) provides reannounce()
+-- instead, so F1 can override its once-only gate.
 function Registry.repeat_current()
-    if active and active.reset then active.reset() end
+    if not active then return end
+    if active.reannounce then active.reannounce()
+    elseif active.reset then active.reset() end
 end
 
 return Registry

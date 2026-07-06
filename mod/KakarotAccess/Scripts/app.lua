@@ -33,6 +33,9 @@ Registry.register(require("screen_choicelist"))
 -- Field Memory / story-recap viewer (Field_Memory_C): a titled paged narration overlay.
 -- High priority — it's a full-screen reader that pauses the game.
 Registry.register(require("screen_memory"))
+-- Story results (Quest_Main_Clear_C): the post-battle rank board. High priority — a
+-- full-screen sequence; reads incrementally following the game's reveal animation.
+Registry.register(require("screen_results"))
 Registry.register(require("screen_dialog"))
 Registry.register(require("screen_pause"))
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
@@ -62,14 +65,31 @@ Registry.register(require("screen_options"))
 -- stay on_screen underneath, so training (the foreground screen) must win. It gates on
 -- Shop_Training_C being on_screen, so it never activates over a regular shop.
 Registry.register(require("screen_training"))
+-- Item/info BUY lists open OVER the shop-top (which can stay on_screen underneath), so
+-- they must precede screen_shoplist/screen_shop:
+--   Shop_Cmn_C  — the food/material item list (name, price, purchase count, owned);
+--   Shop_Info_C — the information store (map-location intel: fishing/hunting/... spots).
+Registry.register(require("screen_shopcmn"))
+Registry.register(require("screen_shopinfo"))
 Registry.register(require("screen_shoplist"))
 Registry.register(require("screen_cooking"))
 Registry.register(require("screen_shop"))
 -- Overworld ring submenus that open their own screen (native class, no _C). The two list
 -- screens share the generic MenuListBase factory; Characters/Party use their own getter/field.
 local ListScreen = require("screen_list")
-Registry.register(ListScreen.new("AT_UIItemMenu", "Xmenu_List00",
-    function() return I18n.startlist(2) end))                       -- Items / Inventory
+-- Items / Inventory. Class = the BLUEPRINT name Start_Item_C: FindAllOf on the native
+-- base AT_UIItemMenu finds nothing on this game (community-board lesson), which kept
+-- the inventory mute (F7 dump 2026-07-06). Xmenu_List00 is a Cmn01MenuList09 ->
+-- MenuListBase01, whose TxtTitle carries the category tab ("Recovery").
+-- Item palette registration (X in the inventory) opens OVER the Items list, which
+-- stays on_screen underneath — the palette must precede it.
+Registry.register(require("screen_palette"))
+-- Detail pane (blueprint-only nodes, subtree-scanned): sell price, main location,
+-- item info + description — spoken as the focused item's tooltip.
+Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
+    function() return I18n.startlist(2) end, "TxtTitle",
+    { "Txt_Cap00", "Txt_Detail00", "Txt_Cap01", "Txt_Detail01",
+      "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }))
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters

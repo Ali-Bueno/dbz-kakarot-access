@@ -75,6 +75,19 @@ local function glyph_name(plat)
     return #parts > 0 and table.concat(parts, I18n.t("combo_join")) or nil
 end
 
+-- Public glyph naming for OTHER adapters showing Xcmn_Btn_Plat widgets (e.g. the item
+-- palette's per-slot d-pad button): same texture-token -> word path as the help bar.
+-- Guarded on the exact blueprint class: the Dmy_Btn_NN images glyph_name reads are
+-- declared on Xcmn_Btn_Plat_C ONLY (Xcmn_Btn_Plat.hpp), not on the native
+-- UAT_UIXcmnPlatBtn — probing them on a bare native instance would be the abort.
+function Keyhelp.glyph(plat)
+    if not Core.valid(plat) then return nil end
+    local cn
+    pcall(function() cn = plat:GetClass():GetFName():ToString() end)
+    if cn ~= "Xcmn_Btn_Plat_C" then return nil end
+    return glyph_name(plat)
+end
+
 -- The current keyhelp entries, in on-screen order: { {label=, button=}, ... }.
 function Keyhelp.read()
     local kh = Keyhelp.bar()

@@ -5,8 +5,9 @@
 -- no field command fires. R3 (not a trigger) is used so the flight controls stay free
 -- (R2 = descend / L2 = ascend on the Flying Nimbus). It's modal — you don't hold
 -- anything:
---   * L1 / R1  — previous / next CATEGORY (like menu tabs): Quests, Characters,
---                Fishing, Gathering, Shops, Minigames, Dragon Balls, Other.
+--   * L1 / R1  — previous / next CATEGORY (like menu tabs): Quests, Collectibles,
+--                Characters, Enemies, Sites, Fishing, Gathering, Shops, Minigames,
+--                Dragon Balls, Other (GROUP_ORDER in nav_tracker).
 --   * D-pad up / down — move through the items in the category (nearest first).
 --   * A / Cross — SELECT the focused item: it becomes the audio-radar target, menu closes.
 --   * R3 again  — close WITHOUT changing anything (cancel).
@@ -92,7 +93,9 @@ local function do_close(mode)
         local cat = cats[ci]
         local it = cat and cat.items[ii]
         if it and it.actor then
-            Nav.set_manual_target(it.actor, it.key, Nav.item_label(it))
+            -- grp/stateful drive the arrival chaining for pickup categories.
+            Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
+                it.grp, it.stateful)
         end
     elseif mode == "stop" then
         Nav.stop_tracking()

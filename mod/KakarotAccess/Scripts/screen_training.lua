@@ -24,6 +24,12 @@ local ann = Core.make_announcer()
 local host = nil
 local tick = 0
 local last_idx = nil   -- last list selection index, to force a re-announce on cursor move
+local empty_ticks = 0  -- consecutive update ticks with no skill name (empty-list settle)
+
+-- Ticks the detail panel must stay empty before we commit to "empty list": right after
+-- the menu opens the panel is briefly blank even when skills exist, and announcing
+-- "empty" then reading the first skill a tick later would be noise.
+local EMPTY_SETTLE_TICKS = 4
 
 -- Read a text node hanging off the host by field name, guarded. nil if absent/empty.
 local function field_text(name)
@@ -32,12 +38,17 @@ local function field_text(name)
     return t
 end
 
--- The list title ("Super Attack List") = the screen name, read live from the game so it
--- follows the game's language; falls back to the localized "Super Attacks".
-local function screen_name()
+-- The list title ("Super Attack List"), read live from the game so it follows the
+-- game's language. nil while the title widget has no text (menu not really up yet).
+local function list_title()
     local t
     pcall(function() t = Core.read_text(host.Xlist_List05_Lay7.Txt_Title) end)
-    return t or I18n.t("training")
+    return t
+end
+
+-- The screen name = the live list title, falling back to the localized "Super Attacks".
+local function screen_name()
+    return list_title() or I18n.t("training")
 end
 
 -- Acquisition cost line ("D Medals: N"), nested in the first quest bar. Guarded.
@@ -51,15 +62,26 @@ function Training.is_active()
     tick = tick + 1
     host = Core.cached_live("Shop_Training_C", tick)
     if not Core.on_screen(host) then return false end
-    -- Active only once the detail panel has a skill name (avoids reading a half-open menu).
-    return field_text("Txt_Cap00") ~= nil
+    -- Active once the list title renders. Gating on the detail panel's skill name (as
+    -- before) meant a character with NO acquirable Super Attacks yet read NOTHING at
+    -- all (empty list -> empty detail panel, user report 2026-07-06 with Piccolo).
+    return list_title() ~= nil
 end
 
-function Training.reset() last_idx = nil; ann:reset() end
+function Training.reset() last_idx = nil; empty_ticks = 0; ann:reset() end
 
 function Training.update()
     local name = field_text("Txt_Cap00")
-    if not name then return end
+    if not name then
+        -- Empty skill list: after a short settle (the panel is briefly blank while the
+        -- menu opens), announce the screen + character with an explicit "empty list".
+        empty_ticks = empty_ticks + 1
+        if empty_ticks >= EMPTY_SETTLE_TICKS then
+            ann:focus(screen_name(), field_text("Txt_Cap01"), I18n.t("list_empty"), nil, nil)
+        end
+        return
+    end
+    empty_ticks = 0
     -- Force a re-announce when the LIST selection index moves, even if the detail panel's
     -- skill NAME happens to repeat — so cursor movement is always spoken once more skills
     -- (or characters via LB/RB) are available. The list is a MenuListBase00 (GetSelectValue).

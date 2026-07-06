@@ -32,6 +32,12 @@ local tick = 0
 local cached = nil      -- committed content the announcer sees (updated only when stable)
 local last_scan = nil   -- previous raw scan, for the 2-scan stability gate
 local boxes = nil       -- cached HEADER text boxes (under the container, not inside a row)
+local last_spoken = nil -- last content actually announced. NOT cleared by reset(): the
+                        -- resident world guide keeps re-becoming the active adapter
+                        -- (e.g. between dialogue lines), and re-reading the whole
+                        -- controls list every time was constant noise (user 2026-07-06).
+                        -- Each distinct content is spoken ONCE; F1 re-reads on demand
+                        -- (reannounce below).
 
 -- Collect the container's header text boxes once (title/subtitle/page live outside the
 -- control rows). Excludes the row boxes — those are read structurally below.
@@ -127,7 +133,16 @@ end
 
 function Tutorial.reset() ann:reset() end
 
+-- F1 (Registry.repeat_current): force a re-read of the guide even though its content
+-- was already spoken once.
+function Tutorial.reannounce()
+    last_spoken = nil
+    ann:reset()
+end
+
 function Tutorial.update()
+    if cached == last_spoken then return end   -- already spoken once; F1 re-arms
+    last_spoken = cached
     ann:focus(nil, nil, cached, nil, nil)
 end
 

@@ -189,7 +189,18 @@ notes.
 
 > The **behavior specs** for in-game UI live in
 > [the UI accessibility specs](reference/ui-accessibility/) — prescriptive rules the patches/hooks
-> delegate to. Read the relevant doc before implementing that part of a mod.
+> delegate to. Read the relevant doc before implementing that part of a mod. Read
+> [the generic UI strategy](reference/ui-accessibility/generic-strategy.md) **first**: coverage by
+> default — classify **widgets, never screens**, so reusable archetype readers cover every screen
+> (including unseen ones) automatically; per-screen overrides only for genuine quirks; generic
+> tree-walk fallback and fault isolation so a changed screen degrades locally instead of breaking the
+> mod. **Never implement UI screen by screen.** Menus are a **fixed-cost phase**: when a shared
+> pattern exists, implement it once for all menus at the same time — build the pipeline, validate on
+> 2–3 representative screens, sweep the critical path. Menus must end up **100% readable** in the
+> least time possible; how much of the mod that phase is depends on the genre (in point-and-click /
+> visual novels the UI *is* the gameplay — same architecture, bigger share). See the workflow in the
+> generic strategy doc. The menu/inventory rules below are the per-archetype read behavior that plugs
+> into it.
 
 - **Menus** — [the menus spec](reference/ui-accessibility/menus.md). Trigger:
   **"accessibilize menus"** / **"accesibilizar menús"**. Covers entering a menu/screen, tabs/sections,

@@ -11,13 +11,14 @@ doc before implementing that part of a mod.
 
 | Doc | Trigger phrase | Covers |
 |-----|----------------|--------|
-| [Generic UI strategy](generic-strategy.md) | (read first for either trigger below) | Hybrid architecture: reusable widget-archetype readers + per-screen subscription, central registry/dispatcher, shared-logic detection, generic fallback — how to cover the max number of screens with zero duplication |
+| [Generic UI strategy](generic-strategy.md) | (read first for either trigger below) | Coverage-by-default architecture: classify **widgets, never screens** — reusable archetype readers cover every screen automatically; per-screen overrides only for genuine quirks; generic tree-walk fallback + fault isolation so a changed screen degrades locally, never breaks the mod |
 | [Menus](menus.md) | "accessibilize menus" / "accesibilizar menús" | Entering a menu/screen, tabs/sections, vertical navigation, horizontal controls (sliders/checkboxes/dropdowns), popup & confirmation dialogs |
 | [Inventories](inventories.md) | "accessibilize the inventory" / "accesibilizar inventario" | Item readout, subsections (belt/equipment/storage), crafting recipes (have/needed) — builds on the menu rules |
 
 **Read [generic-strategy.md](generic-strategy.md) first**, then the concrete spec: it defines the
-reusable layer (widget archetypes + subscriptions) that the menu/inventory rules plug into, so you
-don't rewrite the same reader per screen.
+default pipeline (widget classification → archetype readers → fallback) that the menu/inventory rules
+plug into. Screens are never implemented one by one — a screen only gets its own code when it has a
+genuine quirk the generic pipeline can't infer.
 
 ## Shared principles (apply to every UI doc here)
 

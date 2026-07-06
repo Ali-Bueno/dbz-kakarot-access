@@ -89,12 +89,26 @@ local function resolve()
         string.format("ring=%s sid=%s", tostring(ring_idx), tostring(parent_sid))
 end
 
+-- The OPEN ring instance. The game pools SEVERAL Start_Top_C and can open the ring on
+-- a NEW one (e.g. right after a shop — Shop_Top_C_1 style; the ring went mute after
+-- leaving the food shop, user 2026-07-06), while a stale instance can linger
+-- HitTestInvisible. cached_live locked onto one instance forever, and first_on_screen
+-- could still return the stale enum-3 one — so pick the instance that is genuinely
+-- open (its own visibility is Visible(0)) among all on-screen ones.
+local function live_ring()
+    for _, o in ipairs(Core.cached_all("Start_Top_C", tick)) do
+        if Core.on_screen(o) then
+            local ok, v = pcall(function() return o:GetVisibility() end)
+            if ok and tonumber(v) == 0 then return o end
+        end
+    end
+    return nil
+end
+
 function Field.is_active()
     tick = tick + 1
-    top = Core.cached_live("Start_Top_C", tick)
-    if not Core.on_screen(top) then cached_screen, cached_name = nil, nil return false end
-    local ok, v = pcall(function() return top:GetVisibility() end)
-    if not (ok and tonumber(v) == 0) then cached_screen, cached_name = nil, nil return false end
+    top = live_ring()
+    if not top then cached_screen, cached_name = nil, nil return false end
 
     local screen, name, dbg = resolve()
 

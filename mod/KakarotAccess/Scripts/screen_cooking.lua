@@ -41,6 +41,12 @@ local DEBUG = false
 local ann = Core.make_announcer()
 local host, shoplist, list, overlay = nil, nil, nil, nil
 local last_overlay, last_sig = nil, nil
+local overlay_spoken = nil   -- notice-RELEASE (see screen_dialog): NOT cleared by
+                             -- reset(). A pooled complete/result banner lingering
+                             -- after leaving the campfire must not hold this adapter
+                             -- active forever — it is spoken ONCE, then releases the
+                             -- tick to the screens below (the mute ring pause,
+                             -- Ctrl+F5 adapter_index=17, 2026-07-06).
 local tick = 0
 
 -- Rich text -> speech (drop <span color=…>/</>, resolve <inputicon>); nil if empty.
@@ -171,13 +177,20 @@ function Cooking.is_active()
     host = Core.cached_live("Shop_Cook_C", tick)   -- pooled: cheap cached ref per tick
     if not Core.valid(host) then overlay = nil return false end
     -- The complete/result overlays can be up while the menu body is hidden (the cook
-    -- demo collapses it), so they keep the adapter active on their own.
+    -- demo collapses it), so they keep the adapter active on their own — but only
+    -- until spoken once (overlay_spoken): a stale banner must not hold the screen.
     overlay = overlay_text()
-    if overlay then return true end
+    if overlay and overlay ~= overlay_spoken then return true end
+    overlay = nil
     if not Core.on_screen(host) then return false end
     pcall(function() shoplist = host.CookMenuList end)
     list = Core.valid(shoplist) and shoplist.WL_Shop_Cmn_List or nil
-    return A.list_select_index(list) ~= nil
+    if A.list_select_index(list) == nil then return false end
+    -- Live-detail gate: a genuinely open menu always shows the selected dish in the
+    -- detail pane. A pooled closed Shop_Cook_C keeps a FROZEN GetSelectValue() (that
+    -- index is known-stale on this screen), which held this adapter ACTIVE and
+    -- silently shadowed everything below it — the mute ring pause (2026-07-06).
+    return (title() or genre()) ~= nil
 end
 
 function Cooking.reset()
@@ -191,6 +204,8 @@ function Cooking.update()
             last_overlay = overlay
             Speech.say(overlay, true)   -- context change: the result interrupts
         end
+        overlay_spoken = overlay        -- release: next tick this banner no longer
+                                        -- keeps the adapter active (notice pattern)
         return
     end
     last_overlay = nil

@@ -1,10 +1,10 @@
 # Accessibilizing menus
 
 > When the user says **"accessibilize menus"** (or the Spanish **"accesibilizar menús"**), apply exactly
-> this behavior. Shared principles live in [the topic README](README.md). Build this on top of the
-> reusable layer in [generic-strategy.md](generic-strategy.md) — the rules below are the canonical read
-> behavior for each **widget archetype**; wire them into per-screen subscriptions there, don't duplicate
-> them per screen.
+> this behavior. Shared principles live in [the topic README](README.md). Build this on top of
+> [generic-strategy.md](generic-strategy.md) — the rules below are the canonical read behavior for each
+> **widget archetype**, implemented once in the shared archetype readers. They apply to every screen
+> automatically via widget classification; never re-implement them per screen.
 
 ## Entering a menu / screen
 

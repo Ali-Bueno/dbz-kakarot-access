@@ -42,15 +42,42 @@ local NOT_RENDERED = { [1] = true, [2] = true }
 -- So on top of IsVisible() we walk the parent chain and reject if any ancestor is
 -- Collapsed/Hidden. Cheap: a handful of GetParent()/GetVisibility() calls, only for the
 -- few widgets an adapter probes per tick.
+-- Widget-ancestor walk depth. 8 could stop short of a collapsed ancestor on the deeper
+-- trees (a stale child then reads as on-screen); 24 covers any real UI depth here.
+local MAX_ANCESTORS = 24
+
+-- UClass UserWidget (cached): IsInViewport below may only be called on UserWidgets —
+-- calling a member a class doesn't have is the uncatchable C++ abort.
+local userwidget_cls = nil
+local function is_userwidget(o)
+    if userwidget_cls == nil then
+        local ok, c = pcall(function() return StaticFindObject("/Script/UMG.UserWidget") end)
+        userwidget_cls = (ok and c) or false
+    end
+    if not userwidget_cls then return false end
+    local ok, r = pcall(function() return o:IsA(userwidget_cls) end)
+    return ok and r == true
+end
+
 function Core.on_screen(o)
     if not Core.is_visible(o) then return false end
     local cur, depth = o, 0
-    while depth < 8 do
+    while depth < MAX_ANCESTORS do
         local okp, p = pcall(function() return cur:GetParent() end)
         if not okp or not Core.valid(p) then break end
         local oke, e = pcall(function() return p:GetVisibility() end)
         if oke and NOT_RENDERED[tonumber(e) or -1] then return false end
         cur, depth = p, depth + 1
+    end
+    -- The walk topped out (no parent): if the top is a ROOT UserWidget it must also be
+    -- IN the viewport. This game closes some screens by REMOVING the root from the
+    -- viewport while its own slate enum stays Visible — a stale Shop_Cook_C then kept
+    -- every on_screen gate true and silently shadowed the ring pause (Ctrl+F5
+    -- adapter_index=17, 2026-07-06). IsInViewport is called ONLY on UserWidgets and is
+    -- proven safe here (discover.lua's inVP column uses it on every container).
+    if depth < MAX_ANCESTORS and is_userwidget(cur) then
+        local okv, invp = pcall(function() return cur:IsInViewport() end)
+        if okv and invp == false then return false end
     end
     return true
 end
