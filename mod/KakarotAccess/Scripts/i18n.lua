@@ -138,6 +138,7 @@ local S = {
         cat_cooking_shop = "cocina",
         cat_material_shop = "tienda de materiales",
         cat_restaurant = "restaurante",
+        cat_info_shop = "tienda de información",
         -- interactable sites (EMapIcon, see nav_tracker ICON_NOUN)
         cat_bonfire = "hoguera de cocina",
         cat_trainroom = "sala de entrenamiento",
@@ -151,6 +152,7 @@ local S = {
         cat_skyplatform = "plataforma celeste",
         cat_submarine = "submarino",
         cat_windroad = "túnel de viento",
+        cat_portal = "salida de zona",
         -- field enemies
         cat_enemy = "enemigo",
         cat_enemy_quest = "enemigo de misión",
@@ -164,6 +166,7 @@ local S = {
         radar_chain_done = "No quedan objetos en la categoría",
         nav_stopped = "Rastreo detenido",
         list_empty = "Lista vacía",
+        map_empty = "terreno vacío",
         shop_buy_fmt = "comprar: %s",
         shop_have_fmt = "tienes: %s",
         results_total = "Total",
@@ -284,6 +287,7 @@ local S = {
         cat_cooking_shop = "cooking shop",
         cat_material_shop = "material shop",
         cat_restaurant = "restaurant",
+        cat_info_shop = "information store",
         -- interactable sites (EMapIcon, see nav_tracker ICON_NOUN)
         cat_bonfire = "cooking campfire",
         cat_trainroom = "training room",
@@ -297,6 +301,7 @@ local S = {
         cat_skyplatform = "sky platform",
         cat_submarine = "submarine",
         cat_windroad = "wind tunnel",
+        cat_portal = "area exit",
         -- field enemies
         cat_enemy = "enemy",
         cat_enemy_quest = "quest enemy",
@@ -310,6 +315,7 @@ local S = {
         radar_chain_done = "No items left in this category",
         nav_stopped = "Tracking stopped",
         list_empty = "Empty list",
+        map_empty = "empty terrain",
         shop_buy_fmt = "buy: %s",
         shop_have_fmt = "owned: %s",
         results_total = "Total",

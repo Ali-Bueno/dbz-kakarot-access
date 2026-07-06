@@ -128,7 +128,12 @@ function Tutorial.is_active()
         if c and c == last_scan then cached = c end
         last_scan = c
     end
-    return cached ~= nil
+    -- Announce-once + RELEASE (notice pattern): once the current content has been
+    -- spoken, this RESIDENT guide must not stay the active adapter — holding the
+    -- screen silently shadowed every adapter registered below it (Items menu mute,
+    -- Ctrl+F5 adapter_index=12, 2026-07-06). It re-takes the tick only for NEW
+    -- content, or after F1 (reannounce clears last_spoken).
+    return cached ~= nil and cached ~= last_spoken
 end
 
 function Tutorial.reset() ann:reset() end
@@ -141,8 +146,8 @@ function Tutorial.reannounce()
 end
 
 function Tutorial.update()
-    if cached == last_spoken then return end   -- already spoken once; F1 re-arms
-    last_spoken = cached
+    if cached == last_spoken then return end   -- (unreachable now; is_active releases)
+    last_spoken = cached                        -- next tick is_active releases the screen
     ann:focus(nil, nil, cached, nil, nil)
 end
 

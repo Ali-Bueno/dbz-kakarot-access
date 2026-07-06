@@ -50,8 +50,11 @@ Registry.register(require("screen_dialogue"))
 Registry.register(require("screen_telop"))
 Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
-Registry.register(require("screen_tutorial"))
+local Tutorial = require("screen_tutorial")
+Registry.register(Tutorial)
 Registry.register(require("screen_options"))
+-- Area map + world map (free-cursor screens; hovered/current area name readout).
+Registry.register(require("screen_map"))
 -- Cooking precedes the shop: the cooking menu embeds a UAT_UIShopTop (WL_CookingTop),
 -- so the shop adapter could latch onto it while the cooking screen is the real context.
 -- The Shop_Top mode/action list ("Make a dish / Make a full-course meal", shop Buy/Sell):
@@ -85,11 +88,12 @@ local ListScreen = require("screen_list")
 -- stays on_screen underneath — the palette must precede it.
 Registry.register(require("screen_palette"))
 -- Detail pane (blueprint-only nodes, subtree-scanned): sell price, main location,
--- item info + description — spoken as the focused item's tooltip.
+-- item info + description as the tooltip; Txt_Title00 (the pane's item title) is the
+-- LIVE selection name — the list's reflected index freezes at 0 on this screen.
 Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
     function() return I18n.startlist(2) end, "TxtTitle",
     { "Txt_Cap00", "Txt_Detail00", "Txt_Cap01", "Txt_Detail01",
-      "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }))
+      "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }, "Txt_Title00"))
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters
@@ -113,7 +117,16 @@ function App.stop()
     RadarMenu.stop()
 end
 
-function App.repeat_current() Registry.repeat_current() end
+-- F1: repeat the active screen's focus — or, with no screen owning the tick (the
+-- resident controls guide RELEASES it after announcing once), re-arm the guide so
+-- F1 in the open world re-reads the controls.
+function App.repeat_current()
+    if Registry.active_adapter() then
+        Registry.repeat_current()
+    else
+        Tutorial.reannounce()
+    end
+end
 
 -- Navigation radar (nav_tracker.lua) — keybinds in main.lua delegate here so the
 -- whole tracker stays hot-reloadable.

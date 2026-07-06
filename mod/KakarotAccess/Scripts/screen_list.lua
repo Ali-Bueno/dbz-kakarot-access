@@ -28,26 +28,64 @@ local M = {}
 --              members (no property access allowed) — they're found by full-name
 --              subtree scan instead (the screen_tutorial technique), so any name is
 --              safe here; missing ones are simply skipped.
-function M.new(class, list_member, name_fn, tab_member, detail_nodes)
+-- name_node  : OPTIONAL detail-pane TITLE widget name used as the LIVE selection name
+--              (subtree-scanned like detail_nodes). Needed when GetSelectValue() is
+--              FROZEN on a screen (the Items menu stuck at index 0 while the cursor
+--              moved — telemetry 2026-07-06, same disease as the cooking list): the
+--              detail pane is repopulated by the game on every cursor move, so its
+--              title IS the selection. Falls back to the indexed row when absent.
+function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node)
     local S = {}
     local ann = Core.make_announcer()
     local host, list, tick = nil, nil, 0
     local boxes = nil   -- detail-pane text boxes by detail_nodes index (lazy collect)
 
+    -- Diagnostic (palette-style): appends this screen's gate state to
+    -- dumps/dump_items.txt on every change, so a mute list screen (the Items menu,
+    -- 2026-07-06) is diagnosable from the file alone. Cheap: writes on change only.
+    -- OFF since 2026-07-06: Items verified reading (frozen index -> name_node path).
+    local DEBUG = false
+    local last_dbg = nil
+    local function dbg(s)
+        if not DEBUG then return end
+        s = class .. ": " .. s
+        if s == last_dbg then return end
+        last_dbg = s
+        pcall(function()
+            local src = debug.getinfo(1, "S").source:sub(2)
+            local dir = src:match("^(.*)[/\\]") or "."
+            local f = io.open(dir .. "\\dumps\\dump_items.txt", "a")
+            if f then f:write(string.format("[%d] %s\n", os.time(), s)) f:close() end
+        end)
+    end
+
+    local name_box = nil   -- the name_node text box (lazy collect, with boxes)
+
     local function collect_boxes()
         boxes = {}
-        if not (detail_nodes and Core.valid(host)) then return end
+        name_box = nil
+        if not ((detail_nodes or name_node) and Core.valid(host)) then return end
         local prefix = host:GetFullName():match("%s(.+)$") or host:GetFullName()
         for _, o in pairs(Core.cached_all("CFUIMultiLineTextBox", tick)) do
             if Core.valid(o) then
                 local fn = o:GetFullName()
                 if fn:find(prefix, 1, true) then
-                    for i, nm in ipairs(detail_nodes) do
+                    for i, nm in ipairs(detail_nodes or {}) do
                         if fn:find("." .. nm .. ".", 1, true) then boxes[i] = o end
+                    end
+                    if name_node and fn:find("." .. name_node .. ".", 1, true) then
+                        name_box = o
                     end
                 end
             end
         end
+    end
+
+    -- The live selection name from the detail-pane title (see name_node above).
+    local function live_name()
+        if not (name_box and Core.valid(name_box)) then return nil end
+        local ok, s = pcall(function() return name_box.Text:ToString() end)
+        return (ok and s and s ~= "") and A.markup_to_speech(s) or nil
     end
 
     -- The visible detail-pane lines, in detail_nodes order (lazy: called by the
@@ -70,21 +108,32 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes)
         host = Core.first_on_screen(class, tick)   -- picks the live pooled instance each tick
         if not host then boxes = nil return false end
         list = host[list_member]
-        if A.list_select_index(list) == nil then return false end
-        if detail_nodes and not boxes then collect_boxes() end
+        local idx = A.list_select_index(list)
+        if (detail_nodes or name_node) and not boxes then collect_boxes() end
+        if DEBUG then
+            local he = "?"
+            pcall(function() he = tostring(tonumber(host:GetVisibility())) end)
+            local row = idx and A.list_selected_row(list)
+            dbg(string.format("host enum=%s list=%s idx=%s rowName=%s liveName=%s",
+                he, tostring(Core.valid(list)), tostring(idx),
+                tostring(row and row.name), tostring(live_name())))
+        end
+        if idx == nil and live_name() == nil then return false end
         return true
     end
 
-    function S.reset() ann:reset() boxes = nil end
+    function S.reset() ann:reset() boxes = nil name_box = nil end
 
     function S.update()
         local row = A.list_selected_row(list)
-        if not row then return end
+        -- Live detail-pane name first (follows the cursor even when the reflected
+        -- index is frozen); the indexed row is the fallback + count source.
+        local name = live_name() or (row and row.name) or nil
+        if not name then return end
         local tab = tab_member and Core.read_text(list[tab_member]) or nil
         -- screen name on entry; category tab on change; the focused item name + its
         -- number/count as it changes; the detail pane as the tooltip.
-        ann:focus(name_fn(), tab, Core.phrase(row.name, row.num), nil,
-            detail_nodes and tooltip or nil)
+        ann:focus(name_fn(), tab, name, nil, detail_nodes and tooltip or nil)
     end
 
     return S

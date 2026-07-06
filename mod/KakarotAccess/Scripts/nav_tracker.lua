@@ -94,7 +94,10 @@ local ICON_GROUP = {
     [24] = "quests", [71] = "quests", [26] = "quests", [40] = "quests",
     [47] = "quests", [53] = "quests", [59] = "quests", [72] = "quests",
     -- story / community NPCs
-    [4] = "npc", [10] = "npc", [42] = "npc", [56] = "npc", [61] = "npc", [41] = "npc",
+    [4] = "npc", [42] = "npc", [56] = "npc", [61] = "npc", [41] = "npc",
+    -- INFORMATION_STORE is a shop (sells map intel), not a character (was
+    -- miscategorized under npc — Area02 dump 2026-07-06)
+    [10] = "shops",
     -- fishing
     [5] = "fishing",
     -- gathering (collect / hunt / ore / bugs / rocks)
@@ -147,7 +150,7 @@ local ICON_NOUN = {
     [5] = "cat_fishing", [6] = "cat_collect", [7] = "cat_hunt", [8] = "cat_ore",
     [28] = "cat_dragonball",
     [1] = "cat_food_shop", [2] = "cat_cooking_shop", [3] = "cat_material_shop",
-    [58] = "cat_restaurant",
+    [58] = "cat_restaurant", [10] = "cat_info_shop",
     -- sites
     [15] = "cat_practice", [16] = "cat_practice_battle", [17] = "cat_develop",
     [19] = "cat_timemachine", [25] = "cat_trainroom", [27] = "cat_turtleschool",
@@ -393,12 +396,24 @@ local function navi_quest_icon(icon)
     return nil
 end
 
+-- The game's floating story-destination markers are plain Actors NAMED
+-- Map_Icon_Mission* (Area02 dump 2026-07-06) carrying a generic icon type: they are
+-- the quest DESTINATION whenever the navi arrow has no TargetActor (location-guided
+-- beats like "find Gohan"). Recognized by the game's own actor name.
+local function is_mission_marker(actor)
+    local nm
+    pcall(function() nm = actor:GetFName():ToString() end)
+    return nm ~= nil and nm:find("Mission", 1, true) ~= nil
+end
+
 -- MAIN/SUB quest priority from the icon type, or nil for anything else. Uses the
 -- bShowMapIcon-agnostic reader so a navi'd quest (static icon hidden) still classifies.
+-- A named mission marker counts as a quest objective regardless of its icon type.
 local function quest_pri(actor)
     local t = map_icon_type_any(actor)
     if t and MAIN_QUEST_ICONS[t] then return PRI_MAIN end
     if t and SUB_QUEST_ICONS[t] then return PRI_SUB end
+    if is_mission_marker(actor) then return PRI_OTHER end
     return nil
 end
 
@@ -630,24 +645,39 @@ local avoid_steering = false      -- currently routing around something (for the
 local avoid_cued = false           -- edge-gate for the "going around" announcement
 local function steer_around(pawn, px, py, pz, tx, ty, tz)
     if _G.__KakarotRayNative == "bad" then return nil end
+    -- Re-entered while still "testing": the PREVIOUS tick's trace aborted uncatchably
+    -- mid-flight — disable raycast for the session. This is armed around EVERY trace
+    -- batch (not only the first): the trace API proved area-DEPENDENT (worked on the
+    -- 07-04 map, aborts in Area02, dump 2026-07-06) — a per-session one-shot "ok"
+    -- would leave the loop aborting every tick in a bad area, silencing the beacon.
     if _G.__KakarotRayNative == "testing" then _G.__KakarotRayNative = "bad"; return nil end
     local dx, dy = tx - px, ty - py
     local dh = math.sqrt(dx * dx + dy * dy)
     if dh < AVOID_LOOKAHEAD then avoid_steering = false; return nil end  -- close: go direct
     local nx, ny = dx / dh, dy / dh
-    if _G.__KakarotRayNative == nil then _G.__KakarotRayNative = "testing" end
+    _G.__KakarotRayNative = "testing"
     local direct = bearing_clear(pawn, px, py, pz, nx, ny, AVOID_LOOKAHEAD)
-    _G.__KakarotRayNative = "ok"   -- reached here → the trace call didn't abort
-    if direct == nil then return nil end            -- trace unavailable → go direct
-    if direct then avoid_steering = false; return nil end  -- clear ahead → go direct
+    if direct == nil then
+        _G.__KakarotRayNative = "ok"
+        return nil                                  -- trace unavailable → go direct
+    end
+    if direct then
+        _G.__KakarotRayNative = "ok"
+        avoid_steering = false
+        return nil                                  -- clear ahead → go direct
+    end
     -- Blocked: find the nearest clear bearing that still heads toward the objective.
+    local gx, gy
     for _, off in ipairs(AVOID_OFFSETS) do
         local rx, ry = rotate2d(nx, ny, off)
         if bearing_clear(pawn, px, py, pz, rx, ry, AVOID_LOOKAHEAD) then
             avoid_steering = true
-            return px + rx * AVOID_LOOKAHEAD, py + ry * AVOID_LOOKAHEAD, pz
+            gx, gy = px + rx * AVOID_LOOKAHEAD, py + ry * AVOID_LOOKAHEAD
+            break
         end
     end
+    _G.__KakarotRayNative = "ok"   -- the whole batch completed without aborting
+    if gx then return gx, gy, pz end
     avoid_steering = false
     return nil   -- boxed in on all sides → fall back to the direct beacon
 end
@@ -825,6 +855,57 @@ local function enemies_list()
     return enemy_cache
 end
 
+-- TEMP passive probe (2026-07-06, remove once the field-enemy class is confirmed):
+-- combat starts too fast for a manual Ctrl+F5 near enemies, so this logs every Pawn
+-- within 150 m — class name + SpawnType (AT_Characters only; reading it on other
+-- pawn classes is the uncatchable abort) — to dumps/dump_enemies.txt, only when the
+-- nearby set CHANGES and only on the sparse rescan tick. Unbuffered writes.
+local ENEMY_PROBE = true
+local at_char_cls = nil
+local probe_next, probe_sig = 0, nil
+local function enemy_probe(px, py, pz)
+    if not ENEMY_PROBE or tick < probe_next then return end
+    probe_next = tick + RESCAN_CLASSES
+    if at_char_cls == nil then
+        local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_Character") end)
+        at_char_cls = (ok and c) or false
+    end
+    local lines = {}
+    for _, p in pairs(FindAllOf("Pawn") or {}) do
+        if Core.valid(p) then
+            local x, y, z = actor_pos(p)
+            if x then
+                local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                if d <= 150 * M then
+                    local cn, st = "?", "-"
+                    pcall(function() cn = p:GetClass():GetFName():ToString() end)
+                    if at_char_cls then
+                        local ok, isat = pcall(function() return p:IsA(at_char_cls) end)
+                        if ok and isat then
+                            pcall(function() st = tostring(tonumber(p.SpawnType)) end)
+                        end
+                    end
+                    lines[#lines + 1] = string.format("  %s d=%.0fm spawnType=%s", cn, d / M, st)
+                end
+            end
+        end
+    end
+    table.sort(lines)
+    local sig = table.concat(lines, "|")
+    if sig == probe_sig then return end
+    probe_sig = sig
+    pcall(function()
+        local src = debug.getinfo(1, "S").source:sub(2)
+        local dir = src:match("^(.*)[/\\]") or "."
+        local f = io.open(dir .. "\\dumps\\dump_enemies.txt", "a")
+        if not f then return end
+        pcall(function() f:setvbuf("no") end)
+        f:write(string.format("[%d] pawns within 150m: %d\n", os.time(), #lines))
+        f:write(table.concat(lines, "\n") .. "\n")
+        f:close()
+    end)
+end
+
 -- Spoken proximity warning for the nearest field enemy: "<enemy noun>, <direction>,
 -- <above/below>, N meters". Edge-gated per enemy actor (a NEW nearest enemy, or the
 -- same one at half the distance) + a hard time throttle.
@@ -940,7 +1021,10 @@ local function step()
     -- retarget the next one (see chain_step). Enemy proximity warning on the same
     -- sparse cadence as the scans (a per-tick icon sweep would hammer reflection).
     if chain_wait then chain_step(px, py, pz) end
-    if tick % SCAN_EVERY == 0 then enemy_alert(px, py, pz) end
+    if tick % SCAN_EVERY == 0 then
+        enemy_alert(px, py, pz)
+        enemy_probe(px, py, pz)
+    end
 
     -- Re-scan the game's guidance markers ~1/s (even when idle — scanning every
     -- tick would hammer reflection): picks up a fresh quest marker automatically
@@ -1357,6 +1441,7 @@ function Nav.list_targets()
 
     local seen = {}
     local groups = {}
+    local dropped = {}   -- per-group candidates cut by the distance cap (rescue below)
     local diag = RADAR_DEBUG and {} or nil
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
     -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
@@ -1390,16 +1475,33 @@ function Nav.list_targets()
                 "  grp=%s noun=%s name=%s cls=%s d=%.0f range=%s kept=%s src=%s bHidden=%s hiddenType=%s",
                 grp, noun, tostring(name), cls, d, tostring(range), tostring(kept), src, hid, ht)
         end
-        if not kept then return end
+        local item = { actor = actor, key = key, dist = d, noun = noun, name = name,
+                       grp = grp, stateful = stateful or nil }
+        if not kept then
+            -- Over the cap: remember it for the empty-group rescue — but ONLY for the
+            -- game-curated MAP-ICON sources. Direct actor scans (NPCs, collectibles,
+            -- enemies) use the tight cap precisely because beyond it lies the game's
+            -- parked preload pool (Trunks km away resurfaced through the rescue,
+            -- user 2026-07-06) — never rescue those.
+            if src ~= "questchar" and src ~= "collectible" and src ~= "enemy" then
+                dropped[grp] = dropped[grp] or {}
+                dropped[grp][#dropped[grp] + 1] = item
+            end
+            return
+        end
         seen[key] = true
         groups[grp] = groups[grp] or { items = {} }
-        groups[grp].items[#groups[grp].items + 1] =
-            { actor = actor, key = key, dist = d, noun = noun, name = name,
-              grp = grp, stateful = stateful or nil }
+        groups[grp].items[#groups[grp].items + 1] = item
     end
-    -- Add by EMapIcon type (icons): derive group + noun from the type.
+    -- Add by EMapIcon type (icons): derive group + noun from the type. A named
+    -- mission marker (see is_mission_marker) is a QUEST destination whatever its
+    -- icon type says — no distance cap, listed under Quests.
     local function add_icon(actor, t, src)
         if not t then return end
+        if is_mission_marker(actor) then
+            add_target(actor, "quests", "nav_other", nil, src)
+            return
+        end
         local grp = ICON_GROUP[t] or "other"
         local noun = ICON_NOUN[t] or ("radar_cat_" .. grp)
         local _, range = icon_info(actor)
@@ -1560,6 +1662,46 @@ function Nav.list_targets()
             add_target(a, "sites", "cat_windroad", nil, "collectible")
         end
     end
+    -- 4c) FIELD POINTS (UFieldPointComponent.FieldPointIconType — FIELD_POINT_TYPE,
+    -- AT_enums.hpp): the glowing interaction pillars that are NOT minimap icons —
+    -- fish-catching spots (Fish=1), wind-path entrances (WindPath=2, dedup'd with 4b
+    -- via seen), dino spots (Dino=3), the floating-island jump (9). Requested
+    -- 2026-07-06 ("cosas para atrapar peces"). Component scan -> owning actor.
+    do
+        local FIELD_POINT = {
+            [1] = { grp = "fishing", noun = "cat_fishing" },
+            [2] = { grp = "sites", noun = "cat_windroad" },
+            [3] = { grp = "gathering", noun = "cat_hunt" },
+            [9] = { grp = "sites", noun = "radar_cat_sites" },
+        }
+        for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
+            if comp and comp:IsValid() then
+                local t
+                pcall(function() t = tonumber(comp.FieldPointIconType) end)
+                local m = t and FIELD_POINT[t]
+                if m then
+                    local owner
+                    pcall(function() owner = comp:GetOwner() end)
+                    if Core.valid(owner) then
+                        add_target(owner, m.grp, m.noun, nil, "collectible")
+                    end
+                end
+            end
+        end
+    end
+    -- 4d) AREA EXITS: the transfer points to other maps. TWO actor classes (AT.hpp):
+    -- APortal (TeleportToArea) and ALevelNavigator (NavigateLevelName + the travel
+    -- confirm window) — Area02's exits are LevelNavigators (Portal scan came up empty,
+    -- user 2026-07-06). Story beats often continue on another area ("Aldea Lucca added
+    -- to the world map"), so these are quest-critical: wide-cap source (they're few
+    -- and far) + eligible for the empty-group rescue.
+    for _, cls in ipairs({ "Portal", "LevelNavigator" }) do
+        for _, a in pairs(FindAllOf(cls) or {}) do
+            if Core.valid(a) then
+                add_target(a, "sites", "cat_portal", nil, "portal")
+            end
+        end
+    end
 
     -- 5) field enemies: the direct SpawnType scan (enemies_list) — the minimap icon
     -- list does not carry the roaming enemies. Tight distance cap like NPCs.
@@ -1674,6 +1816,26 @@ function Nav.list_targets()
         end
     end
 
+    -- EMPTY-GROUP RESCUE: on the big open maps EVERY POI of a category can sit beyond
+    -- the distance cap (Area02, 2026-07-06: nearest training point / shop / Kame House
+    -- marker all > 1 km) and the whole picker read "nothing to track" — worse than a
+    -- far target. A group that kept nothing lists its nearest capped-out candidates.
+    local RESCUE_N = 3
+    for gk, list in pairs(dropped) do
+        if not groups[gk] or #groups[gk].items == 0 then
+            table.sort(list, function(a, b) return a.dist < b.dist end)
+            groups[gk] = groups[gk] or { items = {} }
+            local added = {}
+            for _, it in ipairs(list) do
+                if #groups[gk].items >= RESCUE_N then break end
+                if not seen[it.key] and not added[it.key] then
+                    added[it.key] = true
+                    groups[gk].items[#groups[gk].items + 1] = it
+                end
+            end
+        end
+    end
+
     local out = {}
     for _, gk in ipairs(GROUP_ORDER) do
         local g = groups[gk]
@@ -1749,11 +1911,18 @@ end
 -- Ctrl+F5 (dev): dump every guidance candidate + a NavMesh probe to
 -- Scripts/dumps/dump_nav_targets.txt so a failing scan can be diagnosed offline.
 function Nav.dump()
+    -- Version beacon BEFORE any engine work: hearing it proves the reload applied and
+    -- the keybind fired; the file then shows how far the dump got (unbuffered writes).
+    Speech.say("dump v2", true)
     ExecuteInGameThread(function()
         local src = debug.getinfo(1, "S").source:sub(2)
         local dir = src:match("^(.*)[/\\]") or "."
         local f = io.open(dir .. "\\dumps\\dump_nav_targets.txt", "w")
         if not f then Speech.say("nav dump: cannot open file", true) return end
+        -- UNBUFFERED: an uncatchable abort mid-dump otherwise loses EVERYTHING written
+        -- so far (a 0-byte file, seen 2026-07-06 in the Raditz-road area) — with no
+        -- buffer the file shows exactly how far the dump got before dying.
+        pcall(function() f:setvbuf("no") end)
         f:write("== nav target dump ==\n")
         -- Full radar state, so a silent radar can be diagnosed from this file alone.
         -- ui_muted is checked FIRST and short-circuits: with a menu up we must not
@@ -1907,23 +2076,34 @@ function Nav.dump()
         end
         -- RAYCAST probe (obstacle avoidance): cast a ray CAMERA-FORWARD at chest height,
         -- 5 m, against each object type separately, so we can confirm the trace API works
-        -- and WHICH collision channel detects walls. Point the camera at a wall up close
-        -- and at open space, then Ctrl+F5 each — the wall should read blocked, open clear.
+        -- and WHICH collision channel detects walls. Behind the same one-shot native
+        -- fuse as steer_around: the trace API is AREA-dependent (aborted uncatchably in
+        -- Area02, killing this dump mid-file, 2026-07-06) — an abort here marks it bad
+        -- and the NEXT dump skips it and reaches the probes after this section.
         if pawn and px then
-            local fx, fy = camera_forward()
-            if fx then
-                local sz = pz + AVOID_HEIGHT
-                local d = 5 * M
-                for _, ot in ipairs({ 1, 2, 3, 4, 5, 6 }) do
-                    local blocked, dist = Ray.probe(pawn, px, py, sz,
-                        px + fx * d, py + fy * d, sz, { ot })
-                    f:write(string.format("raycast objType=%d -> %s%s\n", ot,
-                        (blocked == nil and "API-UNAVAILABLE"
-                            or blocked and "BLOCKED" or "clear"),
-                        (dist and string.format(" dist=%.0f", dist) or "")))
-                end
+            if _G.__KakarotRayNative == "bad" then
+                f:write("raycast probe: SKIPPED (trace API aborted on this map)\n")
+            elseif _G.__KakarotRayNative == "testing" then
+                _G.__KakarotRayNative = "bad"
+                f:write("raycast probe: SKIPPED (previous trace aborted mid-flight)\n")
             else
-                f:write("raycast probe: no camera forward\n")
+                local fx, fy = camera_forward()
+                if fx then
+                    local sz = pz + AVOID_HEIGHT
+                    local d = 5 * M
+                    _G.__KakarotRayNative = "testing"
+                    for _, ot in ipairs({ 1, 2, 3, 4, 5, 6 }) do
+                        local blocked, dist = Ray.probe(pawn, px, py, sz,
+                            px + fx * d, py + fy * d, sz, { ot })
+                        f:write(string.format("raycast objType=%d -> %s%s\n", ot,
+                            (blocked == nil and "API-UNAVAILABLE"
+                                or blocked and "BLOCKED" or "clear"),
+                            (dist and string.format(" dist=%.0f", dist) or "")))
+                    end
+                    _G.__KakarotRayNative = "ok"
+                else
+                    f:write("raycast probe: no camera forward\n")
+                end
             end
         end
         -- Collectible-state probe: every collectible-class actor within 150 m with its
@@ -1935,6 +2115,7 @@ function Nav.dump()
             { cls = "PlacementObjectInfo", state = true },
             { cls = "AccessPointItemBase", state = true },
         }) do
+            f:write("probing " .. c.cls .. "...\n")
             local n = 0
             for _, a in pairs(FindAllOf(c.cls) or {}) do
                 if Core.valid(a) then
@@ -1975,6 +2156,7 @@ function Nav.dump()
         -- SpawnType. If roaming field enemies (the pre-Raditz robots read as nothing,
         -- 2026-07-06) are NOT SpawnType!=0 AT_Characters, this shows what they ARE.
         do
+            f:write("probing AT_Character (SpawnType)...\n")
             local n = 0
             for _, c in pairs(FindAllOf("AT_Character") or {}) do
                 if Core.valid(c) then
