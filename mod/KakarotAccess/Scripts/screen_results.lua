@@ -1,17 +1,20 @@
 -- Screen adapter: story results (Quest_Main_Clear_C -> UAT_UIQuestMainClear).
 --
--- The post-battle "Story Results" sequence: one bar per battle ("Piccolo vs. Raditz")
+-- The post-battle "Story Results" sequence: one bar per battle ("Goku vs. Raditz")
 -- with a RANK LETTER shown as an IMAGE, then a TOTAL rank; "View details" (X) expands
 -- per-battle detail rows (Completion time / Max combo / Damage taken), each with its
--- own rank image. Verified from the F7 dump (2026-07-06) + CXX headers: host
--- UIClearBar_List (TArray<UAT_UIQuestMainClearBar>), bar TextBox_Item + Image_Rank +
--- UIClearDetail_List (TextBox_Detail + Image_Rank), total UIQuestMainClearRank.
+-- own rank image and — for counters like max combo — a DIGIT-IMAGE number
+-- (Image_PercentageList). Verified from the F7 dumps (2026-07-06) + CXX headers:
+--   host UIClearBar_List (native TArray of bars); per bar TextBox_Item + Image_Rank
+--   (native) and the DETAIL rows as the blueprint's DIRECT children
+--   Quest_Main_Clear_Detail00..05 (Quest_Main_Clear_Bar.hpp — the native
+--   UIClearDetail_List array stayed empty live, which left the expanded details
+--   unread); total UIQuestMainClearRank.Image_Rank.
 --
--- The rank letter is recovered from Image_Rank's brush TEXTURE name (same technique as
--- the keyhelp glyphs) — there is no text anywhere. Because the ranks pop in one by one
--- with the game's animation, the reader is INCREMENTAL: each line (battle+rank, detail
--- rows, total) is queued exactly once as soon as it becomes readable, following the
--- game's own pacing instead of re-reading the whole board on every change.
+-- Rank letters and digit counters come from brush TEXTURE names (keyhelp technique).
+-- The reader is INCREMENTAL: each line is queued exactly once as it becomes readable,
+-- following the game's reveal animation. Lines are KEYED by bar index + content so
+-- two battles with the same title (Goku vs. Raditz twice) both read.
 
 local Core = require("ui_core")
 local Speech = require("speech")
@@ -22,33 +25,53 @@ local Results = {}
 local ann = Core.make_announcer()   -- unused for speech (incremental), kept for API symmetry
 local host = nil
 local tick = 0
-local spoken = {}    -- line -> true. Cleared when the screen closes (host off), NOT on
-                     -- reset(): an adapter flicker must not re-read the whole board.
-local queue = {}     -- lines to speak this tick, computed in is_active
+local spoken = {}    -- line KEY -> true. Cleared when the screen closes, NOT on reset().
+local queue = {}     -- { {key=, text=}, ... } computed in is_active
+
+local DETAIL_COUNT = 6   -- Quest_Main_Clear_Detail00..05 (Quest_Main_Clear_Bar.hpp)
 
 -- Valid rank letters (validates the texture-name suffix so an unrelated image never
 -- reads as a rank).
 local RANKS = { S = true, A = true, B = true, C = true, D = true, Z = true, SS = true }
 
--- The rank letter shown by a rank Image, from its brush texture name
--- (".../Ins_Rank_S.Ins_Rank_S" -> "S"), or nil while hidden / not yet set.
-local function rank_letter(img)
+local function texture_token(img)
     if not Core.valid(img) or not Core.is_visible(img) then return nil end
     local res
     pcall(function()
         local ro = img.Brush.ResourceObject
         if ro and ro:IsValid() then res = ro:GetFullName() end
     end)
-    local tok = res and res:match("([%w_]+)%.[%w_]+$") or nil
+    return res and res:match("([%w_]+)%.[%w_]+$") or nil
+end
+
+local function rank_letter(img)
+    local tok = texture_token(img)
     if not tok then return nil end
     local letter = tok:match("[Rr]ank_(%u%u?)$") or tok:match("_(%u%u?)$")
     return (letter and RANKS[letter]) and letter or nil
 end
 
--- All currently-readable lines, in on-screen order. Names come from the game's own
--- text; only the "Total" word and the screen name are mod-supplied (i18n).
+-- A number drawn as digit images (each texture name ends in its digit), or nil
+-- unless EVERY visible digit parses.
+local function image_number(arr_owner, member)
+    local digits, ok = {}, true
+    pcall(function()
+        local arr = arr_owner[member]
+        for i = 1, #arr do
+            local img = arr[i]
+            if Core.valid(img) and Core.is_visible(img) then
+                local tok = texture_token(img)
+                local d = tok and tok:match("(%d)$")
+                if d then digits[#digits + 1] = d else ok = false end
+            end
+        end
+    end)
+    return (ok and #digits > 0) and table.concat(digits) or nil
+end
+
+-- All currently-readable lines with stable keys, in on-screen order.
 local function lines()
-    local out = { I18n.header(6) }   -- "Result(s)" — the screen name, spoken first
+    local out = { { key = "screen", text = I18n.header(6) } }
     pcall(function()
         local bars = host.UIClearBar_List
         for i = 1, #bars do
@@ -56,30 +79,35 @@ local function lines()
             if Core.valid(bar) and Core.on_screen(bar) then
                 local name = Core.read_text(bar.TextBox_Item)
                 local r = rank_letter(bar.Image_Rank)
-                if name and r then out[#out + 1] = name .. ", " .. r end
-                -- Expanded details (after "View details"): prefix the first row with
-                -- its battle so the groups stay distinguishable in the spoken stream.
-                pcall(function()
-                    local dets = bar.UIClearDetail_List
-                    for j = 1, #dets do
-                        local d = dets[j]
-                        if Core.valid(d) and Core.on_screen(d) then
-                            local dn = Core.read_text(d.TextBox_Detail)
-                            local dr = rank_letter(d.Image_Rank)
-                            if dn and dr then
-                                local line = dn .. ", " .. dr
-                                if j == 1 and name then line = name .. ": " .. line end
-                                out[#out + 1] = line
-                            end
+                if name and r then
+                    out[#out + 1] = { key = "bar" .. i, text = name .. ", " .. r }
+                end
+                -- Expanded details (after "View details"): blueprint children; the
+                -- first row is prefixed with its battle so groups stay apart.
+                for j = 0, DETAIL_COUNT - 1 do
+                    local d
+                    pcall(function()
+                        d = bar["Quest_Main_Clear_Detail" .. string.format("%02d", j)]
+                    end)
+                    if Core.valid(d) and Core.on_screen(d) then
+                        local dn = Core.read_text(d.TextBox_Detail)
+                        local dr = rank_letter(d.Image_Rank)
+                        if dn and dr then
+                            local text = Core.phrase(dn,
+                                image_number(d, "Image_PercentageList"), dr)
+                            if j == 0 and name then text = name .. ": " .. text end
+                            out[#out + 1] = { key = string.format("d%d.%d", i, j), text = text }
                         end
                     end
-                end)
+                end
             end
         end
         local tot = host.UIQuestMainClearRank
         if Core.valid(tot) and Core.on_screen(tot) then
             local r = rank_letter(tot.Image_Rank)
-            if r then out[#out + 1] = I18n.t("results_total") .. ", " .. r end
+            if r then
+                out[#out + 1] = { key = "total", text = I18n.t("results_total") .. ", " .. r }
+            end
         end
     end)
     return out
@@ -100,10 +128,10 @@ end
 function Results.reset() ann:reset() end
 
 function Results.update()
-    for _, line in ipairs(queue) do
-        if not spoken[line] then
-            spoken[line] = true
-            Speech.say(line, false)   -- queued: follows the game's reveal pacing
+    for _, e in ipairs(queue) do
+        if not spoken[e.key] then
+            spoken[e.key] = true
+            Speech.say(e.text, false)   -- queued: follows the game's reveal pacing
         end
     end
 end

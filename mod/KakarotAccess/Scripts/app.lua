@@ -15,6 +15,7 @@ local Speech = require("speech")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
 local RadarMenu = require("radar_menu")
+local Battle = require("battle_monitor")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
@@ -101,6 +102,11 @@ Registry.register(require("screen_party"))                         -- Party
 Registry.register(require("screen_tutorials"))                     -- System > Tutorials list
 Registry.register(require("screen_community"))                     -- Community / Soul Emblems
 Registry.register(require("screen_field"))
+-- Bottom-of-stack NOTICE readers (speak once + release; never hold the screen):
+-- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
+-- level-ups). Any real menu above outranks them.
+Registry.register(require("screen_battleresult"))
+Registry.register(require("screen_toasts"))
 Registry.register(require("screen_title"))
 
 local App = {}
@@ -109,12 +115,14 @@ function App.start()
     Registry.start()
     Nav.start()
     RadarMenu.start()
+    Battle.start()
 end
 
 function App.stop()
     Registry.stop()
     Nav.stop()
     RadarMenu.stop()
+    Battle.stop()
 end
 
 -- F1: repeat the active screen's focus — or, with no screen owning the tick (the
