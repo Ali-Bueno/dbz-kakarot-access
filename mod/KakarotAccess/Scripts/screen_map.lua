@@ -22,6 +22,7 @@ local Speech = require("speech")
 local Input = require("input")
 local Mem = require("mem")
 local OFF = require("native_offsets")
+local Nav = require("nav_tracker")
 
 local Map = {}
 
@@ -39,6 +40,11 @@ local FT = OFF.mapWorld
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
+
+-- Area map (Map_M_C / AT_UIMapM): the POI the cursor is focused on lives in FocusTarget
+-- (reflected). We announce it (type via the radar's EMapIcon vocabulary + the game's detail
+-- text) each time the focus changes, so a blind player can hear what the cursor is over.
+local area_focus_key = nil   -- diff-gate: address of the last-announced focused icon
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -249,12 +255,22 @@ function Map.is_active()
         local h = Core.first_on_screen("Map_World_C", tick) or Core.first_on_screen("Map_M_C", tick)
         if h then dump_struct(h) end
     end
-    -- FREE-ROAM CROSS-CHECK (the real fix): the minimap radar is on-screen ONLY in normal
-    -- gameplay, never under a full-screen map. The pooled map widgets keep reporting
-    -- on-screen AFTER the map is dismissed (verified 2026-07-08: latched Map_World_C/Map_M
-    -- onScreen=true WITH the minimap up), which is exactly what stuck the radar — including
-    -- the load-save case. So if the minimap is up, the map is closed. Authoritative; a
-    -- widget latch can't defeat it.
+    -- AREA map FIRST — its own authoritative signal, checked BEFORE the minimap gate. Unlike the
+    -- WORLD map, the AREA map (Mapa del Área) does NOT hide the minimap radar: it stays on-screen
+    -- WITH Map_M_C enum 3 (verified dump_map_state 2026-07-09), so the free-roam gate below would
+    -- wrongly preempt it. Map_M_C collapses to enum 1 (on_screen false) on close, so this is clean.
+    local am = Core.first_on_screen("Map_M_C", tick)
+    if am then
+        state = { screen = I18n.header(21),
+                  name = node_text(am.Txt_Name) or node_text(am.Txt_Area),
+                  host = am }   -- the AT_UIMapM whose FocusTarget we read for POI-under-cursor
+        return true
+    end
+    -- FREE-ROAM CROSS-CHECK (WORLD map only): the minimap radar is hidden under the full-screen
+    -- WORLD map but stays up in free-roam AND during the AREA map (handled above). The pooled
+    -- Map_World_C widgets keep reporting on-screen AFTER the world map is dismissed (verified
+    -- 2026-07-08: latched onScreen=true WITH the minimap up), which stuck the radar — including
+    -- the load-save case. So here (area map already ruled out) minimap up => world map closed.
     if Core.first_on_screen("AT_UIMiniMapRadar", tick) then
         state = nil
         return false
@@ -268,13 +284,6 @@ function Map.is_active()
         -- terrain actually is — sea, mountains — isn't exposed by the game's UI).
         local area = wm and (node_text(wm.Txt_Area) or node_text(wm.Txt_Name))
         state = { screen = I18n.header(8), name = area or I18n.t("map_empty"), world = true }
-        return true
-    end
-    -- AREA map (minimap hidden): host on-screen (enum 3 when open, collapses when closed).
-    local am = Core.first_on_screen("Map_M_C", tick)
-    if am then
-        state = { screen = I18n.header(21),
-                  name = node_text(am.Txt_Name) or node_text(am.Txt_Area) }
         return true
     end
     state = nil
@@ -357,9 +366,33 @@ local function ft_guidance(host)
     if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
 end
 
+-- Area map: announce the POI the cursor is focused on (FocusTarget), each time it changes.
+-- Type = the radar's EMapIcon noun of the focused icon's Target actor; name = the game's own
+-- detail text (WL_MapDetailTxt.WL_Detail_Txt), which it fills for the focused icon. Silent
+-- when the cursor sits on no icon (FocusTarget nil), so sweeping open map area isn't spammy.
+local function area_poi(host)
+    local ft
+    pcall(function() ft = host.FocusTarget end)
+    if not (ft and Core.valid(ft)) then area_focus_key = nil; return end
+    local key = Mem.addr(ft)
+    if key and key == area_focus_key then return end   -- same focus -> already announced
+    area_focus_key = key
+    local ta
+    pcall(function() ta = ft.Target end)
+    local noun = (ta and Core.valid(ta)) and Nav.icon_noun(ta) or nil
+    -- the detail panel's text (the POI's own name/description), if the game is showing it.
+    local name
+    pcall(function() name = clean(Core.read_text(host.WL_MapDetailTxt.WL_Detail_Txt)) end)
+    local msg
+    if noun and name and name ~= "" then msg = noun .. ", " .. name
+    else msg = noun or (name ~= "" and name) or nil end
+    if msg then Speech.say(msg, true) end
+end
+
 function Map.reset()
     ann:reset(); dests_said = false
     ft_points, ft_sel, ft_prevbtn = nil, nil, 0
+    area_focus_key = nil
 end
 
 function Map.update()
@@ -381,6 +414,8 @@ function Map.update()
             end
         end
         ft_guidance(host)
+    elseif s.host then
+        area_poi(s.host)   -- read the POI under the cursor on the area map
     end
 end
 

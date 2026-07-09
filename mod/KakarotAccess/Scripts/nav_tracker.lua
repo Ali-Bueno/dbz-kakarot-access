@@ -387,6 +387,18 @@ local function map_icon_type_any(actor)
     return t
 end
 
+-- PUBLIC: the localized POI noun for an actor (its EMapIcon type -> ICON_NOUN, else the
+-- group name), or nil if the actor carries no map-icon type. Same classification the radar
+-- uses, exposed so the area-map reader (screen_map) can announce the focused POI in the same
+-- vocabulary. Example: an ore actor -> I18n.t("cat_ore").
+function Nav.icon_noun(actor)
+    if not actor then return nil end
+    local t = map_icon_type_any(actor)
+    if not t then return nil end
+    local grp = ICON_GROUP[t] or "other"
+    return I18n.t(ICON_NOUN[t] or ("radar_cat_" .. grp))
+end
+
 -- The guided objective's MAIN/SUB kind, read from the navi WIDGET (not the target
 -- actor's EMapIcon). The game drives a UWidgetSwitcher whose active index is the
 -- EMapNaviIcon (AT_enums: 0 PLAYER_NAVI, 1 MAIN_QUEST, 2 SUB_QUEST, 3 DLC6_QUEST). The
@@ -1984,6 +1996,31 @@ function Nav.list_targets()
                 end
             end
         end)
+    end
+    -- 2b) EVERY area POI with a map-icon component, found DIRECTLY (no map open needed). The
+    -- minimap MapIconList above only carries NEARBY icons; scanning ATMapIconComponent instances
+    -- reaches ALL loaded POIs at any distance — shops, fishing, fruit/ore gathering, training,
+    -- sites — the same set the area map shows. Owner = the POI actor; MapIconType is set even
+    -- when bShowMapIcon is false (the game hides FAR icons). add_target dedupes by address.
+    for _, comp in pairs(FindAllOf("ATMapIconComponent") or {}) do
+        if Core.valid(comp) then
+            local owner, t
+            pcall(function() owner = comp:GetOwner() end)
+            pcall(function() t = tonumber(comp.MapIconType) end)
+            if Core.valid(owner) and t then add_icon(owner, t, "mapicon2") end
+        end
+    end
+    -- 2c) ENEMY BASES carry NO ATMapIconComponent (so 2b misses them) but a UATEnemiesBaseBehaviour
+    -- component. Find those and classify their owner as ENEMIES_BASE (EMapIcon 32). Scan the base
+    -- AND the known subclass (a native-base FindAllOf can return nothing when a subclass exists).
+    for _, cls in ipairs({ "ATEnemiesBaseBehaviour", "ATExterminationBastionComponent" }) do
+        for _, comp in pairs(FindAllOf(cls) or {}) do
+            if Core.valid(comp) then
+                local owner
+                pcall(function() owner = comp:GetOwner() end)
+                if Core.valid(owner) then add_icon(owner, 32, "enemybase") end
+            end
+        end
     end
     -- 3) talkable field NPCs (Chi-Chi, shopkeepers, quest givers): AQuestCharacter uses
     -- a MobIconComponent, NOT the ATMapIconComponent, so it's absent from MapIconList
