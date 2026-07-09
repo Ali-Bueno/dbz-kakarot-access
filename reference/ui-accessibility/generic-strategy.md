@@ -179,6 +179,11 @@ screen — present and future:
 2. **Screen opened / closed** — often also observable globally (panel activation, scene/state change).
    Announce the screen title on open (`interrupt=true`); on close, restore context to whatever regains
    focus. The title is just data read off the screen — it needs no per-screen registration.
+   **Beware overlays**: many games open a submenu as an overlay *without* deactivating the parent (and
+   close it without any screen-change signal), so open/close events alone are not a reliable source of
+   "which menu is active". Keep a **menu stack** and resolve the active layer by **focus/input
+   ownership**, per [menus.md — submenus, overlays and the menu stack](menus.md#submenus-overlays-and-the-menu-stack);
+   ignore focus events bubbling from layers underneath the topmost one.
 3. **UI updated / rebuilt / data-bound** — when a panel refreshes (list repopulated, value pushed from
    game logic, layout swapped by an update), re-read the currently focused widget so it never goes
    stale. Diff-gate so a rebuild that didn't change the focused content stays silent.

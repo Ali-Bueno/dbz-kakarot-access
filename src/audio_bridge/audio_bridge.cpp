@@ -33,6 +33,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 extern "C" {
 #include "lua.h"
@@ -61,6 +62,14 @@ static Cue g_arrival = {0};
  * than retriggered pings. */
 static Cue g_tone = {0};
 static bool g_toneOn = false;
+
+/* Category cues for the exploration radar (nav_tracker explore mode), played by NAME
+ * via cue(). Loaded non-fatally in do_init — a missing file just makes that name
+ * silent (play_cue guards on a NULL voice). Add a WAV + an entry here to grow the set. */
+static Cue g_item = {0};
+static Cue g_enemy = {0};
+struct NamedCue { const char *name; Cue *cue; };
+static NamedCue g_named[] = { { "item", &g_item }, { "enemy", &g_enemy }, { NULL, NULL } };
 
 /* ---- WAV loading (PCM only, same constraint as the XV2 player) ------------ */
 
@@ -204,6 +213,15 @@ static const char *do_init(void) {
     if (FAILED(g_engine->CreateSourceVoice(&g_arrival.voice, &g_arrival.fmt)))
         return "CreateSourceVoice(arrival) failed";
 
+    /* Named category cues for explore mode (optional — a missing/invalid file stays
+     * silent instead of failing init, so the core radar always comes up). */
+    _snwprintf(path, MAX_PATH, L"%ssounds\\item.wav", dir);
+    if (load_wav(path, &g_item))
+        g_engine->CreateSourceVoice(&g_item.voice, &g_item.fmt);
+    _snwprintf(path, MAX_PATH, L"%ssounds\\enemy.wav", dir);
+    if (load_wav(path, &g_enemy))
+        g_engine->CreateSourceVoice(&g_enemy.voice, &g_enemy.fmt);
+
     /* Generate the sine loop: 220 Hz over exactly 1 s = 220 whole cycles, so the
      * loop point is click-free. Soft amplitude; the caller shapes loudness. */
     {
@@ -249,6 +267,23 @@ static int l_ping(lua_State *L) {
     float vol = (float)luaL_optnumber(L, 2, 1.0);
     float pitch = (float)luaL_optnumber(L, 3, 1.0);
     lua_pushboolean(L, play_cue(&g_beacon, pan, vol, pitch, true));
+    return 1;
+}
+
+/* cue(name, pan, volume, pitch) — play a named category cue (explore radar). Same
+ * pan/volume/pitch mapping as ping(); unknown or unloaded names are a silent no-op. */
+static int l_cue(lua_State *L) {
+    const char *name = luaL_checkstring(L, 1);
+    float pan = (float)luaL_optnumber(L, 2, 0.0);
+    float vol = (float)luaL_optnumber(L, 3, 1.0);
+    float pitch = (float)luaL_optnumber(L, 4, 1.0);
+    for (NamedCue *n = g_named; n->name; ++n) {
+        if (strcmp(n->name, name) == 0) {
+            lua_pushboolean(L, play_cue(n->cue, pan, vol, pitch, true));
+            return 1;
+        }
+    }
+    lua_pushboolean(L, 0);
     return 1;
 }
 
@@ -300,6 +335,9 @@ static int l_stop(lua_State *L) {
     if (g_ready) {
         if (g_beacon.voice) { g_beacon.voice->Stop(0); g_beacon.voice->FlushSourceBuffers(); }
         if (g_arrival.voice) { g_arrival.voice->Stop(0); g_arrival.voice->FlushSourceBuffers(); }
+        for (NamedCue *n = g_named; n->name; ++n) {
+            if (n->cue->voice) { n->cue->voice->Stop(0); n->cue->voice->FlushSourceBuffers(); }
+        }
         if (g_toneOn && g_tone.voice) {
             g_tone.voice->Stop(0);
             g_tone.voice->FlushSourceBuffers();
@@ -317,6 +355,7 @@ static int l_ready(lua_State *L) {
 static const luaL_Reg audio_funcs[] = {
     {"init", l_init},
     {"ping", l_ping},
+    {"cue", l_cue},
     {"arrival", l_arrival},
     {"tone", l_tone},
     {"tone_stop", l_tone_stop},

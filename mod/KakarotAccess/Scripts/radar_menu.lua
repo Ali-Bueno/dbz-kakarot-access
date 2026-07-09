@@ -36,6 +36,7 @@ local TICK_MS = 20        -- fast poll: catches the R3 press within ~1 frame so 
                           -- barely sees it before we block (the opening click could
                           -- otherwise leak a frame to R3's field action)
 local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
+local DOUBLE_TAP_TICKS = 14   -- ~280 ms at TICK_MS: window to catch a 2nd R3 tap (= explore toggle)
 
 local running = false
 local open = false        -- menu currently open (and pad blocked)
@@ -44,6 +45,9 @@ local draining = false    -- closed, waiting for a neutral pad before unblocking
 local cats = {}           -- [{ key, name, items={{actor,key,dist,noun},...} }]
 local ci, ii = 1, 1       -- current category / item index
 local prev_btn = 0        -- previous button bitmask (edge detection)
+local tk = 0              -- step counter (double-tap timing)
+local last_r3_tk = nil    -- tick of the previous R3 press
+local pending_open_tk = nil   -- R3 pressed; holding to see if a 2nd tap makes it a toggle
 
 local B = Input.BTN
 
@@ -109,6 +113,7 @@ end
 -- ---- per-tick step (game thread) ----------------------------------------------------
 
 local function step()
+    tk = tk + 1
     -- Transition gate FIRST (pure Lua + native pad calls only): a map switch is in
     -- progress — close the menu, drop the actor refs in `cats`, and NEVER leave the
     -- pad blocked across a level change.
@@ -117,6 +122,7 @@ local function step()
         blocked, open, draining = false, false, false
         cats = {}
         prev_btn = 0
+        last_r3_tk, pending_open_tk = nil, nil
         return
     end
 
@@ -126,6 +132,7 @@ local function step()
         if blocked then Input.block(false) end
         blocked, open, draining = false, false, false
         prev_btn = 0
+        last_r3_tk, pending_open_tk = nil, nil
         return
     end
 
@@ -142,7 +149,21 @@ local function step()
     end
 
     if not open then
-        if pressed(B.RIGHT_THUMB) and Nav.field_ready() then do_open() end
+        -- R3: a SINGLE click opens the target menu; a DOUBLE-tap toggles the passive
+        -- explore radar. We hold the open ~280 ms to see if a 2nd tap arrives (the menu
+        -- is the fallback now, so the small delay is fine); the R3 leak to the game in
+        -- that window is harmless (R3 = ki-sense, as when opening).
+        if pressed(B.RIGHT_THUMB) and Nav.field_ready() then
+            if last_r3_tk and (tk - last_r3_tk) <= DOUBLE_TAP_TICKS then
+                last_r3_tk, pending_open_tk = nil, nil
+                Nav.toggle_explore()
+            else
+                last_r3_tk, pending_open_tk = tk, tk
+            end
+        elseif pending_open_tk and (tk - pending_open_tk) > DOUBLE_TAP_TICKS then
+            pending_open_tk = nil
+            if Nav.field_ready() then do_open() end
+        end
         prev_btn = snap.buttons
         return
     end

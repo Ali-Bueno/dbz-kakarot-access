@@ -8,6 +8,12 @@ it continuously tells you (a) **how close the wall ahead is** (rising pitch with
 (b) **whether the space to your front/left/right is opening up or closing in** (two distinct
 "open"/"closed" cues), all panned to the correct ear.
 
+> **"Wall" means *any impassable obstacle*, not just literal walls.** Note the raycast in §4 is
+> `GetWallOrImpassableOrDoorCollision` — A Hero's Call itself radars against everything the player
+> cannot pass through. When porting, the beams must hit impassable rocks, trees, fences, furniture,
+> **invisible walls** / out-of-bounds barriers, etc. The test is *"does this block movement?"*, never
+> *"is this rendered/named as a wall?"*.
+
 ---
 
 ## 1. Mental model
@@ -241,9 +247,10 @@ The radar needs only three things from your engine adapter:
 
 1. `playerPos` (Vector2 in some consistent unit) and `velocity` (or last-frame delta).
 2. `front/left/right` unit vectors (derive from heading; Doc 01 §4).
-3. `Raycast(origin, dir, maxDist) -> (hitPoint, isBlocking?)` against walls/obstacles
-   (Doc 03 gives the tile version; in a 3D game use the physics raycast and project to the
-   navigation plane).
+3. `Raycast(origin, dir, maxDist) -> (hitPoint, isBlocking?)` against **every movement-blocking
+   obstacle** — walls, impassable rocks/trees, invisible barriers — i.e. the same colliders/tiles the
+   player's own movement collides with, not just a "walls" layer (Doc 03 gives the tile version; in a
+   3D game use the physics raycast and project to the navigation plane).
 4. A "play short sound, pitch p, stereo pan ∈ {L,C,R}" primitive. If you don't have FMOD, three
    pre-pitched WAVs per side and a stereo-balance call is enough.
 

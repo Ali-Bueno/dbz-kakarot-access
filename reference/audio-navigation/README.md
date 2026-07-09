@@ -11,9 +11,9 @@ combination of two, or all three**.
 
 | # | Style | One-line | Feedback shape | Reference |
 |---|-------|----------|----------------|-----------|
-| 1 | **Reactive radar** | Cues fire *as you move* when a wall closes in or space opens/closes | Sparse, event-driven (one cue per tick) — tells you *what changed* | [`a-heros-call/02-reactive-radar.md`](a-heros-call/02-reactive-radar.md) |
+| 1 | **Reactive radar** | Cues fire *as you move* when an **impassable obstacle** (wall, rock, tree, invisible barrier…) closes in or space opens/closes | Sparse, event-driven (one cue per tick) — tells you *what changed* | [`a-heros-call/02-reactive-radar.md`](a-heros-call/02-reactive-radar.md) |
 | 2 | **Polar scan radar** | On-command sweep of N rays around you, each ray's first wall sounded | On-demand burst — tells you *what's all around, in detail* | [`swamp/navigation-spec.md`](swamp/navigation-spec.md) §3 |
-| 3 | **Wall sonification** | One continuous tone per direction, volume = wall proximity | Always-on ambient bed — tells you *the box you're in, right now* | [`wall-sonification/`](wall-sonification/) |
+| 3 | **Wall sonification** | One continuous tone per direction, volume = proximity of the nearest **impassable obstacle** (walls, rocks, trees, invisible barriers…) | Always-on ambient bed — tells you *the box you're in, right now* | [`wall-sonification/`](wall-sonification/) |
 
 They are **complementary, not competing** — each owns a different audio "lane":
 

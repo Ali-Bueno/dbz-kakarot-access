@@ -6,6 +6,14 @@ tone per direction whose **volume tracks how close the nearest wall is on that s
 direction stays silent, so openings reveal themselves by their absence of sound. It gives the player a
 constant, passive sense of "the box I'm standing in" without pressing anything.
 
+> **"Wall" is shorthand for *anything the player cannot pass through*.** The tones must sonify every
+> movement-blocking obstacle, not just literal walls: impassable rocks, trees the player can't walk
+> through, fences, ore veins, big roots, **invisible walls** / out-of-bounds barriers, etc. The
+> detection test is *"does this block movement?"* (blocking tile set / collision layer mask), never
+> *"is this named or rendered as a wall?"* — invisible barriers especially have no visual mesh but
+> must still sound. Core Keeper's blocking set (§4) is an example: it includes ore, roots and crystals
+> alongside walls.
+
 > Synthesized from **our own mods** (source available on disk), not a decompile:
 > - **Core Keeper** — top-down grid, Unity **Mono**, BepInEx 6, Unity `AudioSource` + procedural wind clips.
 >   `…/Core Keeper Access/ckAccess/Patches/Player/WallSonarPatch.cs`
@@ -102,8 +110,9 @@ All three generate the tones procedurally; none ship wall WAVs.
 ## 4. Detection — the only engine-specific part
 
 - **Grid game:** step tile-by-tile in each direction from the player tile; the first tile whose type is
-  in your "blocking" set is the wall; distance = step count. (Core Keeper blocking set: `wall`,
-  `greatWall`, `thinWall`, `bigRoot`, `ore`, `ancientCrystal`.)
+  in your "blocking" set is the wall; distance = step count. The blocking set = **every tile type the
+  player cannot walk onto** — walls, impassable rocks, trees, ore, roots — not just wall-named tiles.
+  (Core Keeper blocking set: `wall`, `greatWall`, `thinWall`, `bigRoot`, `ore`, `ancientCrystal`.)
 - **3D game:** `Physics.Raycast(origin, dir, out hit, maxDist, layerMask)` once per direction. Origin =
   player position **+ ~1 m up** (waist height — avoids floor/ceiling bias). Direction = camera forward
   projected to the horizontal plane, plus its perpendicular for left/right:
@@ -112,8 +121,10 @@ All three generate the tones procedurally; none ship wall WAVs.
   Vector3 right = new Vector3(fwd.z, 0, -fwd.x);   // perpendicular on the ground plane
   // directions: fwd, -fwd, -right, right
   ```
-  Use a layer mask for the wall/terrain layer. Classify the hit (e.g. `GetComponentInParent<…>()`) only
-  if you want to encode type in pitch.
+  Use a layer mask covering **all movement-blocking colliders** (walls, terrain, rocks, trees,
+  invisible/out-of-bounds barriers) — the same layers the player's own collider collides with, not
+  just a "walls" layer. Classify the hit (e.g. `GetComponentInParent<…>()`) only if you want to encode
+  type in pitch.
 
 Everything downstream (channel volume, pan, smoothing, gating) is engine-free.
 

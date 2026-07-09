@@ -138,12 +138,15 @@ implementing it.
   navigation styles** (pick one, two, or all three depending on the game) with a **decision guide**, the
   **"which document to read for each mod section"** table, the shared model (queryable world + raycast →
   sound), and the convention differences that cause mirrored-direction bugs.
-  - **Style 1 — Reactive radar** (cues as you move: wall closing in / space opening-closing). Primary
+  - **Style 1 — Reactive radar** (cues as you move: an impassable obstacle — wall, rock, tree,
+    invisible barrier — closing in / space opening-closing). Primary
     study (.NET/MonoGame, near-source level):
     [`a-heros-call/`](reference/audio-navigation/a-heros-call/) (docs 00–10), radar in doc 02.
   - **Style 2 — Polar scan radar** (on-demand sweep of N rays). Corroborating study (native VB6, Ghidra):
     [`swamp/navigation-spec.md`](reference/audio-navigation/swamp/navigation-spec.md) §3.
-  - **Style 3 — Wall sonification** (one continuous tone per direction; volume = wall proximity).
+  - **Style 3 — Wall sonification** (one continuous tone per direction; volume = proximity of the
+    nearest **impassable obstacle** — walls, rocks, trees, invisible barriers, anything the player
+    can't pass through).
     Synthesis of our own Unity mods (Core Keeper / DRG / Megabonk):
     [`wall-sonification/`](reference/audio-navigation/wall-sonification/).
 - **UI accessibility** (behavior specs, not RE knowledge):

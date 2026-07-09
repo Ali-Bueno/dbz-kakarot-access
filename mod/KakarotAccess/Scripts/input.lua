@@ -77,4 +77,16 @@ function Input.block(on)
     if loaded then ib.block(on and true or false) end
 end
 
+-- Drive the game's LEFT stick to (lx, ly) in -1..1 for the next few frames (auto-releases
+-- if not refreshed). Used by the world-map cursor auto-move. Returns true if it can take
+-- effect (hook installed). No-op / false otherwise.
+function Input.inject(lx, ly)
+    if loaded and ib.inject then return ib.inject(lx, ly) == true end
+    return false
+end
+
+function Input.inject_off()
+    if loaded and ib.inject_off then ib.inject_off() end
+end
+
 return Input

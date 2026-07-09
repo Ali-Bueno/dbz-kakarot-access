@@ -69,6 +69,34 @@ Rules per control type:
 
 This avoids redundant verbosity and keeps reading snappy.
 
+## Submenus, overlays and the menu stack
+
+Games often open a submenu as an **overlay drawn on top of the parent menu without closing it** — the
+parent stays active/visible underneath, and sometimes no "screen opened/closed" event fires at all.
+Two real failure modes to design against:
+
+- The mod keeps reading the **parent menu underneath** instead of the submenu that's actually on top
+  (it never noticed a new layer opened).
+- The overlay closes and the mod **doesn't notice**, so it stays stuck on the dead submenu context and
+  can't read the parent menu the user is now navigating.
+
+Rules:
+
+1. **Track a menu stack, and always read the topmost interactive layer.** The active reading context
+   is *whichever layer currently owns focus/input* — never "the last screen that fired an open event".
+   Overlay opens → push + announce it (`interrupt=true`, same as entering a menu). Overlay closes →
+   pop + restore context to the layer that regains focus.
+2. **Don't trust open/close events alone.** If the game leaves the parent active under the overlay,
+   detect the active layer by **who actually receives the navigation input / owns focus** (the game
+   routes input somewhere — that layer is the one to read). If no reliable signal exists, poll the
+   focus owner at a modest cadence and diff-gate.
+3. **Never read a covered layer.** While an overlay is on top, focus events bubbling from the parent
+   underneath (some engines keep firing them) must be ignored.
+4. **Respect on-screen order *within the active layer***: read its widgets in the order the game draws
+   them, but only for the topmost layer.
+
+Popup/confirmation dialogs (below) are the simplest case of this same rule — a one-level overlay.
+
 ## Popup and confirmation dialogs
 
 When a **popup dialog** or a **confirmation dialog** appears (e.g. `Do you want to exit the game?`,

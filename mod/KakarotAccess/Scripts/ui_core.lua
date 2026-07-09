@@ -305,12 +305,16 @@ end
 -- a fullscreen movie, etc.), those queued steps pile up into a backlog that then runs
 -- late and in bursts — felt as long delays when navigating a menu. So we only queue a
 -- new step once the previous one has finished, keeping the reader on the CURRENT state.
-function Core.loop(step)
+function Core.loop(step, should_run)
     _G.__KakarotUiGen = (_G.__KakarotUiGen or 0) + 1
     local myGen = _G.__KakarotUiGen
     local busy = false
     LoopAsync(Core.POLL_MS, function()
         if _G.__KakarotUiGen ~= myGen then return true end
+        -- Stop polling when the owner disables the reader (Registry.stop → Ctrl+M
+        -- "reader off"): returning true ends this LoopAsync. Registry.start re-arms
+        -- it with a fresh Core.loop. Without this the loop kept announcing after off.
+        if should_run and not should_run() then return true end
         if not busy then
             busy = true
             ExecuteInGameThread(function()

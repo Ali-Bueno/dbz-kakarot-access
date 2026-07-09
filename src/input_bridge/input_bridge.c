@@ -57,6 +57,13 @@ static volatile LONG    g_block = 0;             /* 1 = hide the pad from the ga
 static XI_STATE         g_last;                  /* true latest state (user 0)        */
 static volatile LONG    g_haveLast = 0;
 static int              g_hooked = 0;
+/* Left-stick INJECTION (map-cursor auto-move). g_injTTL = game frames the injected value
+ * stays live; it counts DOWN every poll, so if Lua stops refreshing (map closed, error)
+ * the stick auto-releases in ~a frame or two and can NEVER stay stuck. Buttons/triggers/
+ * right-stick pass through untouched, so the player can still press X to confirm. */
+static volatile LONG    g_injTTL = 0;
+static volatile LONG    g_injLX = 0;             /* injected left-stick X (-32767..32767) */
+static volatile LONG    g_injLY = 0;
 
 /* Our replacement for XInputGetState: read the truth, cache it, optionally blank it. */
 static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
@@ -70,6 +77,13 @@ static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
             unsigned long pkt = pState->dwPacketNumber + 1;
             memset(pState, 0, sizeof(*pState));
             pState->dwPacketNumber = pkt;
+        } else if (idx == 0 && g_injTTL > 0) {
+            /* Drive ONLY the left stick to the injected value; everything else is the
+             * real pad (so X/confirm and the d-pad still reach us and the game). */
+            pState->Gamepad.sThumbLX = (short)g_injLX;
+            pState->Gamepad.sThumbLY = (short)g_injLY;
+            pState->dwPacketNumber++;
+            InterlockedDecrement(&g_injTTL);
         }
     }
     return r;
@@ -197,6 +211,28 @@ static int l_block(lua_State *L) {
     return 1;
 }
 
+/* inject(lx, ly) : drive the game's LEFT stick to (lx,ly) in -1..1 for the next few
+ * frames (auto-releases if not refreshed). No-op if the hook isn't installed. Returns
+ * whether injection can actually take effect (i.e. we're hooked). */
+static int l_inject(lua_State *L) {
+    double lx = luaL_checknumber(L, 1);
+    double ly = luaL_checknumber(L, 2);
+    if (lx < -1.0) lx = -1.0; else if (lx > 1.0) lx = 1.0;
+    if (ly < -1.0) ly = -1.0; else if (ly > 1.0) ly = 1.0;
+    InterlockedExchange(&g_injLX, (LONG)(lx * 32767.0));
+    InterlockedExchange(&g_injLY, (LONG)(ly * 32767.0));
+    InterlockedExchange(&g_injTTL, 12);   /* ~12 frames; the Lua driver refreshes each tick */
+    lua_pushboolean(L, g_hooked);
+    return 1;
+}
+
+/* inject_off() : release the injected stick immediately. */
+static int l_inject_off(lua_State *L) {
+    (void)L;
+    InterlockedExchange(&g_injTTL, 0);
+    return 0;
+}
+
 /* is_hooked() -> bool */
 static int l_is_hooked(lua_State *L) {
     lua_pushboolean(L, g_hooked);
@@ -204,10 +240,12 @@ static int l_is_hooked(lua_State *L) {
 }
 
 static const luaL_Reg input_funcs[] = {
-    {"install",   l_install},
-    {"poll",      l_poll},
-    {"block",     l_block},
-    {"is_hooked", l_is_hooked},
+    {"install",    l_install},
+    {"poll",       l_poll},
+    {"block",      l_block},
+    {"inject",     l_inject},
+    {"inject_off", l_inject_off},
+    {"is_hooked",  l_is_hooked},
     {NULL, NULL}
 };
 

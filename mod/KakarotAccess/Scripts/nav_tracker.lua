@@ -66,7 +66,7 @@ local RESCAN_CLASSES = 100            -- ticks between FindAllOf refreshes (~10 
 local LOST_SCANS = 3                  -- missed scans before dropping the target
 local REPATH_MS = 3000                -- NavMesh path refresh period
 local DIR_CUE_MS = 3000               -- min gap between spoken direction words (XV2)
-local ELEV_DIST = 12 * M              -- |dz| that counts as above/below
+local ELEV_DEADBAND_DEG = 18          -- elevation half-angle (deg) still read as "level"
 local ELEV_CUE_MS = 7000              -- min gap between elevation words (XV2)
 local DIST_CUE_MS = 8000              -- max silence before a distance-only cue: every
                                       -- spoken cue carries the distance (user request
@@ -208,6 +208,7 @@ local arrived = false
 local last_ping_ms = 0
 local last_dir_cue, last_dir_ms = nil, -DIR_CUE_MS
 local last_elev_ms = -ELEV_CUE_MS
+local last_elev_zone = nil     -- last spoken vertical zone; gates elevation by CHANGE
 local last_dist_ms = 0         -- last spoken cue that included the distance
 local last_stealth_zone, last_stealth_ms = nil, -STEALTH_CUE_MS
 local was_on_target = false    -- aim-alignment cue edge-gate
@@ -798,6 +799,16 @@ local function clock_hour(pan, fb)
     return h
 end
 
+-- Vertical zone from the ELEVATION ANGLE, not the raw height gap: a far target with a
+-- modest height difference reads as "level", so "above"/"below" only fire when climbing
+-- or diving actually matters. Deadband = the half-angle that still counts as level.
+local function elev_zone(dz, dh)
+    local ang = math.deg(math.atan(dz, dh))   -- +up / -down; atan(y,x) handles dh == 0
+    if ang >= ELEV_DEADBAND_DEG then return "nav_up" end
+    if ang <= -ELEV_DEADBAND_DEG then return "nav_down" end
+    return "nav_level"
+end
+
 local function announce_tracking(label, dist)
     Speech.say(string.format(I18n.t("nav_tracking"), label, meters(dist)), false)
 end
@@ -810,6 +821,7 @@ local function drop_target()
     companion_idx = 0   -- a dropped manual target reverts to quest mode
     last_stealth_zone = nil
     was_on_target = false
+    last_elev_zone = nil
 end
 
 -- WORLD GATE — safety-critical. The minimap is the game's own "the world is alive
@@ -901,13 +913,16 @@ local function chain_step(px, py, pz)
     end
 end
 
--- Field enemies = AAT_Character actors with a non-zero E_ENEMYSPAWN_TYPE (AT_enums:
--- 1 ENCOUNT, 2 QUEST, 3 BOSS; SpawnType is reflected on AAT_Character @0xC78). The
--- minimap MapIconList proved NOT to carry the roaming field enemies (the icon-based
--- enemies category + proximity alert found nothing in play, user 2026-07-06), so
--- they're scanned directly — on the same sparse cadence as the navi icons, because
--- FindAllOf walks every UObject.
+-- Field enemies = AAT_Character combat actors that are NOT the player/companions.
+-- SpawnType (AT_enums: 1 ENCOUNT, 2 QUEST, 3 BOSS; reflected @0xC78) NAMES the kind, but
+-- roaming field enemies report SpawnType 0 just like the player (verified 2026-07-08:
+-- cpl059cXX enemies all spawnType 0), so it cannot be the FILTER. The robust signal from
+-- the class dump: enemies derive from AT_Character but NOT AT_CharacterPlayableBase (the
+-- player + companions cpl001/002/011 do); QuestCharacter NPCs and AT_MobBase townsfolk/
+-- animals aren't AT_Characters at all, so they drop out. The minimap MapIconList proved
+-- NOT to carry roaming field enemies, so they're scanned directly on the sparse cadence.
 local ENEMY_NOUN_BY_SPAWN = { [1] = "cat_enemy", [2] = "cat_enemy_quest", [3] = "cat_enemy_boss" }
+local playable_cls = nil   -- AT_CharacterPlayableBase (player + companions) — excluded
 
 local function enemy_spawn_type(c)
     local st
@@ -915,16 +930,44 @@ local function enemy_spawn_type(c)
     return st
 end
 
+-- True for the player and companions (they inherit AT_CharacterPlayableBase); those are
+-- the only AT_Characters we must NOT flag as enemies.
+local function is_playable_char(c)
+    if playable_cls == nil then
+        local ok, k = pcall(function() return StaticFindObject("/Script/AT.AT_CharacterPlayableBase") end)
+        playable_cls = (ok and k) or false
+    end
+    if not playable_cls then return false end
+    local ok, r = pcall(function() return c:IsA(playable_cls) end)
+    return ok and r == true
+end
+
 -- The live field-enemy list { {actor, noun}, ... } (cached; entries re-validated by
--- every user). The player/companions have SpawnType NONE (0) and drop out naturally.
+-- every user). Player/companions are excluded by the playable-base check.
 local function enemies_list()
     if enemy_cache == nil or tick >= enemy_next then
         enemy_cache = {}
         enemy_next = tick + RESCAN_CLASSES
+        -- Distance-cap the scan: a level loads its ENTIRE enemy roster parked/inactive at a
+        -- shared default position — the Red Ribbon base dump (2026-07-09) showed 102 enemies,
+        -- almost all at an identical ~2030 m. Keep only enemies actually near the player so the
+        -- cache stays small and the alert/picker don't iterate the whole dormant roster.
+        local pawn = player_pawn()
+        local px, py, pz
+        if pawn then px, py, pz = actor_pos(pawn) end
         for _, c in pairs(FindAllOf("AT_Character") or {}) do
-            if Core.valid(c) then
-                local noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]
-                if noun then enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun } end
+            if Core.valid(c) and not is_playable_char(c) then
+                local near = true
+                if px then
+                    local x, y, z = actor_pos(c)
+                    near = x ~= nil
+                        and ((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) <= RADAR_NPC_CAP ^ 2
+                end
+                if near then
+                    -- SpawnType 1/2/3 → specific noun; roaming enemies are SpawnType 0 → generic.
+                    local noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] or "cat_enemy"
+                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun }
+                end
             end
         end
     end
@@ -936,7 +979,7 @@ end
 -- within 150 m — class name + SpawnType (AT_Characters only; reading it on other
 -- pawn classes is the uncatchable abort) — to dumps/dump_enemies.txt, only when the
 -- nearby set CHANGES and only on the sparse rescan tick. Unbuffered writes.
-local ENEMY_PROBE = true
+local ENEMY_PROBE = false   -- field-enemy class confirmed 2026-07-08 (AT_Character, not PlayableBase)
 local at_char_cls = nil
 local probe_next, probe_sig = 0, nil
 local function enemy_probe(px, py, pz)
@@ -1085,8 +1128,9 @@ local function enemy_alert(px, py, pz)
             and (fb >= 0 and "nav_ahead" or "nav_behind")
             or (pan >= 0 and "nav_right" or "nav_left"))
     end
-    if math.abs(dz) >= ELEV_DIST then
-        parts[#parts + 1] = I18n.t(dz > 0 and "nav_up" or "nav_down")
+    local ez = elev_zone(dz, dh)
+    if ez ~= "nav_level" then
+        parts[#parts + 1] = I18n.t(ez)
     end
     parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(d))
     Speech.say(table.concat(parts, ", "), false)
@@ -1334,11 +1378,21 @@ local function step()
         last_dist_ms = ms
         Speech.say(string.format("%s, %s", I18n.t(dir), dist_txt), false)
     end
-    local dz = tz - pz
-    if math.abs(dz) >= ELEV_DIST and ms - last_elev_ms >= ELEV_CUE_MS then
-        last_elev_ms = ms
-        last_dist_ms = ms
-        Speech.say(string.format("%s, %s", I18n.t(dz > 0 and "nav_up" or "nav_down"), dist_txt), false)
+    -- Vertical: angle-based zone (up / level / down), spoken only when the zone CHANGES
+    -- (like the horizontal word) — a steady climb announces once, not on a timer, and a
+    -- correction back to level is confirmed.
+    local thd = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2)
+    local ez = elev_zone(tz - pz, thd)
+    if ez ~= last_elev_zone and ms - last_elev_ms >= ELEV_CUE_MS then
+        local prev = last_elev_zone
+        last_elev_zone, last_elev_ms = ez, ms
+        if ez ~= "nav_level" then
+            last_dist_ms = ms
+            Speech.say(string.format("%s, %s", I18n.t(ez), dist_txt), false)
+        elseif prev then   -- returned to level from above/below (not the first read)
+            last_dist_ms = ms
+            Speech.say(I18n.t("nav_level"), false)
+        end
     end
     if ms - last_dist_ms >= DIST_CUE_MS then
         last_dist_ms = ms
@@ -1388,6 +1442,156 @@ local function step()
     end
 end
 
+-- ---- explore mode: passive "look-to-discover" radar (no menu) -----------------------
+-- Toggled by double-tapping R3 (radar_menu). While ON and free-roaming, it sonifies
+-- nearby points of interest WITHOUT picking anything from a menu: the POI your CAMERA
+-- faces is named by the screen reader and pinged with its category cue, and the nearest
+-- POI overall is marked by a softer ping so you sense what's off to the side / behind.
+-- Cost is bounded: the heavy Nav.list_targets scan runs ONLY after you've travelled far
+-- enough (POIs don't move if you don't), never per tick; each tick just re-evaluates the
+-- cached positions against the live camera (pure math), the same primitive the beacon uses.
+local EXPLORE_CONE_DEG = 35            -- half-angle (deg) of the camera "focus" cone
+local EXPLORE_RESCAN_DIST = 25 * M     -- re-run the POI scan after moving this far
+local EXPLORE_RESCAN_MS = 4000         -- ...but never more often than this (boost floor)
+local EXPLORE_MAX_DIST = 200 * M       -- ignore POIs farther than this while exploring
+local EXPLORE_FOCUS_PING_MS = 900      -- min gap between focused-POI pings
+local EXPLORE_NEAR_PING_MS = 1500      -- min gap between nearest-overall pings
+local EXPLORE_CUE = { enemies = "enemy" }   -- grp -> named audio cue (default "item")
+
+local explore_on = false
+local explore_pois = {}
+local explore_sx, explore_sy, explore_sz = nil, nil, nil   -- player pos at last scan
+local explore_scan_ms = -EXPLORE_RESCAN_MS
+local explore_focus_key = nil
+local explore_focus_ms, explore_near_ms = 0, 0
+
+local function explore_cue(grp) return EXPLORE_CUE[grp] or "item" end
+
+-- Camera-relative pan (-1..1) and forward component fb (cos of the angle) for a POI.
+local function explore_cam_rel(p, px, py, fx, fy)
+    local dx, dy = p.x - px, p.y - py
+    local dh = math.sqrt(dx * dx + dy * dy)
+    if dh < 1 or not fx then return 0, 1 end
+    local nx, ny = dx / dh, dy / dh
+    local pan = nx * -fy + ny * fx
+    local fb = nx * fx + ny * fy
+    if pan > 1 then pan = 1 elseif pan < -1 then pan = -1 end
+    return pan, fb
+end
+
+local function explore_pitch(fb)
+    if fb >= 0 then return 1.0 end
+    local p = 1.0 + fb * BEHIND_PITCH_SLOPE
+    return p < PITCH_MIN and PITCH_MIN or p
+end
+
+local function explore_vol(d2, scale)
+    local t = math.sqrt(d2) / EXPLORE_MAX_DIST
+    if t > 1 then t = 1 end
+    return (0.9 - 0.5 * t) * scale
+end
+
+-- Heavy POI scan (Nav.list_targets), flattened with each POI's current position cached.
+-- Displacement-gated by the caller so this is infrequent, never per tick.
+local function explore_rescan(px, py, pz, ms)
+    local pois = {}
+    for _, cat in ipairs(Nav.list_targets()) do
+        for _, it in ipairs(cat.items or {}) do
+            local x, y, z = actor_pos(it.actor)
+            if x then
+                pois[#pois + 1] = { key = it.key, grp = it.grp,
+                                    label = Nav.item_label(it), x = x, y = y, z = z }
+            end
+        end
+    end
+    explore_pois = pois
+    explore_sx, explore_sy, explore_sz = px, py, pz
+    explore_scan_ms = ms
+end
+
+local function explore_tick()
+    if not explore_on or not Nav.field_ready() then return end
+    local pawn = player_pawn()
+    if not pawn then return end
+    local px, py, pz = actor_pos(pawn)
+    if not px then return end
+    local ms = now_ms()
+
+    -- Rescan only after travelling far enough (time floor so boost can't spam it).
+    local moved2 = explore_sx
+        and ((px - explore_sx) ^ 2 + (py - explore_sy) ^ 2 + (pz - explore_sz) ^ 2)
+        or math.huge
+    if explore_sx == nil or (moved2 > EXPLORE_RESCAN_DIST ^ 2 and ms - explore_scan_ms >= EXPLORE_RESCAN_MS) then
+        explore_rescan(px, py, pz, ms)
+    end
+
+    local fx, fy = camera_forward()
+    local cone = math.cos(math.rad(EXPLORE_CONE_DEG))
+    local maxd2 = EXPLORE_MAX_DIST ^ 2
+    local near, near_d2 = nil, math.huge
+    local focus, focus_d2 = nil, math.huge
+    for _, p in ipairs(explore_pois) do
+        local dx, dy, dz = p.x - px, p.y - py, p.z - pz
+        local d2 = dx * dx + dy * dy + dz * dz
+        if d2 <= maxd2 then
+            if d2 < near_d2 then near, near_d2 = p, d2 end
+            if fx then
+                local dh = math.sqrt(dx * dx + dy * dy)
+                if dh > 1 and ((dx / dh) * fx + (dy / dh) * fy) >= cone and d2 < focus_d2 then
+                    focus, focus_d2 = p, d2
+                end
+            end
+        end
+    end
+
+    -- Focused POI (camera cone): name it when it CHANGES, and ping its category cue.
+    if focus then
+        local pan, fb = explore_cam_rel(focus, px, py, fx, fy)
+        if focus.key ~= explore_focus_key then
+            explore_focus_key = focus.key
+            local dir = (math.abs(fb) >= math.abs(pan))
+                and (fb >= 0 and "nav_ahead" or "nav_behind")
+                or (pan >= 0 and "nav_right" or "nav_left")
+            local parts = { focus.label, I18n.t(dir) }
+            local ez = elev_zone(focus.z - pz, math.sqrt((focus.x - px) ^ 2 + (focus.y - py) ^ 2))
+            if ez ~= "nav_level" then parts[#parts + 1] = I18n.t(ez) end
+            parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(math.sqrt(focus_d2)))
+            Speech.say(table.concat(parts, ", "), false)
+        end
+        if ms - explore_focus_ms >= EXPLORE_FOCUS_PING_MS then
+            explore_focus_ms = ms
+            Audio.cue(explore_cue(focus.grp), pan, explore_vol(focus_d2, 1.0), explore_pitch(fb))
+        end
+    else
+        explore_focus_key = nil
+    end
+
+    -- Nearest POI overall (when not the focused one): a softer ping so you feel things
+    -- to the side / behind without facing them.
+    if near and (not focus or near.key ~= focus.key)
+       and ms - explore_near_ms >= EXPLORE_NEAR_PING_MS then
+        explore_near_ms = ms
+        local pan, fb = explore_cam_rel(near, px, py, fx, fy)
+        Audio.cue(explore_cue(near.grp), pan, explore_vol(near_d2, 0.5), explore_pitch(fb))
+    end
+end
+
+-- Double-tap R3 (radar_menu): toggle the passive explore radar. Independent of the F3
+-- beacon master switch — you can explore with or without a tracked objective.
+function Nav.toggle_explore()
+    explore_on = not explore_on
+    explore_focus_key = nil
+    if explore_on then
+        explore_sx = nil   -- force a fresh scan on the next tick
+        Speech.say(I18n.t("explore_on"), true)
+    else
+        Speech.say(I18n.t("explore_off"), true)
+    end
+    return explore_on
+end
+
+function Nav.explore_on() return explore_on end
+
 -- ---- loop management (same generation/busy-guard pattern as ui_core.loop) ------------
 
 function Nav.start()
@@ -1407,6 +1611,10 @@ function Nav.start()
                 busy = false
                 local ok, err = pcall(step)
                 if not ok then print("[KakarotAccess] nav step error: " .. tostring(err) .. "\n") end
+                -- Passive explore radar runs in its OWN pcall so an error here can never
+                -- take down the beacon tick (or vice versa).
+                local ok2, err2 = pcall(explore_tick)
+                if not ok2 then print("[KakarotAccess] nav explore error: " .. tostring(err2) .. "\n") end
             end)
         end
         return false
@@ -1551,9 +1759,7 @@ function Nav.where()
             string.format(I18n.t("nav_meters"), meters(d3)),
             string.format(I18n.t("nav_clock"), clock_hour(pan, fb)),
         }
-        if math.abs(dz) >= ELEV_DIST then
-            parts[#parts + 1] = I18n.t(dz > 0 and "nav_up" or "nav_down")
-        end
+        parts[#parts + 1] = I18n.t(elev_zone(dz, dh))
         Speech.say(table.concat(parts, ", "), true)
     end)
 end
@@ -2584,6 +2790,69 @@ function Nav.dump()
                 end
             end
             f:write(string.format("AT_Character within 300m: %d\n", n))
+        end
+        -- Mob probe (2026-07-09: "you confused the enemies with animals"). AT_MobBase covers
+        -- wild animals (AnimalMob_Pawn), townsfolk mobs AND possibly MOB-TYPE ENEMIES. List
+        -- every mob's class + distance so we can tell real animals from enemies and fix the
+        -- classification (the enemy scan only looks at AT_Character and may miss mob enemies).
+        do
+            f:write("probing AT_MobBase...\n")
+            local n = 0
+            for _, m in pairs(FindAllOf("AT_MobBase") or {}) do
+                if Core.valid(m) then
+                    local x, y, z = actor_pos(m)
+                    if x then
+                        local dd = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                        if dd <= 300 * M then
+                            n = n + 1
+                            local cn = "?"
+                            pcall(function() cn = m:GetClass():GetFName():ToString() end)
+                            f:write(string.format("  mob d=%.0fm cls=%s\n", dd / M, cn))
+                        end
+                    end
+                end
+            end
+            f:write(string.format("AT_MobBase within 300m: %d\n", n))
+        end
+        -- Wind-tunnel probe (user 2026-07-09: the túnel de viento isn't showing). The radar
+        -- scans FindAllOf("ATWindRoad") + FieldPointComponent type 2 (WindPath); log what's
+        -- actually near so we can see the REAL class/type/distance of the wind tunnel.
+        do
+            f:write("probing ATWindRoad...\n")
+            local nw = 0
+            for _, a in pairs(FindAllOf("ATWindRoad") or {}) do
+                if Core.valid(a) then
+                    nw = nw + 1
+                    local x, y, z = actor_pos(a)
+                    local dd = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                    local cn = "?"
+                    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                    f:write(string.format("  windroad d=%s cls=%s\n",
+                        dd and string.format("%.0fm", dd / M) or "?", cn))
+                end
+            end
+            f:write(string.format("ATWindRoad total: %d\n", nw))
+            f:write("probing FieldPointComponent...\n")
+            local nf = 0
+            for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
+                if comp and comp:IsValid() then
+                    local t, ocls, dd = "?", "?", nil
+                    pcall(function() t = tostring(tonumber(comp.FieldPointIconType)) end)
+                    local owner
+                    pcall(function() owner = comp:GetOwner() end)
+                    if Core.valid(owner) then
+                        pcall(function() ocls = owner:GetClass():GetFName():ToString() end)
+                        local x, y, z = actor_pos(owner)
+                        dd = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+                    end
+                    if not dd or dd <= 400 * M then
+                        nf = nf + 1
+                        f:write(string.format("  fieldpoint type=%s owner=%s d=%s\n", t, ocls,
+                            dd and string.format("%.0fm", dd / M) or "?"))
+                    end
+                end
+            end
+            f:write(string.format("FieldPointComponent (within 400m): %d\n", nf))
         end
         f:write("current target: " .. (target and (target.label .. " " .. target.key) or "none") .. "\n")
         f:close()

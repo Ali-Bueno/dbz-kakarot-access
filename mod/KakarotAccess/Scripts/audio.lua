@@ -46,6 +46,12 @@ function Audio.arrival()
     if loaded then bridge.arrival() end
 end
 
+-- Play a named category cue (explore radar): "item", "enemy", ... pan -1..1,
+-- volume 0..1, pitch 0.5..2. Unknown/unloaded names are a silent no-op.
+function Audio.cue(name, pan, volume, pitch)
+    if loaded and bridge.cue then bridge.cue(name, pan, volume, pitch) end
+end
+
 -- Continuous soft sine tone (seamless loop): call repeatedly to reshape volume 0..1
 -- and pitch 0.5..2 (110..440 Hz) — no retrigger, gentle on the ears. Stop when done.
 function Audio.tone(volume, pitch)
