@@ -71,6 +71,21 @@ end
 function Mem.at_i32(addr, off) if loaded and addr then return m.read_i32(addr, off or 0) end end
 function Mem.at_bytes(addr, off, n) if loaded and addr then return m.read_bytes(addr, off or 0, n) end end
 
+-- Guarded WRITES. Same SEH guard as reads (a bad address is a no-op returning false).
+-- Used to snap a game cursor onto a target by overwriting the member the game reads back
+-- as its own source (world-map fast travel). Return true only if the store succeeded.
+local function writer(fn_name)
+    return function(obj, off, v)
+        local a = Mem.addr(obj)
+        if not a or not m[fn_name] then return false end
+        return m[fn_name](a, off or 0, v) == true
+    end
+end
+
+Mem.write_i32   = writer("write_i32")
+Mem.write_u32   = writer("write_u32")
+Mem.write_float = writer("write_float")
+
 -- Read a non-reflected UE FString member at obj+off. FString = { TCHAR* Data; int32
 -- Num; int32 Max }; Data is UTF-16LE, Num includes the null terminator. Returns a
 -- UTF-8 Lua string (BMP only), or nil. Used to read hidden label members the game

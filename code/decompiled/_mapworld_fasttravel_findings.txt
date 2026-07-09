@@ -1,0 +1,76 @@
+UAT_UIMapWorld (BP Map_World_C) fast-travel confirm path — findings (2026-07-09)
+================================================================================
+Native C++ class table anchored on OnClosedInfoWindow/OnCursorMove.
+Two tables found: 0x141798xxx = REAL native impls (UAT_UIMapWorld); 0x141797xxx
+= BP stub table (every thunk calls the same 0x14203aad0 = lazy-init helper, no logic).
+Use the 0x141798xxx set. Full dumps: mapworld_natives.c + manual_*.c below.
+
+EXEC THUNKS (reflection-callable UFUNCTIONs), UAT_UIMapWorld:
+  CheckHovered        exec 0x141798610  -> impl FUN_1415b9720
+  InputCancel         exec 0x141798650  -> FUN_1415c0770
+  InputConfirm        exec 0x141798670  -> FUN_1415c0890   *** CONFIRM CORE ***
+  InputDown           exec 0x141798690  -> FUN_1415c0e30(this,1)
+  InputLeft           exec 0x1417986b0  -> FUN_1415c0e30(this,2)   (prev destination)
+  InputRight          exec 0x1417986d0  -> FUN_1415c0e30(this,3)   (next destination)
+  InputUp             exec 0x1417986f0  -> FUN_1415c0e30(this,0)
+  InputX              exec 0x141798710  -> FUN_1415c15f0
+  InputY              exec 0x141798730  -> FUN_1415c8850(this,1) (only state6 & +0x51d)
+  MouseClickDecide    exec 0x141798850  -> FUN_1415c2810 -> (hit-test) -> FUN_1415c0890
+  OnClosedInfoWindow  exec 0x141798af0  (state 9->6, 10->0xc)
+  OnCursorMove        exec 0x141798b10  -> FUN_1415c40b0 (mouse hover setter)
+  OnInGameBeginPlay   exec 0x141798ca0
+
+HIDDEN (non-UPROPERTY) STATE MEMBERS on UAT_UIMapWorld (size 0x748; UPROP end ~0x568):
+  this+0x508  int32  UI mode/state:  6=area-select, 0xc=destination-select,
+                     0xe=confirming/warping, 9/10=info-window open.
+  this+0x514  int32  *** HOVERED/SELECTED ICON INDEX *** (-1 = none). WRITE THIS.
+  this+0x51d  byte   confirm-ready flag (must be != 0 for InputConfirm to act).
+  this+0x534  int32  sub-state latch (set to 2 once destination view built).
+  this+0x538  8B     current area id (copied from selected icon's +0x14).
+  this+0x548  8B     selected area id scratch (icon +0x14 | packed float).
+  this+0x551  byte   hover-processing gate (CheckHovered requires !=0).
+
+ICON ARRAY = InfoIcon (UPROPERTY @0x4D0 data, @0x4D8 count), TArray<FWorldMapsSymbol>,
+stride 0x20. Element layout used by the code:
+  elem+0x08  ptr   UAT_UIMapWorldIcon widget (vtable calls +0x2e0/+0x2e8 = highlight)
+  elem+0x11  byte  SELECTABLE / UNLOCKED flag (0 = locked/placeholder -> skipped)
+  elem+0x14  8B    area id (FName-ish)
+  elem+0x1c  int32 destination/area id used for the on-screen name lookup
+
+CONFIRM CORE  FUN_1415c0890  (InputConfirm and MouseClickDecide both reach it):
+  Guards:  state(0x508) in {6,0xc}  AND  0x51d != 0  AND  0x514 != -1
+           (if 0x514 == -1 -> error beep FUN_141485f00(3,...) and return)
+  Reads InfoIcon[0x514] (base this+0x4d0, stride 0x20), grabs id at elem+0x1c,
+  sets state(0x508)=0xe, and opens a YesNo confirm dialog message "WM_MoveConf"
+  (world-map move confirm; "DLC6_03002_Area04_DuelConfirm" branch for a DLC duel).
+  *** It does NOT re-check elem+0x11, so a raw index write can point at a LOCKED
+  destination. The mod MUST validate InfoIcon[idx].byte(+0x11) != 0 first. ***
+  Warp itself executes downstream on YES (state 0xe handler); not inside 1415c0890.
+
+SELECTION SETTER  FUN_1415cf800(this, idx)  — writes this+0x514 = idx (line: *(int*)(this+0x514)=idx),
+  de-highlights old icon, highlights new, updates destination-name text + cursors,
+  copies elem+0x14 -> this+0x538/0x548.  FUN_1415cfff0(this,idx) = same + extra.
+D-PAD STEP  FUN_1415c0e30(this, dir): dir 2=left/prev, 3=right/next; only at state 0xc;
+  walks InfoIcon skipping elem+0x11==0 (locked); calls FUN_1415cfff0 to commit.
+
+WORLD-MAP TRAVEL EXECUTORS (UPlayerManager UFUNCTIONs; the "enter world map" actions):
+  StartFlyToWorldMap       exec 0x1418dfb60 -> FUN_1412eb9e0
+  StartTeleportToWorldMap  exec 0x1418dfb80 -> FUN_1412ebcc0
+  TransitionToWorldMap     exec 0x1418dfba0 -> FUN_1412ed750
+  (UAT_UIMapWorld also has a TransitionToWorldMap exec @0x141798fd0.)
+
+RECOMMENDED MOD TRIGGER (instant travel to a chosen destination):
+  1. Open world map, reach destination-select level (state this+0x508 == 0xc)
+     — reached by confirming an area at state 6, or map opens directly at 0xc.
+  2. Pick target index N into InfoIcon; require InfoIcon[N].byte(+0x11) != 0 (unlocked).
+  3. Raw-write this+0x514 = N (hidden member -> mem_bridge, not reflection).
+     [reflection-only alt: call InputLeft()/InputRight() to step 0x514 to N.]
+  4. Ensure this+0x51d != 0.
+  5. Reflection-call UAT_UIMapWorld::InputConfirm()  -> opens "WM_MoveConf" YesNo.
+  6. Answer Yes on the confirm window (existing YesNo handling) -> game warps.
+
+FILES: mapworld_natives.c, _mapworld_index.txt,
+  manual_1415c0890.c (confirm core), manual_1415cf800.c (0x514 writer),
+  manual_1415cfff0.c, manual_1415c0e30.c (d-pad), manual_1415b9720.c (CheckHovered),
+  manual_1415c40b0.c (mouse hover), manual_1415c1d70.c (hit-test),
+  manual_1415cd100.c (state/sound helper), fasttravel_natives.c (world-travel execs).

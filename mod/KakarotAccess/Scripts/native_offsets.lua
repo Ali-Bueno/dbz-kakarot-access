@@ -145,6 +145,44 @@ return {
         rowIndex    = 0x3D4,   -- int32 on EmbList: cursor row 0..2  (CONFIRMED)
     },
 
+    -- World map UAT_UIMapWorld (BP Map_World_C) — the fast-travel confirm mechanism, recovered
+    -- from Ghidra (2026-07-09, code/decompiled/manual_1415c0890.c = confirm core FUN_1415c0890;
+    -- FUN_1415cf800 = the selIndex setter; FUN_1415c0e30 = d-pad left/right). InputConfirm and
+    -- MouseClickDecide both funnel into the confirm core, which requires state ∈ {6, 0xc} AND
+    -- ready != 0 AND selIndex != -1, then opens the "WM_MoveConf" YesNo and warps on Yes.
+    -- To fast-travel to a chosen point: (state==0xc) write selIndex, ensure ready, reflection-call
+    -- InputConfirm(), answer Yes. NEVER travel to a locked point: the core does NOT re-validate,
+    -- so the mod MUST check InfoIcon[idx] unlocked flag (+0x11) != 0 first.
+    mapWorld = {
+        state        = 0x508,  -- int32: 6=area-select, 0xc=destination-select, 0xe=warping, 9/10=info win
+        selIndex     = 0x514,  -- int32: selected InfoIcon index (-1 = none); WRITE this to pick a point
+        ready        = 0x51d,  -- u8: confirm-ready gate (must be != 0 for InputConfirm to act)
+        -- InfoIcon UPROPERTY TArray<FWorldMapsSymbol> — the ordered destination universe.
+        infoIconData = 0x4d0,  -- ptr: array data
+        infoIconCount= 0x4d8,  -- int32: array count
+        infoIconStride = 0x20, -- bytes per FWorldMapsSymbol entry
+        entryIcon    = 0x08,   -- ptr: UAT_UIMapWorldIcon* for this entry (from entry base)
+        entryUnlocked= 0x11,   -- u8: unlocked/selectable flag (0 = LOCKED — do not travel)
+        entryAreaId  = 0x14,   -- (from entry base) area id
+        entryId      = 0x1c,   -- (from entry base) int id
+    },
+
+    -- World-map fast-travel cursor: Map_World_Curs_C (the free analog cursor under
+    -- BP_ATGameInstance). Its screen position is UWidget RenderTransform.Translation
+    -- (UWidget+0x90/+0x94, same member as commuBoard.cursorX/Y). Unlike the community
+    -- board — where that member IS the game's authoritative cursor — on the WORLD map it
+    -- is only the VISUAL reflection: writing it moves the sprite but NOT the real cursor
+    -- (verified 2026-07-09, dump_map_snap: held=true yet fast-travel stayed on the old
+    -- point). The authoritative cursor is an internal WORLD/map-space variable (drives both
+    -- the map pan and the "¿Ir a X?" hit-test) — NOT yet located. So we do NOT write these;
+    -- fast travel is driven through the game's own input (stick injection). Kept as the
+    -- documented read offset for the visual cursor and as the starting point for a future
+    -- memory-diff hunt of the real cursor variable.
+    mapCursor = {
+        cursorX = 0x90,   -- float RenderTransform.Translation.X (VISUAL only — see note above)
+        cursorY = 0x94,   -- float RenderTransform.Translation.Y
+    },
+
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named
     -- UFunction). ListBarArray is the reflected TArray at 0x3a8 (data) / 0x3b0 (count).

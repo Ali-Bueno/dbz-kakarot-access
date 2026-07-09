@@ -20,6 +20,8 @@ local Keyhelp = require("keyhelp")
 local Transition = require("transition")
 local Speech = require("speech")
 local Input = require("input")
+local Mem = require("mem")
+local OFF = require("native_offsets")
 
 local Map = {}
 
@@ -28,17 +30,15 @@ local tick = 0
 local state = nil    -- { screen, name, world } computed in is_active
 local dests_said = false   -- world-map travel points announced once per opening
 
--- World-map travel GUIDANCE: d-pad picks a destination; we tell the player which way to
--- push the STICK to move the analog cursor onto it, and announce "on point" when close.
--- Cursor pos = Map_World_Curs RenderTransform.Translation; icon pos = its canvas Slot
--- offset — both in the SAME screen-pixel space (verified 2026-07-09). No input injection.
-local ON_POINT_PX = 26     -- cursor within this many px of the icon = on the point (stop)
-local DRIVE_NEAR_PX = 55   -- inside this, ease the push for a soft, accurate approach
-local DRIVE_FAR = 1.0      -- stick magnitude while far from the point (full = fastest)
-local DRIVE_NEAR = 0.7     -- stick magnitude while easing in
-local guide_target = nil   -- selected destination index (into icons_pos())
-local guide_btn = 0        -- previous pad bitmask (d-pad edge detection)
-local guide_dir = nil      -- state gate: "moving" while driving, "on" once arrived
+-- World-map fast travel via the game's OWN selection machine (UAT_UIMapWorld, Ghidra 2026-07-09,
+-- native_offsets.mapWorld): d-pad up/down picks a destination by its native InfoIcon INDEX, we
+-- WRITE that index to selIndex(0x514), and Confirm(A) fires the game's InputConfirm() → the
+-- "Go to X?" YesNo. No stick injection, no cursor math — the selected index IS the source of
+-- truth the confirm reads (verified in-game: write index + InputConfirm travels to that point).
+local FT = OFF.mapWorld
+local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
+local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
+local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -112,26 +112,6 @@ local function curs_debug()
         f:write(string.format("[%d]\n%s\n\n", os.time(), table.concat(lines, "\n")))
         f:close()
     end)
-end
-
--- Fast-travel destinations shown on the WORLD map are Map_World_Icon_C widgets, each with
--- a Txt_Name label (the point's name, e.g. "Ciénaga Blake" — dump 2026-07-09). Enumerated
--- once per map opening. Read-only for now: it names what's reachable; actually MOVING the
--- analog cursor onto a point (to trigger the "¿Ir a X?" confirm) would need cursor
--- injection, which the input bridge can't do yet.
-local function travel_points()
-    local names, seen = {}, {}
-    for _, ic in pairs(FindAllOf("Map_World_Icon_C") or {}) do
-        if Core.valid(ic) and Core.on_screen(ic) then
-            local n
-            pcall(function() n = clean(Core.read_text(ic.Txt_Name)) end)
-            if n and n ~= "" and not seen[n] then
-                seen[n] = true
-                names[#names + 1] = n
-            end
-        end
-    end
-    return names
 end
 
 -- The world map is GENUINELY open only when its travel-point icons are actually rendered
@@ -301,87 +281,85 @@ function Map.is_active()
     return false
 end
 
--- The live world-map cursor position (screen px), or nil.
-local function curs_pos()
-    for _, o in ipairs(Core.cached_all("Map_World_Curs_C", tick)) do
+-- The live UAT_UIMapWorld host (BP Map_World_C) whose selection machine we drive, or nil.
+-- Uses the SAME pick as the validated in-game test (first transient instance), so the address
+-- we read/write is the one the confirm core actually reads.
+local function ft_host()
+    for _, o in ipairs(Core.cached_all("Map_World_C", tick)) do
         if Core.valid(o) then
             local fn = ""
             pcall(function() fn = o:GetFullName() end)
-            if fn:find("BP_ATGameInstance", 1, true) then
-                local x, y = render_xy(o)
-                if x then return x, y end
-            end
+            if fn:find("/Engine/Transient", 1, true) then return o end
         end
     end
     return nil
 end
 
--- Fast-travel points with screen positions { {name, x, y}, ... }, name-sorted for a stable
--- d-pad order. Positions come from the canvas Slot offset (the icons render at 0,0).
-local function icons_pos()
-    local out = {}
+-- Build the ordered fast-travel point names, INDEXED BY THE GAME'S native InfoIcon order
+-- (list[i+1] = name for index i), so the index we write to selIndex matches the announced
+-- name. Each InfoIcon entry's icon widget (entry+0x08) is matched by address to a live
+-- Map_World_Icon_C to read its Txt_Name. Only points the game actually put on the map appear
+-- (undiscovered destinations are not rendered), so the list stays faithful to the gameplay.
+local function ft_build(host)
+    -- address -> name for every live world-map icon (the names the game shows).
+    local byaddr = {}
     for _, ic in ipairs(Core.cached_all("Map_World_Icon_C", tick)) do
         if Core.valid(ic) then
-            local nm, x, y
+            local a = Mem.addr(ic)
+            local nm
             pcall(function() nm = clean(Core.read_text(ic.Txt_Name)) end)
-            pcall(function()
-                local off = ic.Slot.LayoutData.Offsets
-                x, y = off.Left, off.Top
-            end)
-            if nm and nm ~= "" and x then out[#out + 1] = { name = nm, x = x, y = y } end
+            if a and nm and nm ~= "" then byaddr[a] = nm end
         end
     end
-    table.sort(out, function(a, b) return a.name < b.name end)
+    local data = Mem.ptr(host, FT.infoIconData)
+    local count = Mem.i32(host, FT.infoIconCount) or 0
+    local out = {}
+    if data and data ~= 0 and count > 0 and count < 256 then
+        for i = 0, count - 1 do
+            -- read the entry's icon widget pointer (8 bytes LE) and match it by address.
+            local iconptr
+            local b = Mem.at_bytes(data, i * FT.infoIconStride + FT.entryIcon, 8)
+            if b and #b == 8 then iconptr = string.unpack("<I8", b) end
+            out[i + 1] = (iconptr and byaddr[iconptr]) or (I18n.t("map_point") .. " " .. (i + 1))
+        end
+    end
     return out
 end
 
--- Drive step (world map only): d-pad up/down picks a destination; we AUTO-MOVE the analog
--- cursor onto it by injecting the left stick, then say "on point" so the player presses
--- confirm. Injection auto-releases in the bridge if this stops running, and we release it
--- on every early exit + in reset(), so the stick can never stay stuck.
-local function guidance()
+-- World-map fast travel: d-pad up/down selects a point (native InfoIcon index); we write the
+-- index and announce the name. Confirm (A) writes the index again and calls InputConfirm() so
+-- the game opens its own "Go to X?" YesNo for the CHOSEN point — regardless of where the analog
+-- cursor sits. We re-assert the chosen index each tick so a stray hover can't retarget Confirm.
+local function ft_guidance(host)
+    if not ft_points then ft_points = ft_build(host) end
+    local n = #ft_points
+    if n == 0 then return end
     local snap = Input.read()
-    if not snap then Input.inject_off(); return end
-    local icons = icons_pos()
-    if #icons == 0 then Input.inject_off(); return end
+    if not snap then return end
     local B = Input.BTN
-    local function pressed(m) return (snap.buttons & m) ~= 0 and (guide_btn & m) == 0 end
-    local changed = false
+    local function pressed(m) return (snap.buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
     if pressed(B.DPAD_DOWN) then
-        guide_target = (guide_target or 0) % #icons + 1; changed = true
+        ft_sel = ((ft_sel or -1) + 1) % n
+        Mem.write_i32(host, FT.selIndex, ft_sel)
+        Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
     elseif pressed(B.DPAD_UP) then
-        guide_target = ((guide_target or 1) - 2) % #icons + 1; changed = true
+        ft_sel = ((ft_sel or 0) - 1) % n
+        Mem.write_i32(host, FT.selIndex, ft_sel)
+        Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
     end
-    guide_btn = snap.buttons
-    if not guide_target then Input.inject_off(); return end   -- no destination picked yet
-    if guide_target > #icons then guide_target = #icons end
-    local t = icons[guide_target]
-    if changed then
-        guide_dir = nil
-        Speech.say(t.name, true)   -- announce the newly selected destination
+    -- Confirm: pin the chosen index and fire the game's own confirm for it (validated in-game).
+    if pressed(B.A) and ft_sel then
+        Mem.write_i32(host, FT.selIndex, ft_sel)
+        pcall(function() host:InputConfirm() end)
     end
-    local cx, cy = curs_pos()
-    if not cx then Input.inject_off(); return end
-    local dx, dy = t.x - cx, t.y - cy   -- screen space: +y is DOWN
-    local dist = math.sqrt(dx * dx + dy * dy)
-    if dist <= ON_POINT_PX then
-        Input.inject_off()
-        if guide_dir ~= "on" then
-            guide_dir = "on"
-            Speech.say(string.format(I18n.t("map_on_point"), t.name), false)
-        end
-        return
-    end
-    -- Push the left stick toward the target (screen +y is DOWN -> stick -Y); ease near it.
-    local mag = dist > DRIVE_NEAR_PX and DRIVE_FAR or DRIVE_NEAR
-    Input.inject((dx / dist) * mag, -(dy / dist) * mag)
-    guide_dir = "moving"
+    ft_prevbtn = snap.buttons
+    -- keep the chosen index pinned so the game's own Confirm (A) also targets it.
+    if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
 end
 
 function Map.reset()
     ann:reset(); dests_said = false
-    guide_target, guide_btn, guide_dir = nil, 0, nil
-    Input.inject_off()
+    ft_points, ft_sel, ft_prevbtn = nil, nil, 0
 end
 
 function Map.update()
@@ -391,16 +369,18 @@ function Map.update()
     -- changes; the game's help line as the tooltip.
     ann:focus(s.screen, nil, s.name or s.screen, nil, Keyhelp.helpmsg)
     if s.world then
+        local host = ft_host()
+        if not host then return end
         -- List the reachable fast-travel points once (so a blind player knows what's there),
-        -- then run d-pad guidance toward the selected one.
+        -- then run d-pad selection over the game's native index.
         if not dests_said then
             dests_said = true
-            local d = travel_points()
-            if #d > 0 then
-                Speech.say(string.format(I18n.t("map_travel_points"), #d, table.concat(d, ", ")), false)
+            ft_points = ft_build(host)
+            if #ft_points > 0 then
+                Speech.say(string.format(I18n.t("map_travel_points"), #ft_points, table.concat(ft_points, ", ")), false)
             end
         end
-        guidance()
+        ft_guidance(host)
     end
 end
 

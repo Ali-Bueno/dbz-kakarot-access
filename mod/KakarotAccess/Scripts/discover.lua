@@ -51,8 +51,58 @@ local function write_lines(path, lines)
     f:write(table.concat(lines, "\n")); f:write("\n"); f:close()
 end
 
+-- =====================================================================================
+-- TEMP MAP CONFIRM TEST (2026-07-09) — on the WORLD MAP (Mapa del Mundo / UAT_UIMapWorld), F7
+-- performs the INSTANT-TRAVEL recipe on a CYCLING target point, to validate it WITHOUT moving
+-- the cursor: read state/sel/count, pick target = (prev+1) % count, WRITE selIndex(0x514)=target,
+-- then reflection-call InputConfirm(). If it works the game should open the "Go to X?" YesNo for
+-- the TARGET point (index 0,1,...) regardless of where the cursor is — tell me which point's
+-- dialog appears (validates the mechanism AND the index->point mapping). Answer No to cancel.
+-- state 6 and 0xc are both accepted by the confirm core. Set MAP_INPUT_TEST=false to restore
+-- the normal dump. (Confirmed 2026-07-09: write selIndex + InputConfirm travels to that point;
+-- index 0=Casa de Goku, 1=Ciénaga Blake. Real feature now lives in screen_map.lua.)
+local MAP_INPUT_TEST = false
+
 function Discover.run()
     ExecuteInGameThread(function()
+        -- --- world-map confirm-test branch (returns early; no dump on the map) ---
+        if MAP_INPUT_TEST then
+            local ok_test, handled = pcall(function()
+                local Speech = require("speech")
+                local Mem = require("mem")
+                local OFF = require("native_offsets").mapWorld
+                local function tvalid(o) return o ~= nil and o:IsValid() == true end
+                local function tlive(o) return tvalid(o) and o:GetFullName():find("/Engine/Transient", 1, true) ~= nil end
+                local host = nil
+                for _, o in pairs(FindAllOf("Map_World_C") or {}) do
+                    if tlive(o) then host = o break end
+                end
+                if not tvalid(host) then return false end   -- not on the world map -> normal dump
+                local state = Mem.i32(host, OFF.state)
+                local sel   = Mem.i32(host, OFF.selIndex)
+                local ready = Mem.u8(host, OFF.ready)
+                local count = Mem.i32(host, OFF.infoIconCount) or 0
+                if count < 1 then
+                    Speech.say(string.format("no points. state %s, sel %s, ready %s",
+                        tostring(state), tostring(sel), tostring(ready)), true)
+                    return true
+                end
+                -- pick the next target index (cycles 0..count-1), write it, then confirm.
+                local target = ((_G.__fttgt or -1) + 1) % count
+                _G.__fttgt = target
+                local wrote = Mem.write_i32(host, OFF.selIndex, target)
+                local sel_after = Mem.i32(host, OFF.selIndex)
+                local called = pcall(function() host:InputConfirm() end)
+                Speech.say(string.format("target %d of %d, wrote %s, sel now %s, confirm %s",
+                    target, count, tostring(wrote), tostring(sel_after), called and "called" or "FAILED"), true)
+                print(string.format("[MapConfirm] state=%s ready=%s count=%s target=%d wrote=%s selAfter=%s called=%s\n",
+                    tostring(state), tostring(ready), tostring(count), target,
+                    tostring(wrote), tostring(sel_after), tostring(called)))
+                return true
+            end)
+            if ok_test and handled then return end   -- handled on the world map; skip the normal dump
+        end
+
         local out = {}
         _G.__dumpN = (_G.__dumpN or 0) + 1
         local stamp = 0; pcall(function() stamp = os.time() end)
@@ -175,6 +225,142 @@ function Discover.run()
             end
             return short(o:GetFullName())
         end
+
+        -- =================================================================================
+        -- FAST TRAVEL probe (2026-07-09) — runs FIRST and flushes so a later abort can't
+        -- truncate it. Open the WORLD MAP and press F7. To learn whether the game sets the
+        -- manager's CurrentTargetComponent from the HOVERED destination (the key to a
+        -- reflection-only instant travel: write it + confirm), take TWO dumps with the
+        -- cursor on different points and compare "CURRENT target PlatformId".
+        -- Reflection can abort on this game -> every hop is valid()+pcall.
+        -- =================================================================================
+        local function fname_of(obj, field)   -- read an FName UPROPERTY -> string, guarded
+            local ok, v = pcall(function()
+                local n = obj[field]
+                if n == nil then return nil end
+                if type(n) == "userdata" then return n:ToString() end
+                return tostring(n)
+            end)
+            return ok and v or nil
+        end
+        out[#out + 1] = "==== FAST TRAVEL v2 (map widget / icons+brush / manager) ===="
+        flush()
+        do
+            local function real(o) return valid(o) and not o:GetFullName():find("Default__", 1, true) end
+            -- class chain "A < B < C" up to (and including) the first native UI base.
+            local function chain(o)
+                local parts, cls, d = {}, nil, 0
+                pcall(function() cls = o:GetClass() end)
+                while valid(cls) and d < 8 do
+                    local cn = "?"; pcall(function() cn = cls:GetFName():ToString() end)
+                    parts[#parts + 1] = cn
+                    if cn:find("UserWidget") or cn == "Object" then break end
+                    local sup; pcall(function() sup = cls:GetSuperStruct() end)
+                    cls = valid(sup) and sup or nil; d = d + 1
+                end
+                return table.concat(parts, " < ")
+            end
+            -- read a text widget's text via GetText() then .Text (guarded).
+            local function widget_text(node)
+                if not valid(node) then return nil end
+                local ok, s = pcall(function() return node:GetText():ToString() end)
+                if ok and s and s ~= "" then return s end
+                ok, s = pcall(function() return node.Text:ToString() end)
+                return (ok and s ~= "") and s or nil
+            end
+            local function vec2(o, field)
+                local ok, s = pcall(function() local v = o[field]; return string.format("%.1f,%.1f", v.X, v.Y) end)
+                return ok and s or "-"
+            end
+
+            -- 1) MANAGER — FindAllOf (native gotcha: may be empty) + FindFirstOf fallback.
+            local mgr = nil
+            for _, m in pairs(FindAllOf("FastTravelManager") or {}) do if real(m) then mgr = m break end end
+            if not mgr then pcall(function() local m = FindFirstOf("FastTravelManager"); if real(m) then mgr = m end end) end
+            if valid(mgr) then
+                out[#out + 1] = "-- MANAGER " .. short(mgr:GetFullName())
+                local tgt; pcall(function() tgt = mgr.CurrentTargetComponent end)
+                out[#out + 1] = valid(tgt)
+                    and string.format("     CURRENT target=%s PlatformId=%s", cname(tgt), tostring(fname_of(tgt, "PlatformId")))
+                    or  "     CURRENT target = (none/nil)"
+                local um; pcall(function() um = mgr.UiMap end)
+                out[#out + 1] = "     UiMap = " .. (valid(um) and (cname(um) .. " [" .. short(um:GetFullName()) .. "]") or "nil")
+            else
+                out[#out + 1] = "-- MANAGER: not found via FindAllOf/FindFirstOf(FastTravelManager)"
+            end
+            flush()
+
+            -- 2) MAP WIDGET — the BP host is Map_World_C; its native parent is AT_UIFastTravelMap,
+            -- so native members are readable by name. Read the hovered destination name, the area
+            -- name, snap threshold, and the ordered DestinationIconList (the authoritative list).
+            local host = nil
+            for _, o in pairs(FindAllOf("Map_World_C") or {}) do if valid(o) and live(o) then host = o break end end
+            if valid(host) then
+                out[#out + 1] = "-- MAP HOST " .. chain(host)
+                out[#out + 1] = "     DestinationName=" .. tostring(widget_text(host.WL_Text_DestinationName))
+                    .. "  AreaName=" .. tostring(widget_text(host.WL_Text_AreaName))
+                out[#out + 1] = "     CursorSnapThreshold=" .. vec2(host, "CursorSnapThreshold")
+                    .. "  CursorMoveSpeed=" .. tostring((function() local ok,v=pcall(function() return host.CursorMoveSpeed end); return ok and v end)())
+                -- DestinationIconList (TArray<FDestinationIconInfo{Icon,Slot}>) — ordered truth.
+                local n = -1; pcall(function() n = #host.DestinationIconList end)
+                out[#out + 1] = "     DestinationIconList count=" .. tostring(n)
+                if n and n > 0 and n < 200 then
+                    pcall(function()
+                        for i = 1, n do
+                            local e = host.DestinationIconList[i]
+                            local ic = e and e.Icon
+                            if valid(ic) then
+                                out[#out + 1] = string.format("       [%d] %s", i, tostring(widget_text(ic.Txt_Name) or "?"))
+                            end
+                        end
+                    end)
+                end
+                flush()
+            else
+                out[#out + 1] = "-- MAP HOST Map_World_C: not present"; flush()
+            end
+
+            -- 3) ICONS — each visible Map_World_Icon_C: class chain (confirm it derives from
+            -- AT_UIFastTravelMapDestinationIcon) + name + EVERY Image/child ObjectProperty with its
+            -- brush (the greyed-out texture is the per-icon LOCKED signal — the unlock filter).
+            out[#out + 1] = "  -- Map_World_Icon_C children (find the icon image field + greyout brush):"
+            flush()
+            local shown = 0
+            for _, ic in pairs(FindAllOf("Map_World_Icon_C") or {}) do
+                if valid(ic) and live(ic) and shown < 4 then
+                    shown = shown + 1
+                    local nm; pcall(function() nm = widget_text(ic.Txt_Name) end)
+                    out[#out + 1] = string.format("   ICON '%s'  %s", tostring(nm), chain(ic))
+                    flush()
+                    local cls; pcall(function() cls = ic:GetClass() end)
+                    local d = 0
+                    while valid(cls) and d < 6 do
+                        pcall(function()
+                            cls:ForEachProperty(function(prop)
+                                local pn, pt = "?", "?"
+                                pcall(function() pn = prop:GetFName():ToString() end)
+                                pcall(function() pt = prop:GetClass():GetFName():ToString() end)
+                                if pt == "ObjectProperty" then
+                                    local ch; pcall(function() ch = ic[pn] end)
+                                    if valid(ch) then
+                                        local cc = "?"; pcall(function() cc = ch:GetClass():GetFName():ToString() end)
+                                        local extra = ""
+                                        if cc == "Image" then extra = " brush=" .. brush_of(ch) .. " vis=" .. isvis(ch) end
+                                        out[#out + 1] = string.format("       .%s (%s)%s", pn, cc, extra)
+                                    end
+                                end
+                            end)
+                        end)
+                        local cn = "?"; pcall(function() cn = cls:GetFName():ToString() end)
+                        if cn:find("UserWidget") or cn == "Object" then break end
+                        local sup; pcall(function() sup = cls:GetSuperStruct() end)
+                        cls = valid(sup) and sup or nil; d = d + 1
+                    end
+                    flush()
+                end
+            end
+        end
+        out[#out + 1] = ""
 
         out[#out + 1] = "==== all visible on-screen text (plain) ===="
         flush()
