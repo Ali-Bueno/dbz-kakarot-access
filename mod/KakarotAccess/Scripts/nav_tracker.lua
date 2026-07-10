@@ -935,6 +935,7 @@ end
 -- NOT to carry roaming field enemies, so they're scanned directly on the sparse cadence.
 local ENEMY_NOUN_BY_SPAWN = { [1] = "cat_enemy", [2] = "cat_enemy_quest", [3] = "cat_enemy_boss" }
 local playable_cls = nil   -- AT_CharacterPlayableBase (player + companions) — excluded
+local enemy_display_name   -- forward decl: assigned below game_character_name (it needs it)
 
 local function enemy_spawn_type(c)
     local st
@@ -978,12 +979,52 @@ local function enemies_list()
                 if near then
                     -- SpawnType 1/2/3 → specific noun; roaming enemies are SpawnType 0 → generic.
                     local noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] or "cat_enemy"
-                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun }
+                    -- The game's own display name (CharacterName id -> GetCharacterName),
+                    -- so the radar says "Soldier X" instead of the generic "enemy".
+                    local name = enemy_display_name and enemy_display_name(c) or nil
+                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun, name = name }
                 end
             end
         end
     end
     return enemy_cache
+end
+
+-- Animal species: wild animals are the AT_MobAnimalBase subtree of AT_MobBase (other
+-- AT_MobBase pawns are static townsfolk — StandStaticMob_C — which must NOT be radar
+-- targets). The species lives on the pawn's NpcComponent (declared on AAT_MobBase,
+-- CXX dump): a UAnimalComponentBase whose reflected AnimalType is E_ANIMAL_TYPE
+-- (AT_enums.hpp:10648 — 1 flying dragon … 9 small dinosaur; i18n key = value).
+local animal_base_cls = nil   -- AT_MobAnimalBase (the animal subtree)
+local animal_comp_cls = nil   -- AnimalComponentBase (declares AnimalType)
+
+local function is_animal(a)
+    if animal_base_cls == nil then
+        local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_MobAnimalBase") end)
+        animal_base_cls = (ok and c) or false
+    end
+    if not animal_base_cls then return false end
+    local ok, r = pcall(function() return a:IsA(animal_base_cls) end)
+    return ok and r == true
+end
+
+-- i18n species key for an animal pawn, or nil (not an animal / species unavailable —
+-- the caller falls back to the generic "animal" noun for true animals).
+local function animal_species(a)
+    if not is_animal(a) then return nil end
+    local key
+    pcall(function()
+        local comp = a.NpcComponent
+        if not (comp and comp:IsValid()) then return end
+        if animal_comp_cls == nil then
+            local ok, c = pcall(function() return StaticFindObject("/Script/AT.AnimalComponentBase") end)
+            animal_comp_cls = (ok and c) or false
+        end
+        if not animal_comp_cls or not comp:IsA(animal_comp_cls) then return end
+        local t = tonumber(comp.AnimalType)
+        if t and t >= 1 and t <= 9 then key = "animal_type_" .. t end
+    end)
+    return key
 end
 
 -- TEMP passive probe (2026-07-06, remove once the field-enemy class is confirmed):
@@ -1074,7 +1115,7 @@ local function aim_watch(pawn, px, py, pz)
     local key = tostring(locked:GetAddress())
     if key == last_aim_key then return end
     last_aim_key = key
-    local noun = "cat_npc"
+    local label
     if mob_base_cls == nil then
         local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_MobBase") end)
         mob_base_cls = (ok and c) or false
@@ -1085,7 +1126,8 @@ local function aim_watch(pawn, px, py, pz)
         ismob = ok and v == true
     end
     if ismob then
-        noun = "cat_animal"
+        -- species when the pawn is a true animal; other mobs are townsfolk
+        label = I18n.t(animal_species(locked) or (is_animal(locked) and "cat_animal" or "cat_npc"))
     else
         if at_char_cls == nil then
             local ok, c = pcall(function() return StaticFindObject("/Script/AT.AT_Character") end)
@@ -1094,13 +1136,18 @@ local function aim_watch(pawn, px, py, pz)
         if at_char_cls then
             local ok, isat = pcall(function() return locked:IsA(at_char_cls) end)
             if ok and isat then
-                noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(locked) or 0] or "cat_npc"
+                -- the enemy's real display name when the game has one
+                label = enemy_display_name and enemy_display_name(locked) or nil
+                if not label then
+                    label = I18n.t(ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(locked) or 0] or "cat_npc")
+                end
             end
         end
+        label = label or I18n.t("cat_npc")
     end
     local x, y, z = actor_pos(locked)
     local d = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
-    Speech.say(string.format("%s %s%s", I18n.t("nav_aiming"), I18n.t(noun),
+    Speech.say(string.format("%s %s%s", I18n.t("nav_aiming"), label,
         d and (", " .. string.format(I18n.t("nav_meters"), meters(d))) or ""), true)
 end
 
@@ -1115,7 +1162,7 @@ local function enemy_alert(px, py, pz)
             if x then
                 local d2 = (x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2
                 if d2 < best_d2 then
-                    best = { actor = e.actor, x = x, y = y, z = z, noun = e.noun }
+                    best = { actor = e.actor, x = x, y = y, z = z, noun = e.noun, name = e.name }
                     best_d2 = d2
                 end
             end
@@ -1128,7 +1175,7 @@ local function enemy_alert(px, py, pz)
     if key == last_enemy_key and d > last_enemy_d * ENEMY_CLOSER_FACTOR then return end
     if ms - last_enemy_ms < ENEMY_CUE_MS then return end
     last_enemy_key, last_enemy_d, last_enemy_ms = key, d, ms
-    local parts = { I18n.t(best.noun) }
+    local parts = { best.name or I18n.t(best.noun) }
     local dx, dy, dz = best.x - px, best.y - py, best.z - pz
     local dh = math.sqrt(dx * dx + dy * dy)
     local fx, fy = camera_forward()
@@ -1860,6 +1907,30 @@ local function game_character_name(id)
     return nm
 end
 
+-- Real display name for a field ENEMY: AAT_Character declares CharacterName (reflected
+-- FString @0x9E8, CXX dump) — the character id (e.g. "Cpl059c02") — which the game's own
+-- GetCharacterName resolver turns into what a sighted player sees. Variation suffixes
+-- ("...c02") are retried without the suffix when the full id has no entry. nil = no name
+-- (callers fall back to the generic enemy noun). ONLY call on AT_Character actors:
+-- CharacterName is not declared elsewhere and reading it would be the uncatchable abort.
+enemy_display_name = function(c)
+    local raw
+    pcall(function()
+        local s = c.CharacterName
+        if type(s) == "string" then raw = s elseif s then raw = s:ToString() end
+    end)
+    if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
+    local live = game_character_name(raw)
+    if live then return live end
+    local base = raw:gsub("[cC]%d+$", "")   -- "Cpl059c02" -> "Cpl059"
+    if base ~= raw then
+        live = game_character_name(base)
+        if live then return live end
+        if CPL_NAMES[base] then return CPL_NAMES[base] end
+    end
+    return CPL_NAMES[raw]
+end
+
 -- Best spoken name for a field NPC from its UniqueId (FName). nil = fall back to the
 -- generic "character" noun (anonymous townsfolk — the game has no real name for them).
 -- IMPORTANT: read ONLY UniqueId — it's a reflected member. Do NOT touch CharacterName:
@@ -2193,24 +2264,27 @@ function Nav.list_targets()
     -- 5) field enemies: the direct SpawnType scan (enemies_list) — the minimap icon
     -- list does not carry the roaming enemies. Tight distance cap like NPCs.
     for _, e in ipairs(enemies_list()) do
-        add_target(e.actor, "enemies", e.noun, nil, "enemy")
+        add_target(e.actor, "enemies", e.noun, nil, "enemy", e.name)
     end
-    -- 5b) wild field animals (deer, wolves, the early robots…): AT_MobBase pawns — a
-    -- SEPARATE class tree from AT_Character (lineage probe 2026-07-06: A009b_BP_C <
-    -- A009_BP_C < AnimalMob_Pawn_C < AT_MobAnimalBase < AT_MobBase < NpcPawn), which is
-    -- why the SpawnType scan never saw them. Needed for the hunt quests ("catch N
-    -- deer"). Native-base FindAllOf can come up empty on this game (community-board
-    -- lesson) → also scan the blueprint animal base; add_target dedupes by address.
-    -- SAFETY: position/bHidden only — SpawnType/InteractState are NOT declared on this
-    -- tree and reading them is the uncatchable abort. Picker only, NOT the proximity
-    -- alert (passive deer everywhere would make it spam).
+    -- 5b) wild field animals (deer, wolves…): the AT_MobAnimalBase subtree of
+    -- AT_MobBase — a SEPARATE class tree from AT_Character (lineage probe 2026-07-06:
+    -- A009b_BP_C < A009_BP_C < AnimalMob_Pawn_C < AT_MobAnimalBase < AT_MobBase <
+    -- NpcPawn), which is why the SpawnType scan never saw them. Needed for the hunt
+    -- quests ("catch N deer"). is_animal FILTERS the scan: non-animal AT_MobBase pawns
+    -- are static townsfolk (StandStaticMob_C, dump_enemies 2026-07-08) and must not be
+    -- radar targets. Spoken as their species (AnimalType) when available. Native-base
+    -- FindAllOf can come up empty on this game (community-board lesson) → also scan the
+    -- blueprint animal base; add_target dedupes by address.
+    -- SAFETY: position/bHidden/NpcComponent only — SpawnType/InteractState are NOT
+    -- declared on this tree and reading them is the uncatchable abort. Picker only,
+    -- NOT the proximity alert (passive deer everywhere would make it spam).
     for _, cls in ipairs({ "AT_MobBase", "AnimalMob_Pawn_C" }) do
         for _, a in pairs(FindAllOf(cls) or {}) do
-            if Core.valid(a) then
+            if Core.valid(a) and is_animal(a) then
                 local hidden = false
                 pcall(function() hidden = a.bHidden end)
                 if not (hidden == true or hidden == 1) then
-                    add_target(a, "enemies", "cat_animal", nil, "enemy")
+                    add_target(a, "enemies", animal_species(a) or "cat_animal", nil, "enemy")
                 end
             end
         end

@@ -55,7 +55,9 @@ local Tutorial = require("screen_tutorial")
 Registry.register(Tutorial)
 Registry.register(require("screen_options"))
 -- Area map + world map (free-cursor screens; hovered/current area name readout).
-Registry.register(require("screen_map"))
+-- Kept in a local: its fast travel-selection loop is started/stopped with the app.
+local MapScreen = require("screen_map")
+Registry.register(MapScreen)
 -- Cooking precedes the shop: the cooking menu embeds a UAT_UIShopTop (WL_CookingTop),
 -- so the shop adapter could latch onto it while the cooking screen is the real context.
 -- The Shop_Top mode/action list ("Make a dish / Make a full-course meal", shop Buy/Sell):
@@ -116,6 +118,7 @@ function App.start()
     Nav.start()
     RadarMenu.start()
     Battle.start()
+    MapScreen.start()
 end
 
 function App.stop()
@@ -123,6 +126,7 @@ function App.stop()
     Nav.stop()
     RadarMenu.stop()
     Battle.stop()
+    MapScreen.stop()
 end
 
 -- F1: repeat the active screen's focus — or, with no screen owning the tick (the

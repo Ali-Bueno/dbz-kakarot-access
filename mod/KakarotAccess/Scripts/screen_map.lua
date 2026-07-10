@@ -23,6 +23,7 @@ local Input = require("input")
 local Mem = require("mem")
 local OFF = require("native_offsets")
 local Nav = require("nav_tracker")
+local Registry = require("ui_registry")
 
 local Map = {}
 
@@ -45,6 +46,28 @@ local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
 -- (reflected). We announce it (type via the radar's EMapIcon vocabulary + the game's detail
 -- text) each time the focus changes, so a blind player can hear what the cursor is over.
 local area_focus_key = nil   -- diff-gate: address of the last-announced focused icon
+
+-- World-map ICON WAKE (dump_map_state 2026-07-09): on opening the world map the game
+-- creates the Map_World_Icon_C widgets LAZILY — only once it sees a cursor move — so the
+-- icons gate in is_active stays closed and the d-pad is dead until the player nudges the
+-- stick ("tengo que mover un milímetro el stick"). The mod performs that nudge itself:
+-- the ONLY route to the world map is Triangle from the area map, and closing the area map
+-- back to gameplay always brings the minimap back — so "area map just closed AND the
+-- minimap did not return" means the world map is opening. While that window is armed and
+-- no icons exist yet, a micro left-stick pulse is injected (input_bridge inject — the
+-- self-expiring TTL guarantees release) until the icons materialize. Seeing the minimap
+-- cancels the window at once, so combat — where the minimap is also hidden — can't be
+-- reached inside an armed window (the open map pauses the world).
+local WAKE_TICKS = 20        -- window length in UI polls (~2 s at 100 ms)
+local WAKE_PULSE = 0.5       -- stick deflection of the nudge (small but above deadzone)
+local area_open = false      -- Map_M_C was on-screen last poll
+local wake_until = nil       -- tick the wake window expires at (nil = disarmed)
+local wake_pulsing = false   -- an inject pulse is live (must inject_off when done)
+
+local function wake_disarm()
+    if wake_pulsing then Input.inject_off() end
+    wake_until, wake_pulsing = nil, false
+end
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -261,10 +284,18 @@ function Map.is_active()
     -- wrongly preempt it. Map_M_C collapses to enum 1 (on_screen false) on close, so this is clean.
     local am = Core.first_on_screen("Map_M_C", tick)
     if am then
+        area_open = true
+        wake_disarm()
         state = { screen = I18n.header(21),
                   name = node_text(am.Txt_Name) or node_text(am.Txt_Area),
                   host = am }   -- the AT_UIMapM whose FocusTarget we read for POI-under-cursor
         return true
+    end
+    if area_open then
+        -- The area map JUST closed: back to gameplay (minimap returns, window cancelled
+        -- below) or forward to the world map (minimap stays hidden) — arm the icon wake.
+        area_open = false
+        wake_until = tick + WAKE_TICKS
     end
     -- FREE-ROAM CROSS-CHECK (WORLD map only): the minimap radar is hidden under the full-screen
     -- WORLD map but stays up in free-roam AND during the AREA map (handled above). The pooled
@@ -272,12 +303,24 @@ function Map.is_active()
     -- 2026-07-08: latched onScreen=true WITH the minimap up), which stuck the radar — including
     -- the load-save case. So here (area map already ruled out) minimap up => world map closed.
     if Core.first_on_screen("AT_UIMiniMapRadar", tick) then
+        wake_disarm()   -- gameplay confirmed: never nudge the stick here
         state = nil
         return false
+    end
+    -- ICON WAKE: world map opening (window armed, minimap gone) but the game hasn't
+    -- materialized the travel-point icons yet — keep the micro pulse alive until it does
+    -- (the gate right below then confirms the map and disarms).
+    if wake_until and not world_icons_on_screen() then
+        if tick >= wake_until then
+            wake_disarm()
+        elseif Core.first_on_screen("Map_World_C", tick) then
+            wake_pulsing = Input.inject(WAKE_PULSE, 0) or wake_pulsing
+        end
     end
     -- WORLD map: gated on REAL rendered travel-point icons, not the always-on host (which
     -- false-positived during combat, where the minimap is also hidden). Host = text source.
     if world_icons_on_screen() then
+        wake_disarm()   -- icons live: the wake (if any) did its job
         local wm = Core.first_on_screen("Map_World_C", tick)
         -- The hovered area (Txt_Area, else Txt_Name). Empty = the cursor sits on open
         -- terrain, spoken as "empty terrain" so LEAVING an area is heard too (what the
@@ -393,6 +436,7 @@ function Map.reset()
     ann:reset(); dests_said = false
     ft_points, ft_sel, ft_prevbtn = nil, nil, 0
     area_focus_key = nil
+    wake_disarm()
 end
 
 function Map.update()
@@ -404,8 +448,8 @@ function Map.update()
     if s.world then
         local host = ft_host()
         if not host then return end
-        -- List the reachable fast-travel points once (so a blind player knows what's there),
-        -- then run d-pad selection over the game's native index.
+        -- List the reachable fast-travel points once (so a blind player knows what's
+        -- there). The d-pad selection itself runs on the FAST loop below, not here.
         if not dests_said then
             dests_said = true
             ft_points = ft_build(host)
@@ -413,10 +457,63 @@ function Map.update()
                 Speech.say(string.format(I18n.t("map_travel_points"), #ft_points, table.concat(ft_points, ", ")), false)
             end
         end
-        ft_guidance(host)
     elseif s.host then
         area_poi(s.host)   -- read the POI under the cursor on the area map
     end
+end
+
+-- ---- fast travel-selection loop -------------------------------------------------------
+-- The d-pad runs on its own 20 ms loop (radar_menu pattern): the 100 ms UI poll missed
+-- quick taps and added up to a poll of lag per press ("map responsiveness", 2026-07-09).
+-- The loop only acts while the MAP adapter owns the screen — when the travel YesNo (or any
+-- other dialog) is on top, the registry stops polling Map.is_active, `state` goes stale,
+-- and without the ownership guard the d-pad would keep retargeting under the dialog.
+
+local TRAVEL_TICK_MS = 20
+local travel_running = false
+
+local function ft_step()
+    if Transition.active() then ft_prevbtn = 0 return end
+    local s = state
+    if not (s and s.world) or Registry.active_adapter() ~= Map then
+        ft_prevbtn = 0
+        return
+    end
+    local host = ft_host()
+    if host then ft_guidance(host) end
+end
+
+function Map.start()
+    if travel_running then return end
+    if not Input.is_loaded() then
+        print("[KakarotAccess] screen_map: input bridge not loaded, travel d-pad disabled\n")
+        return
+    end
+    travel_running = true
+    _G.__KakarotMapTravelGen = (_G.__KakarotMapTravelGen or 0) + 1
+    local myGen = _G.__KakarotMapTravelGen
+    local busy = false
+    LoopAsync(TRAVEL_TICK_MS, function()
+        if _G.__KakarotMapTravelGen ~= myGen then return true end
+        if not busy then
+            busy = true
+            ExecuteInGameThread(function()
+                -- busy cleared on ENTRY, like radar_menu: an uncatchable C++ abort in the
+                -- callback must not leave the guard stuck and the d-pad dead for the session.
+                busy = false
+                local ok, err = pcall(ft_step)
+                if not ok then
+                    print("[KakarotAccess] screen_map travel step error: " .. tostring(err) .. "\n")
+                end
+            end)
+        end
+        return false
+    end)
+end
+
+function Map.stop()
+    travel_running = false
+    _G.__KakarotMapTravelGen = (_G.__KakarotMapTravelGen or 0) + 1
 end
 
 return Map
