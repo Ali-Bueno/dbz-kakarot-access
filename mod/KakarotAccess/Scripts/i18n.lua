@@ -117,6 +117,10 @@ local S = {
         nav_companion = "compañero %d de %d",
         nav_no_companion = "Sin compañeros cerca",
         nav_quest_mode = "Objetivo de misión",
+        -- Quest objective HUD reader (quest_objective.lua).
+        objective_none = "Sin objetivo activo",
+        -- Save/Load slot reader (screen_saveload.lua).
+        saveload_empty = "ranura vacía",
         -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
@@ -293,6 +297,10 @@ local S = {
         nav_companion = "companion %d of %d",
         nav_no_companion = "No companions nearby",
         nav_quest_mode = "Quest objective",
+        -- Quest objective HUD reader (quest_objective.lua).
+        objective_none = "No active objective",
+        -- Save/Load slot reader (screen_saveload.lua).
+        saveload_empty = "empty slot",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
         radar_cat_fishing = "Fishing",

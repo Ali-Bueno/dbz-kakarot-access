@@ -57,6 +57,20 @@ return {
         pageIndex   = 0x424,     -- int32, current page (0-based)  (CONFIRMED, unused for now)
     },
 
+    -- Save / Load data-slot menu: UAT_UIStartSaveLoad. The list is a VIRTUALIZED 3-bar
+    -- window (UISaveLoadBar_List), so the widget pool-position is NOT the save's ordinal.
+    -- The real selection lives in the non-reflected tail (0x408..0x430). CONFIRMED by runtime
+    -- diffing (F4 dev tool, 2026-07-11, whole list of ~11 saves): 0x410 stepped cleanly
+    -- 0->1->2->...->10 (the ABSOLUTE selected index); 0x414 = scroll offset (top row of the
+    -- window, 0 until the cursor passes row 3, then 1..8); 0x418 = highlighted position WITHIN
+    -- the visible window (0,1,2 — saturates at 2). Verified relation: index = scroll + windowPos.
+    -- We only need selectedIndex; ordinal shown to the player = selectedIndex + 1.
+    saveLoad = {
+        selectedIndex = 0x410,   -- int32, ABSOLUTE selected save row (0-based)  (CONFIRMED)
+        scrollOffset  = 0x414,   -- int32, top row of the visible window  (CONFIRMED, cross-check)
+        windowPos     = 0x418,   -- int32, highlighted bar within the 3-bar window (0..2)  (CONFIRMED)
+    },
+
     -- Overworld Party menu: UAT_UIStartParty. The selection is the plain struct field
     -- partySelectData.cursorIndex (FStartpartyPartySelectData). From the CXX header dump the
     -- struct sits at container +0x420 and cursorIndex is its first int32 -> abs 0x420. Tried

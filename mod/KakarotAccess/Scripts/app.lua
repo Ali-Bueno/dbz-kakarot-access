@@ -16,6 +16,7 @@ local I18n = require("i18n")
 local Nav = require("nav_tracker")
 local RadarMenu = require("radar_menu")
 local Battle = require("battle_monitor")
+local QuestObjective = require("quest_objective")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
@@ -101,6 +102,8 @@ Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters
 Registry.register(require("screen_party"))                         -- Party
+-- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
+Registry.register(require("screen_saveload"))
 Registry.register(require("screen_tutorials"))                     -- System > Tutorials list
 Registry.register(require("screen_community"))                     -- Community / Soul Emblems
 Registry.register(require("screen_field"))
@@ -119,6 +122,7 @@ function App.start()
     RadarMenu.start()
     Battle.start()
     MapScreen.start()
+    QuestObjective.start()
 end
 
 function App.stop()
@@ -127,6 +131,7 @@ function App.stop()
     RadarMenu.stop()
     Battle.stop()
     MapScreen.stop()
+    QuestObjective.stop()
 end
 
 -- F1: repeat the active screen's focus — or, with no screen owning the tick (the
@@ -147,6 +152,10 @@ function App.nav_route_toggle() Nav.toggle_route() end
 function App.nav_where() Nav.where() end
 function App.nav_companion() Nav.cycle_companion() end
 function App.nav_dump() Nav.dump() end
+
+-- F10: read the current quest objective text on demand (kept here so quest_objective
+-- stays hot-reloadable; the keybind in main.lua only delegates).
+function App.read_objective() QuestObjective.read() end
 
 -- Toggle the menu reader and announce the new state in the game's language. Announced
 -- here (not in main.lua) so the i18n layer stays reloadable.

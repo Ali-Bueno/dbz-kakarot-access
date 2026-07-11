@@ -84,6 +84,11 @@ RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)
 -- F2: read the on-screen button prompts (the contextual keyhelp bar).
 RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)
 
+-- F10: read the current quest objective text ("investigate the house", "cook", …).
+-- The objective is ALSO announced automatically whenever it changes (quest_objective.lua);
+-- this key repeats the current one on demand.
+RegisterKeyBind(Key.F10, function() App.read_objective() end)
+
 -- F6: diagnostic — report whether the SetFontType section hook installed and how many times
 -- it has fired (fired=0 means the game doesn't call it via a hookable path). Dev-only.
 RegisterKeyBind(Key.F6, function()

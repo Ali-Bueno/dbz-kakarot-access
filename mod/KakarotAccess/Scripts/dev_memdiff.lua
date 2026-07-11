@@ -18,6 +18,7 @@ local CANDIDATES = {
     "Tips_C",                  -- tips book (multi-page)
     "Battle_Tips_Tutorial_C",  -- battle tips
     "Xcmn_Win01_C",            -- generic window (View Controls / conditions?)
+    "AT_UIStartSaveLoad",      -- save/load slots (native; hunting cursor idx in tail 0x408..0x430)
 }
 local FROM, LEN = 0x398, 0x180   -- 0x398 .. 0x518
 

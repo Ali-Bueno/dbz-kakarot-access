@@ -43,8 +43,11 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node)
     -- Diagnostic (palette-style): appends this screen's gate state to
     -- dumps/dump_items.txt on every change, so a mute list screen (the Items menu,
     -- 2026-07-06) is diagnosable from the file alone. Cheap: writes on change only.
-    -- OFF since 2026-07-06: Items verified reading (frozen index -> name_node path).
-    local DEBUG = false
+    -- RE-ARMED 2026-07-11: user reports the Items list is mute when the category HAS
+    -- items (only reads when empty). This logs host enum / list valid / idx / rowName /
+    -- liveName on every change to dumps/dump_items.txt, so one capture (open Items with
+    -- items present, move the cursor) pins the failing path. Turn OFF once diagnosed.
+    local DEBUG = true
     local last_dbg = nil
     local function dbg(s)
         if not DEBUG then return end
