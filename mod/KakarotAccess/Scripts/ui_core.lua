@@ -176,7 +176,9 @@ end
 -- returned widget, so stale entries are harmless. Returns the cached Lua array.
 local all_cache, all_next = {}, {}
 local REFRESH_EVERY = 100  -- ticks (~10s) between full re-scans of a class list (pools
-                           -- are ~static; raised from 30 to cut periodic lag spikes)
+                           -- are ~static; raised from 30 to cut periodic lag spikes). A quick
+                           -- close+reopen that CHURNS a screen is handled separately, without
+                           -- scanning every screen often — see Core.first_on_screen's churn force.
 
 function Core.cached_all(cls_name, tick)
     local c = all_cache[cls_name]
@@ -205,9 +207,35 @@ end)
 -- them (e.g. Start_Char_C exists as _3 and _4; only one is on_screen at a time). cached_live
 -- would lock onto one and go silent whenever the OTHER is the live one; this picks the live
 -- one each tick from the cached list (still cheap — the list is cached, not re-scanned).
+--
+-- CHURN FORCE: some screens are DESTROYED and recreated on a quick close+reopen (e.g.
+-- AT_UIStartSaveLoad). The cached list then still holds the OLD (collapsed) instance, so this
+-- keeps returning nil — for up to REFRESH_EVERY (~10s) — even though a fresh scan would find
+-- the NEW on-screen one (confirmed 2026-07-11: raw=2/onscreen=1 while this returned nil ~14s).
+-- Fix: for a class we saw on-screen RECENTLY, force its list eligible for an immediate re-scan,
+-- so the new instance is picked up within a tick or two. Bounded to recently-seen classes:
+-- a screen closed long ago never forces, so idle/closed screens don't scan every tick (that
+-- was the mistake of shortening REFRESH globally — it saturated the budget and lagged nav).
+local last_onscreen = {}
+local CHURN_WINDOW = 100    -- ticks (~10s) after a class was last on-screen during which we
+                           -- force fast re-detection of a churned reopen.
+local FORCE_INTERVAL = 1   -- retry the forced re-scan every tick — but it is BUDGET-GATED in
+                           -- cached_all (scan_allowed caps total re-scans at SCANS_PER_TICK across
+                           -- ALL classes), so this only lets a churned reopen win a scan slot ASAP;
+                           -- it never adds scans beyond the per-tick cap, so it does not lag. (A
+                           -- higher interval lost slots to contention and re-detected slowly.)
 function Core.first_on_screen(cls_name, tick)
     for _, o in ipairs(Core.cached_all(cls_name, tick)) do
-        if Core.on_screen(o) then return o end
+        if Core.on_screen(o) then
+            if tick then last_onscreen[cls_name] = tick end
+            return o
+        end
+    end
+    if tick and last_onscreen[cls_name] and (tick - last_onscreen[cls_name]) <= CHURN_WINDOW then
+        -- Recently on-screen but now missing (likely a churned reopen): pull the next re-scan in
+        -- to ~FORCE_INTERVAL ticks if it's further out — rate-limited so it never scans per-tick.
+        local nxt = all_next[cls_name]
+        if not nxt or nxt > tick + FORCE_INTERVAL then all_next[cls_name] = tick + FORCE_INTERVAL end
     end
     return nil
 end

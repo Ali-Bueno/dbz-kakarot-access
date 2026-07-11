@@ -43,9 +43,11 @@ local SETTLE_TICKS = 2
 local pend_key, pend_n = nil, 0
 
 -- Diagnostic: logs, on change, the native index/window state + focused text to
--- dumps/dump_saveload.txt. Kept armed to confirm the native-index ordinal in game and to
--- pin the "first entry from Continue doesn't read" case. Turn OFF once both are confirmed.
-local DEBUG = true
+-- dumps/dump_saveload.txt. NOTE: while true, the host-nil branch of is_active runs a full
+-- FindAllOf EVERY tick the screen is closed — a per-frame UObject scan that lags the game.
+-- Keep OFF; only flip on for a short capture. Native index + churn re-detection confirmed
+-- in game 2026-07-11.
+local DEBUG = false
 local last_dbg = nil
 local function dbg(s)
     if not DEBUG or s == last_dbg then return end
@@ -133,7 +135,21 @@ end
 function SaveLoad.is_active()
     tick = tick + 1
     host = Core.first_on_screen("AT_UIStartSaveLoad", tick)
-    if DEBUG and host == nil then dbg("host not on screen") end
+    if DEBUG and host == nil then
+        -- Distinguish the two entry-blindness causes: a FRESH FindAllOf (bypassing the
+        -- cached-list) vs how many pass on_screen. raw>0 while host nil => the cached class
+        -- list is stale-empty (cached_all refresh delay). raw>0 & onscreen=0 => the widget
+        -- exists but on_screen rejects it (open-anim collapsed ancestor / not-in-viewport).
+        local raw = FindAllOf("AT_UIStartSaveLoad") or {}
+        local nvalid, nonscr = 0, 0
+        for _, o in ipairs(raw) do
+            if o and o:IsValid() then
+                nvalid = nvalid + 1
+                if Core.on_screen(o) then nonscr = nonscr + 1 end
+            end
+        end
+        dbg(string.format("host nil: raw=%d valid=%d onscreen=%d", #raw, nvalid, nonscr))
+    end
     return host ~= nil
 end
 
