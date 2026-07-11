@@ -27,7 +27,7 @@ local Training = {}
 -- Appends a line per selection-signature change to dumps/dump_training.txt (index vs
 -- detail title vs row name) — remote ground truth if cursor moves are still silent.
 -- Turn OFF once the user confirms cursor moves are spoken.
-local DEBUG = true
+local DEBUG = false
 
 local ann = Core.make_announcer()
 local host = nil

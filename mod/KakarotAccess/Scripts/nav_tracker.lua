@@ -96,7 +96,7 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
 local GROUP_ORDER = {
-    "quests", "collectibles", "npc", "enemies", "sites", "fishing", "gathering",
+    "quests", "collectibles", "npc", "enemies", "hunt", "sites", "fishing", "gathering",
     "shops", "minigames", "dragonball", "other",
 }
 local ICON_GROUP = {
@@ -110,8 +110,9 @@ local ICON_GROUP = {
     [10] = "shops",
     -- fishing
     [5] = "fishing",
-    -- gathering (collect / hunt / ore / bugs / rocks)
-    [6] = "gathering", [7] = "gathering", [8] = "gathering", [18] = "gathering",
+    -- gathering (collect / ore / bugs / rocks). HUNT (7 = prey marker) gets its own
+    -- "hunt" category alongside the wild animals, not lumped with fruit/ore gathering.
+    [6] = "gathering", [7] = "hunt", [8] = "gathering", [18] = "gathering",
     [63] = "gathering", [68] = "gathering", [69] = "gathering",
     -- shops / stalls / eateries
     [1] = "shops", [2] = "shops", [3] = "shops", [51] = "shops", [54] = "shops",
@@ -1461,11 +1462,11 @@ local function step()
     -- AIM-ALIGNMENT cue (user request 2026-07-06, the dino hunt: "how do I know I'm
     -- aiming at it?"): field Ki blasts go where the camera points, and the game's
     -- LockonComponent stays EMPTY during field aiming (tried first) — so this is
-    -- OUR geometric reticle: while tracking an enemies-group target, the moment the
+    -- OUR geometric reticle: while tracking an enemy OR a hunt target, the moment the
     -- camera yaw centers on it (|pan| within the reticle slack) inside Ki-blast
     -- range, say "on target" (interrupting — the shot window is short); re-arms
     -- when the aim drifts off. pan/fb here are already camera-relative.
-    if target.grp == "enemies" then
+    if target.grp == "enemies" or target.grp == "hunt" then
         local on_target = fb > 0 and math.abs(pan) <= AIM_ALIGN_PAN and d3 <= AIM_RANGE
         if on_target and not was_on_target then
             Speech.say(I18n.t("nav_on_target"), true)
@@ -1475,11 +1476,11 @@ local function step()
 
     -- Stealth aid for hunted animals / field enemies (user request 2026-07-06, the
     -- deer hunt: "approach from behind so they don't see you"): while tracking a
-    -- target picked from the enemies category, speak which side of ITS facing the
+    -- target picked from the enemies OR hunt category, speak which side of ITS facing the
     -- player is on whenever that zone changes — "behind" = safe approach, "in front"
     -- = it can see you. K2_GetActorRotation is the reflected sibling of the
     -- K2_GetActorLocation call the whole tracker already relies on.
-    if target.grp == "enemies" then
+    if target.grp == "enemies" or target.grp == "hunt" then
         local rot
         pcall(function() rot = target.actor:K2_GetActorRotation() end)
         if rot then
@@ -1854,6 +1855,16 @@ local NAVI_DEBUG = false   -- light + SAFE navi main/sub diagnostic. CONFIRMED 2
                           -- switcher index 1→MAIN(24), 2→SUB(26); actorEMapIcon was always
                           -- nil (why it used to default to main). navi_quest_icon is correct.
                           -- Only safe reads (switcher index + component type); no UniqueId.
+local NPC_ID_DUMP = false  -- SAFE, TARGETED: reads ONLY UniqueId (the one member proven
+                          -- safe on the QuestCharacter classes — see npc_name) for the
+                          -- present NPCs, to dumps/dump_npc_ids.txt each time the R3 picker
+                          -- opens. For mapping real names from real ids (never guessed).
+                          -- Ids already captured 2026-07-10 (see dumps); left off.
+-- NOTE: do NOT call MessageManager GetNounParamFromName / GetNounParam / GetSpeaker with a
+-- raw id — it caused an EXCEPTION_ACCESS_VIOLATION (deref 0x70) that crashed the game
+-- (2026-07-10). Those reflected calls are the uncatchable-abort family on this build (bad
+-- param marshalling), like the LineTrace/ProjectPoint out-param calls. Character names must
+-- come from the hand-verified CPL_NAMES/NPC_NAMES maps below, not a live resolver.
 
 -- Named NPC UniqueId → spoken name. The game identifies field characters by codes:
 --   Cpl0NN = the main/party characters (Cpl001 Goku, Cpl002 Gohan, …) — recognizable.
@@ -1907,18 +1918,13 @@ local function game_character_name(id)
     return nm
 end
 
--- Real display name for a field ENEMY: AAT_Character declares CharacterName (reflected
--- FString @0x9E8, CXX dump) — the character id (e.g. "Cpl059c02") — which the game's own
--- GetCharacterName resolver turns into what a sighted player sees. Variation suffixes
--- ("...c02") are retried without the suffix when the full id has no entry. nil = no name
--- (callers fall back to the generic enemy noun). ONLY call on AT_Character actors:
--- CharacterName is not declared elsewhere and reading it would be the uncatchable abort.
-enemy_display_name = function(c)
-    local raw
-    pcall(function()
-        local s = c.CharacterName
-        if type(s) == "string" then raw = s elseif s then raw = s:ToString() end
-    end)
+-- Resolve a character id ("Cpl059c02", "Cpl013") to a display name: the game's own
+-- GetCharacterName resolver first, retried without a trailing variation suffix ("...c02")
+-- when the full id has no entry, then the hand-verified CPL_NAMES fallback. nil = the game
+-- has no name for it (the caller picks the fallback — a generic noun, never the raw code).
+-- Shared by field enemies (CharacterName) and talkable NPCs (UniqueId): both use the same
+-- "CplNNN" id scheme, so the resolution logic must not drift between the two.
+local function resolve_char_id(raw)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
     local live = game_character_name(raw)
     if live then return live end
@@ -1929,6 +1935,19 @@ enemy_display_name = function(c)
         if CPL_NAMES[base] then return CPL_NAMES[base] end
     end
     return CPL_NAMES[raw]
+end
+
+-- Real display name for a field ENEMY: AAT_Character declares CharacterName (reflected
+-- FString @0x9E8, CXX dump) — the character id (e.g. "Cpl059c02"). nil = no name (callers
+-- fall back to the generic enemy noun). ONLY call on AT_Character actors: CharacterName is
+-- not declared elsewhere and reading it would be the uncatchable abort.
+enemy_display_name = function(c)
+    local raw
+    pcall(function()
+        local s = c.CharacterName
+        if type(s) == "string" then raw = s elseif s then raw = s:ToString() end
+    end)
+    return resolve_char_id(raw)
 end
 
 -- Best spoken name for a field NPC from its UniqueId (FName). nil = fall back to the
@@ -1944,18 +1963,21 @@ local function npc_name(npc)
         if u then raw = u:ToString() end
     end)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
-    -- The game's own resolver first (authoritative); hand-verified map second.
-    local live = game_character_name(raw)
-    if live then return live end
-    if CPL_NAMES[raw] then return CPL_NAMES[raw] end
+    -- The game's own resolver (+ hand-verified map) first — authoritative names.
+    local name = resolve_char_id(raw)
+    if name then return name end
     -- descriptive story ids: word-match known characters
     local key = raw:lower():gsub("[^%a]", "")
     for tok, nm in pairs(NPC_NAMES) do
         if key:find(tok, 1, true) then return nm end
     end
-    -- anonymous "Npc0NN": no useful name → generic "character" noun (nil)
+    -- Anonymous "Npc0NN" townsfolk: no useful name → generic "character" noun (nil).
+    -- Story-character codes (Cpl013…) ARE spoken as the raw code so they stay
+    -- distinguishable until a verified CPL_NAMES/NPC_NAMES entry gives the real name
+    -- (user choice 2026-07-11: keep codes for now — the game exposes no safe resolver,
+    -- see the npc-names note). No live name lookup here: it crashes on this build.
     if raw:match("^[Nn]pc%d") then return nil end
-    -- some other descriptive id: clean it and speak it raw
+    -- some other descriptive id (or a Cpl code): clean it and speak it raw
     local cleaned = raw:gsub("^[%a]-_", ""):gsub("_", " ")
     return cleaned ~= "" and cleaned or nil
 end
@@ -2113,11 +2135,57 @@ function Nav.list_targets()
         -- can find NOTHING on this game (community-board lesson) — Yajirobe by the
         -- bonfire was a QuestCharacterBase_C the "QuestCharacter" scan never returned
         -- (dump 2026-07-06). add_target dedupes by address when both scans hit.
+        local iddump, id_seen = (NPC_ID_DUMP and {} or nil), {}
         for _, cls in ipairs({ "QuestCharacter", "QuestCharacterBase_C" }) do
             for _, npc in pairs(FindAllOf(cls) or {}) do
                 if Core.valid(npc) and npc_present(npc) then
                     add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
+                    if iddump then
+                        local addr = tostring(npc:GetAddress())
+                        if not id_seen[addr] then
+                            id_seen[addr] = true
+                            -- SAME safe read npc_name uses (UniqueId only); no other member.
+                            local raw = "?"
+                            pcall(function()
+                                local u = npc.UniqueId
+                                if u then raw = u:ToString() end
+                            end)
+                            local x, y, z = actor_pos(npc)
+                            local d = x and math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) / M or -1
+                            iddump[#iddump + 1] = string.format("  %s uid=%s d=%.0fm resolved=%s",
+                                cls, tostring(raw), d, tostring(npc_name(npc)))
+                        end
+                    end
                 end
+            end
+        end
+        if iddump and #iddump > 0 then
+            -- Resolver-FORMAT probe: GetCharacterName returned nothing for the raw uids,
+            -- so either the key needs a different format or the game has no data. Try
+            -- common key variants on known chars + nearby unknowns; ANY hit reveals the
+            -- format so every character resolves automatically (no manual map, no guessing).
+            local function probe(uid)
+                local vs = { uid, uid:upper(), uid:lower(),
+                    uid .. "c00", uid .. "c01", uid .. "c02", uid .. "C00" }
+                local hits = {}
+                for _, v in ipairs(vs) do
+                    local nm = game_character_name(v)
+                    if nm then hits[#hits + 1] = v .. "=" .. nm end
+                end
+                return #hits > 0 and table.concat(hits, " ") or "none"
+            end
+            local probes = {}
+            for _, id in ipairs({ "Cpl001", "Cpl002", "Cpl011", "Cpl003", "Cpl013", "Npc019" }) do
+                probes[#probes + 1] = "  probe " .. id .. ": " .. probe(id)
+            end
+            local src = debug.getinfo(1, "S").source:sub(2)
+            local dir = src:match("^(.*)[/\\]") or "."
+            local f = io.open(dir .. "\\dumps\\dump_npc_ids.txt", "a")
+            if f then
+                f:write(string.format("[%d] present NPCs: %d\n", os.time(), #iddump))
+                f:write(table.concat(iddump, "\n") .. "\n")
+                f:write(table.concat(probes, "\n") .. "\n")
+                f:close()
             end
         end
     end
@@ -2229,7 +2297,7 @@ function Nav.list_targets()
         local FIELD_POINT = {
             [1] = { grp = "fishing", noun = "cat_fishing" },
             [2] = { grp = "sites", noun = "cat_windroad" },
-            [3] = { grp = "gathering", noun = "cat_hunt" },
+            [3] = { grp = "hunt", noun = "cat_hunt" },
             [9] = { grp = "sites", noun = "radar_cat_sites" },
         }
         for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
@@ -2266,7 +2334,7 @@ function Nav.list_targets()
     for _, e in ipairs(enemies_list()) do
         add_target(e.actor, "enemies", e.noun, nil, "enemy", e.name)
     end
-    -- 5b) wild field animals (deer, wolves…): the AT_MobAnimalBase subtree of
+    -- 5b) wild field animals (deer, wolves, dinosaurs, dragons…): the AT_MobAnimalBase subtree of
     -- AT_MobBase — a SEPARATE class tree from AT_Character (lineage probe 2026-07-06:
     -- A009b_BP_C < A009_BP_C < AnimalMob_Pawn_C < AT_MobAnimalBase < AT_MobBase <
     -- NpcPawn), which is why the SpawnType scan never saw them. Needed for the hunt
@@ -2284,7 +2352,9 @@ function Nav.list_targets()
                 local hidden = false
                 pcall(function() hidden = a.bHidden end)
                 if not (hidden == true or hidden == 1) then
-                    add_target(a, "enemies", animal_species(a) or "cat_animal", nil, "enemy")
+                    -- Wild animals are HUNT targets (prey), not combat enemies — their own
+                    -- category so the deer/wolves/dinos/dragons don't clutter "Enemies".
+                    add_target(a, "hunt", animal_species(a) or "cat_animal", nil, "enemy")
                 end
             end
         end

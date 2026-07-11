@@ -160,7 +160,7 @@ end
 -- which signal actually flips open->closed (enum stays 0, unlike other menus). Logs
 -- every pooled Map host's signals to dumps/dump_map_state.txt on CHANGE, throttled.
 -- Open the map, move the cursor a bit, then close it, and send me the file.
-local MAP_DEBUG = true   -- RE-ARMED 2026-07-09: world map false-positived during COMBAT
+local MAP_DEBUG = false  -- OFF 2026-07-11 (no automatic dumps); re-arm only to diagnose
 local dbg_last, dbg_next = nil, 0
 local function map_debug()
     if not MAP_DEBUG or tick < dbg_next then return end
