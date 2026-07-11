@@ -71,6 +71,16 @@ return {
         windowPos     = 0x418,   -- int32, highlighted bar within the 3-bar window (0..2)  (CONFIRMED)
     },
 
+    -- Item / inventory menu: Start_Item_C -> UAT_UIItemMenu. The item list is a fixed pool and
+    -- its whole UI goes STALE on an empty category (row text, detail pane, visible-count all keep
+    -- the last item), so there is no fresh "empty" signal in reflection. This non-reflected int32
+    -- in the class gap (0x518..0x6A0) is != 0 while the current category HAS items and 0 when it's
+    -- EMPTY. CONFIRMED by F4 runtime diff (2026-07-11): a populated category -> empty "Recuperación"
+    -- flipped 0x620 from 1 to 0. Read via mem.lua; used by screen_list to announce empty categories.
+    itemMenu = {
+        hasItems = 0x620,   -- int32, != 0 = current category has items, 0 = empty  (F4-confirmed)
+    },
+
     -- Overworld Party menu: UAT_UIStartParty. The selection is the plain struct field
     -- partySelectData.cursorIndex (FStartpartyPartySelectData). From the CXX header dump the
     -- struct sits at container +0x420 and cursorIndex is its first int32 -> abs 0x420. Tried

@@ -216,26 +216,27 @@ end)
 -- so the new instance is picked up within a tick or two. Bounded to recently-seen classes:
 -- a screen closed long ago never forces, so idle/closed screens don't scan every tick (that
 -- was the mistake of shortening REFRESH globally — it saturated the budget and lagged nav).
+-- OPT-IN churn set. The force below is ONLY for classes that a screen is DESTROYED and
+-- recreated on a quick reopen (AT_UIStartSaveLoad — confirmed). Applying it to every class
+-- lagged navigation: opening/closing many submenus put lots of classes in the churn window at
+-- once, each demanding a re-scan every tick, saturating the scan budget continuously. So an
+-- adapter must opt its class in with Core.mark_churning; everything else keeps the normal path.
+local churning = {}
+function Core.mark_churning(cls_name) churning[cls_name] = true end
+
 local last_onscreen = {}
-local CHURN_WINDOW = 100    -- ticks (~10s) after a class was last on-screen during which we
-                           -- force fast re-detection of a churned reopen.
-local FORCE_INTERVAL = 1   -- retry the forced re-scan every tick — but it is BUDGET-GATED in
-                           -- cached_all (scan_allowed caps total re-scans at SCANS_PER_TICK across
-                           -- ALL classes), so this only lets a churned reopen win a scan slot ASAP;
-                           -- it never adds scans beyond the per-tick cap, so it does not lag. (A
-                           -- higher interval lost slots to contention and re-detected slowly.)
+local CHURN_WINDOW = 100   -- ticks (~10s) after a churning class was last on-screen during which
+                           -- we force fast re-detection of a churned reopen.
 function Core.first_on_screen(cls_name, tick)
     for _, o in ipairs(Core.cached_all(cls_name, tick)) do
         if Core.on_screen(o) then
-            if tick then last_onscreen[cls_name] = tick end
+            if tick and churning[cls_name] then last_onscreen[cls_name] = tick end
             return o
         end
     end
-    if tick and last_onscreen[cls_name] and (tick - last_onscreen[cls_name]) <= CHURN_WINDOW then
-        -- Recently on-screen but now missing (likely a churned reopen): pull the next re-scan in
-        -- to ~FORCE_INTERVAL ticks if it's further out — rate-limited so it never scans per-tick.
-        local nxt = all_next[cls_name]
-        if not nxt or nxt > tick + FORCE_INTERVAL then all_next[cls_name] = tick + FORCE_INTERVAL end
+    if tick and churning[cls_name] and last_onscreen[cls_name]
+       and (tick - last_onscreen[cls_name]) <= CHURN_WINDOW then
+        all_next[cls_name] = 0   -- recently on-screen but now missing: re-scan now (budget-gated)
     end
     return nil
 end

@@ -10,6 +10,8 @@
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
+local I18n = require("i18n")
+local Mem = require("mem")
 
 local M = {}
 
@@ -34,20 +36,30 @@ local M = {}
 --              moved — telemetry 2026-07-06, same disease as the cooking list): the
 --              detail pane is repopulated by the game on every cursor move, so its
 --              title IS the selection. Falls back to the indexed row when absent.
-function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node)
+-- empty_off (OPTIONAL): byte offset of a non-reflected int32 on the host that is != 0 while
+-- the current category HAS items and 0 when it's EMPTY. The item list is a fixed pool and its
+-- UI goes fully STALE on an empty category (row text, detail pane, visible count all retain the
+-- last item), so this native flag is the only fresh "empty" signal. When set + readable, an
+-- empty category is announced instead of silently keeping the stale item.
+function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node, empty_off)
     local S = {}
     local ann = Core.make_announcer()
     local host, list, tick = nil, nil, 0
     local boxes = nil   -- detail-pane text boxes by detail_nodes index (lazy collect)
 
+    -- True when empty_off is wired and the host reports the current category empty.
+    local function category_empty()
+        return empty_off ~= nil and Mem.is_loaded() and Mem.i32(host, empty_off) == 0
+    end
+    local empty_shown = false   -- gates the empty announcement to once per empty-category entry
+
     -- Diagnostic (palette-style): appends this screen's gate state to
     -- dumps/dump_items.txt on every change, so a mute list screen (the Items menu,
     -- 2026-07-06) is diagnosable from the file alone. Cheap: writes on change only.
-    -- RE-ARMED 2026-07-11: user reports the Items list is mute when the category HAS
-    -- items (only reads when empty). This logs host enum / list valid / idx / rowName /
-    -- liveName on every change to dumps/dump_items.txt, so one capture (open Items with
-    -- items present, move the cursor) pins the failing path. Turn OFF once diagnosed.
-    local DEBUG = true
+    -- Diagnosed 2026-07-11: reflected index + detail-pane name read fine for populated
+    -- categories; empty categories are told by the detail pane staying nil (nil_streak) since
+    -- the list is a fixed pool. Keep OFF; flip on only for a short capture to dump_items.txt.
+    local DEBUG = false
     local last_dbg = nil
     local function dbg(s)
         if not DEBUG then return end
@@ -114,26 +126,46 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node)
         local idx = A.list_select_index(list)
         if (detail_nodes or name_node) and not boxes then collect_boxes() end
         if DEBUG then
-            local he = "?"
-            pcall(function() he = tostring(tonumber(host:GetVisibility())) end)
             local row = idx and A.list_selected_row(list)
-            dbg(string.format("host enum=%s list=%s idx=%s rowName=%s liveName=%s",
-                he, tostring(Core.valid(list)), tostring(idx),
-                tostring(row and row.name), tostring(live_name())))
+            dbg(string.format("idx=%s empty=%s f620=%s f624=%s rowName=%s liveName=%s",
+                tostring(idx), tostring(category_empty()),
+                tostring(Mem.is_loaded() and Mem.i32(host, 0x620)),
+                tostring(Mem.is_loaded() and Mem.i32(host, 0x624)),
+                tostring(row and row.name), tostring(name_node and live_name())))
         end
-        if idx == nil and live_name() == nil then return false end
+        -- name_node screens (Items): stay active whenever the menu is up, so update() runs every
+        -- tick — it reads the selected item, or (when the native flag says so) announces the
+        -- category empty. An empty category leaves the whole list UI stale, so we can't gate on it.
+        if name_node then return true end
+        -- Plain list screens (e.g. Dragon Balls): activate only with a real selection.
+        if idx == nil then return false end
         return true
     end
 
-    function S.reset() ann:reset() boxes = nil name_box = nil end
+    function S.reset() ann:reset() boxes = nil name_box = nil empty_shown = false end
 
     function S.update()
-        local row = A.list_selected_row(list)
-        -- Live detail-pane name first (follows the cursor even when the reflected
-        -- index is frozen); the indexed row is the fallback + count source.
-        local name = live_name() or (row and row.name) or nil
-        if not name then return end
         local tab = tab_member and Core.read_text(list[tab_member]) or nil
+        -- Empty category: announce the section + "empty" (native flag; the UI itself is stale).
+        -- reset() once on entry so the announcement isn't swallowed by the category-tab change
+        -- (the announcer speaks a tab change on its own tick and drops the name that tick).
+        if category_empty() then
+            if not empty_shown then ann:reset() empty_shown = true end
+            ann:focus(name_fn(), nil, Core.phrase(tab, I18n.t("list_empty")), nil, nil)
+            return
+        end
+        empty_shown = false
+        -- On a name_node screen (Items) the DETAIL PANE is the selection; the pooled list row
+        -- carries a stale placeholder ("Ninguno") when empty, so DON'T fall back to it — an empty
+        -- category is announced via nil_streak above instead. Plain screens use the indexed row.
+        local name
+        if name_node then
+            name = live_name()
+        else
+            local row = A.list_selected_row(list)
+            name = row and row.name
+        end
+        if not name then return end
         -- screen name on entry; category tab on change; the focused item name + its
         -- number/count as it changes; the detail pane as the tooltip.
         ann:focus(name_fn(), tab, name, nil, detail_nodes and tooltip or nil)

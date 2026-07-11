@@ -18,9 +18,10 @@ local CANDIDATES = {
     "Tips_C",                  -- tips book (multi-page)
     "Battle_Tips_Tutorial_C",  -- battle tips
     "Xcmn_Win01_C",            -- generic window (View Controls / conditions?)
-    "AT_UIStartSaveLoad",      -- save/load slots (native; hunting cursor idx in tail 0x408..0x430)
+    "AT_UIStartSaveLoad",      -- save/load slots (done: 0x410 idx / 0x418 window pos)
+    "Start_Item_C",            -- items/inventory (hunting cursor idx; host UAT_UIItemMenu, size 0x6B8)
 }
-local FROM, LEN = 0x398, 0x180   -- 0x398 .. 0x518
+local FROM, LEN = 0x398, 0x320   -- 0x398 .. 0x6B8 (widened to cover UAT_UIItemMenu's whole tail)
 
 local function short(cls) return (cls:gsub("_C$", "")) end
 

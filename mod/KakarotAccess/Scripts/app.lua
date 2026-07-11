@@ -91,13 +91,18 @@ local ListScreen = require("screen_list")
 -- Item palette registration (X in the inventory) opens OVER the Items list, which
 -- stays on_screen underneath — the palette must precede it.
 Registry.register(require("screen_palette"))
+-- Item "use" character-select (A on a usable item -> pick who uses it). Same AT_UIItemMenu
+-- host as the item list, so it precedes the list reader and wins while a character card
+-- (WL_Start_Party_Bars) is animated on-screen; inactive otherwise.
+Registry.register(require("screen_itemuse"))
 -- Detail pane (blueprint-only nodes, subtree-scanned): sell price, main location,
 -- item info + description as the tooltip; Txt_Title00 (the pane's item title) is the
 -- LIVE selection name — the list's reflected index freezes at 0 on this screen.
 Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
     function() return I18n.startlist(2) end, "TxtTitle",
     { "Txt_Cap00", "Txt_Detail00", "Txt_Cap01", "Txt_Detail01",
-      "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }, "Txt_Title00"))
+      "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }, "Txt_Title00",
+    require("native_offsets").itemMenu.hasItems))   -- native "category has items" flag → announce empty
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters

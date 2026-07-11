@@ -34,6 +34,12 @@ local OFF = require("native_offsets").saveLoad
 
 local SaveLoad = {}
 
+-- This screen is DESTROYED and recreated on a quick close+reopen, which leaves the class-list
+-- cache holding the old instance (detection stalled up to ~10s). Opt into the churn-force so
+-- first_on_screen re-detects the new instance immediately (budget-gated). Only this screen opts
+-- in — applying it globally lagged menu navigation (see ui_core.Core.mark_churning).
+Core.mark_churning("AT_UIStartSaveLoad")
+
 local ann = Core.make_announcer()
 local host, tick = nil, 0
 

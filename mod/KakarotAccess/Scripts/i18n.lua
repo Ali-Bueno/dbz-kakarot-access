@@ -121,6 +121,11 @@ local S = {
         objective_none = "Sin objetivo activo",
         -- Save/Load slot reader (screen_saveload.lua).
         saveload_empty = "ranura vacía",
+        -- Item "use" character-select (screen_itemuse.lua).
+        itemuse_prompt = "Selecciona qué personaje usará el objeto",
+        itemuse_levelup = "nivel %s a %s",
+        -- Empty list category (screen_list.lua factory: Items / Dragon Balls).
+        list_empty = "vacío",
         -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
@@ -301,6 +306,11 @@ local S = {
         objective_none = "No active objective",
         -- Save/Load slot reader (screen_saveload.lua).
         saveload_empty = "empty slot",
+        -- Item "use" character-select (screen_itemuse.lua).
+        itemuse_prompt = "Select which character will use the item",
+        itemuse_levelup = "level %s to %s",
+        -- Empty list category (screen_list.lua factory: Items / Dragon Balls).
+        list_empty = "empty",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
         radar_cat_fishing = "Fishing",
