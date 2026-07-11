@@ -2,7 +2,9 @@
 
 > **What this file is:** the manual for building accessibility mods (screen reader via **PRISM** +
 > audio cues). It's a **template**: apply it game by game, section by section. The reusable
-> reverse-engineering knowledge lives in [the reference library](reference/).
+> reverse-engineering knowledge lives in [the reference library](reference/), and the general
+> engineering & accessibility ground rules that apply under this playbook live in
+> [`PRINCIPLES.md`](PRINCIPLES.md) — read those first.
 
 ## Goal
 
@@ -18,13 +20,14 @@ same mechanical and narrative experience as a sighted player, via:
 1. [Development flow](#1-development-flow)
 2. [Investigate the engine BEFORE assuming anything](#2-investigate-the-engine-before-assuming-anything)
 3. [Dependencies](#3-dependencies)
-4. [PRISM — integrating the prebuilt release (verified)](#4-prism--integrating-the-prebuilt-release-verified-do-not-re-investigate)
+4. [PRISM — integrating the prebuilt release](#4-prism--integrating-the-prebuilt-release)
 5. [Reference library and section-by-section build](#5-reference-library-and-section-by-section-build)
 6. [Code architecture and best practices](#6-code-architecture-and-best-practices)
 7. [Patches / Hooks](#7-patches--hooks)
 8. [Accessibilizing UI (menus, inventories)](#8-accessibilizing-ui-menus-inventories)
 9. [Speech, audio cues and state tracking](#9-speech-audio-cues-and-state-tracking)
 10. [Conventions, logging and publishing](#10-conventions-logging-and-publishing)
+11. [Per-mod status ledger](#11-per-mod-status-ledger)
 
 ---
 
@@ -32,6 +35,9 @@ same mechanical and narrative experience as a sighted player, via:
 
 Build **section by section**, validating with the screen reader active at every step:
 
+0. **Open the mod's `STATUS.md` first** (the per-mod ledger — see §11). On a fresh mod, create it from
+   [the status template](reference/_mod-status-template.md). It tells you what's done, what's next, and
+   the offsets/symbols already derived — so you don't rebuild that context from the code each session.
 1. Identify the engine and the modding framework (§2).
 2. Identify the game's critical screens and states.
 3. Locate the key methods/data to patch or read.
@@ -52,77 +58,55 @@ For navigation mods, the recommended order and which document to read for each s
 > modding framework of THAT specific game before writing a single line. BepInEx is just **one** of the
 > possible cases.
 
-### How to identify the engine (clues in the install folder)
+### Cold-start dispatch table
 
-- `UnityPlayer.dll`, a `*_Data/` folder, `GameAssembly.dll` → **Unity** (Mono if there's no
-  `GameAssembly.dll`; **IL2CPP** if there is one).
-- `*.pak`, an `Engine/` folder, `*-Win64-Shipping.exe` → **Unreal Engine**.
-- Engine-specific DLLs/executables (e.g. Capcom's **RE Engine**) → proprietary engine.
-- Native C/C++/VB6 executable with no managed runtime → native game.
+**Start here.** Match the clue in the game's install folder → this is your engine, framework, screen-reader
+transport, and which reference docs to open. One glance routes the whole mod; skip the docs that don't apply.
 
-### Modding framework per case
+| Clue in install folder | Engine | Framework | SR transport | Read before coding |
+|---|---|---|---|---|
+| `UnityPlayer.dll` + `*_Data/`, **no** `GameAssembly.dll` | Unity (Mono) | **BepInEx 5** (Harmony) | C# P/Invoke → PRISM, else `TolkDotNet` | [SR integration](reference/screen-reader-integration/README.md) |
+| Same **plus** `GameAssembly.dll` | Unity (IL2CPP) | **BepInEx 6** (Harmony, IL2CPP reflection) | C# P/Invoke → PRISM (correct IL2CPP interop) | [SR integration](reference/screen-reader-integration/README.md) |
+| `*.pak` + `Engine/` + `*-Win64-Shipping.exe` | Unreal | **UE4SS** / native | Lua C module `prism_bridge.dll` → `prism.dll` | [SR integration](reference/screen-reader-integration/README.md), [UE4SS docs](<reference/UE4ss study/docs/>) |
+| Capcom **RE Engine** DLLs | RE Engine | **REFramework** + native plugin / Lua (NOT BepInEx) | Native C++ plugin loads PRISM, injects `prism.*`; or C#/P-Invoke | [SR integration](reference/screen-reader-integration/README.md) |
+| **Dragon Ball Xenoverse 2** | proprietary | **XV Patcher** / game mods (NOT BepInEx) | native hook → `prism.dll` | [SR integration](reference/screen-reader-integration/README.md) |
+| Java + Kahlua Lua (Project Zomboid) | JVM | game Lua + Java agent | Lua → Java (**JNA**) → PRISM | [SR integration](reference/screen-reader-integration/README.md) |
+| Native C/C++/VB6 exe, no managed runtime | native | native plugin / custom hook (no Harmony) | native hook `LoadLibrary("prism.dll")` | [SR integration](reference/screen-reader-integration/README.md) |
+| **Decomp / native PC port** — `libultraship/` (Ship of Harkinian), `.o2r` archives, CMake, decomp-style C + C++ port layer | native (source-level) | accessibility **compiled into the exe**; a per-frame `Accessibility_Tick()` hook in the game loop; CMake build | PRISM **static-linked** (`prism.lib` compiled in) — not dynamic-load | [SR integration](reference/screen-reader-integration/README.md), [prism-prebuilt.md](reference/screen-reader-integration/prism-prebuilt.md) |
 
-| Engine / Game | Typical framework | Notes |
-|---|---|---|
-| Unity (Mono) | **BepInEx 5** | Plugin Class Library + Harmony |
-| Unity (IL2CPP) | **BepInEx 6** | Use correct IL2CPP reflection (see memories) |
-| **RE Engine** (Capcom) | **REFramework** + native plugins / Lua | NOT BepInEx |
-| **Dragon Ball Xenoverse 2** | **XV Patcher** / game-specific mods | NOT BepInEx |
-| Unreal Engine | UE4SS / native mods | Depends on the game |
-| Native game (C/C++/VB6) | Native plugin / custom hook | BepInEx and Harmony don't apply |
-
-- Choose **Harmony** only if the framework supports it (.NET/BepInEx). On native engines, use the
-  framework's own hooking system.
+- Every engine ships PRISM via [prism-prebuilt.md](reference/screen-reader-integration/prism-prebuilt.md) (§4); the adapter contract is identical everywhere. Injected/plugin hosts dynamic-load `prism.dll`; source-level ports (decomp / libultraship) can **static-link** `prism.lib` instead.
+- Choose **Harmony** only if the framework supports it (.NET/BepInEx). On native engines, use the framework's own hooking system.
+- **Navigation mods:** pick the style(s) via the [audio-navigation decision guide](reference/audio-navigation/README.md) (§5).
 - If after investigating the framework is still unclear, **ask the user** before assuming.
 
 ---
 
 ## 3. Dependencies
 
-These depend on the engine/framework detected in §2. Indicative:
+Per the engine/framework detected in the §2 dispatch table:
 
-- **Modding framework** per engine: BepInEx 5/6, REFramework, XV Patcher, UE4SS, or a native hook.
-- **Harmony** — only on .NET/BepInEx projects. On other frameworks, their native hooking mechanism.
-- **PRISM** (https://github.com/ethindp/prism) — a **cross-platform C++23** library unifying NVDA/JAWS
-  (Windows), VoiceOver (macOS/iOS), Orca/Speech-dispatcher (Linux), native TTS (Android) and WebSpeech
-  (Web). The **default** choice whenever the host is native or allows C++.
-  - **Tolk fallback**: only on legacy .NET/BepInEx projects where integrating C++ isn't practical, via
-    `TolkDotNet` (namespace `DavyKager`). `Tolk.dll` + `nvdaControllerClient64.dll` go in the game's
-    root folder; only `TolkDotNet.dll` ships with the mod in plugins.
+- **Modding framework + Harmony**: per the dispatch table (Harmony only on .NET/BepInEx; native engines
+  use their own hooking mechanism).
+- **PRISM** (https://github.com/ethindp/prism) — the **default** screen-reader library on every target;
+  consume the prebuilt release per §4. **Tolk** is the fallback only on legacy .NET/BepInEx projects
+  (`TolkDotNet`, namespace `DavyKager`). The library choice, placement and transport per engine are in
+  the dispatch table and [the SR integration index](reference/screen-reader-integration/README.md) — not
+  repeated here.
 
 ---
 
-## 4. PRISM — integrating the prebuilt RELEASE (verified, DO NOT re-investigate)
+## 4. PRISM — integrating the prebuilt RELEASE
 
-> Checked against **PRISM v0.16.7** by downloading the asset and reading the binary/headers.
-> **No need to compile the PRISM repo or use CMake/vcpkg** to consume it: the release is enough.
+> The full **verified** consumption reference (release layout, undecorated x64 exports + dynamic-load
+> path, runtime deps / no VC++ redist, the minimal `prism_init → … → prism_shutdown` sequence, what to
+> ship) lives in **[reference/screen-reader-integration/prism-prebuilt.md](reference/screen-reader-integration/prism-prebuilt.md)**.
+> Read it once per mod when wiring PRISM; no need to re-investigate or compile the PRISM repo.
+> For *how the call physically reaches PRISM on each engine* (the transport), see
+> [the screen-reader integration index](reference/screen-reader-integration/README.md).
 
-- **Per-platform releases** on GitHub (`ethindp/prism`, assets of the latest release). For Windows:
-  **`prism-windows-x64.zip`** and `prism-windows-arm64.zip`. **There is no x86 (32-bit) build** → if the
-  game/host is 32-bit, the PRISM prebuilt is NOT usable (you'd have to compile). Most modern x64 games →
-  use `x64`.
-- **Stable C API**: `include/prism.h` is wrapped in `extern "C"`, pure C types (`char*`, `float`,
-  `size_t`, opaque pointers `PrismContext*`/`PrismBackend*`), `__cdecl` convention, `PRISM_API` macro
-  (`__declspec(dllimport/dllexport)`). **No C++ type crosses the boundary** → a DLL built with **MinGW or
-  MSVC** can consume `prism.dll` (which is built with MSVC) **with no ABI problems**.
-- On **x64 the exports are NOT decorated** (`prism_init`, `prism_backend_speak`, …) → the most robust
-  path is **dynamic loading**: `LoadLibrary("prism.dll")` + `GetProcAddress` by name. Zero link config,
-  zero import lib, and you control when it loads (key if it's an injected DLL: load outside `DllMain`).
-- **Windows zip contents**: `include/prism.h`; `dynamic/release/bin/prism.dll` (~1.1 MB, **the one you
-  distribute**) + `tolk.dll` (~525 KB, NVDA/JAWS fallback backend); `dynamic/release/lib/prism.lib`
-  (MSVC import lib, optional); a CMake package (target **`prism::prism`**). It also includes `static/`
-  with a ~79 MB `prism.lib` → **it's MSVC C++: NOT linkable from MinGW** (MSVC only, yields a single
-  self-contained DLL).
-- **`prism.dll` runtime dependencies**: only system DLLs + UCRT (`KERNEL32`, `USER32`, `ole32`,
-  `OLEAUT32`, `RPCRT4`, `UIAutomationCore`, `api-ms-win-core-*`). **Does NOT depend on
-  `vcruntime140`/`msvcp140`** → **no VC++ Redistributable required**. Asian-reader backends
-  (`PCTKUSR.dll`, `ZDSRAPI_x64.dll`, Orca/SpeechDispatcher bridges) load **on demand**; for NVDA/JAWS/SAPI
-  **you don't have to distribute them**.
-- **Minimal sequence**: `prism_config_init` → `prism_init(&cfg)` → `prism_registry_acquire_best(ctx)` →
-  `prism_backend_initialize(be)` → `prism_backend_speak(be, txt, interrupt)` → … → `prism_backend_free` +
-  `prism_shutdown`. Use `interrupt=true` when switching context; log the chosen backend with
-  `prism_registry_name`. Others: `prism_backend_braille`, `prism_backend_is_speaking`, `set_rate/volume/pitch`.
-- **Deploy**: copy `prism.dll` (+ `tolk.dll`) next to the mod DLL. That's all.
+- **In one line:** download `prism-windows-x64.zip`, `LoadLibrary("prism.dll")` + `GetProcAddress` by
+  name (x64 exports are undecorated), ship `prism.dll` (+ `tolk.dll`) next to the mod. No x86 build
+  exists. Everything else is in the doc above.
 
 ---
 
@@ -272,3 +256,20 @@ in that folder.
   accessibilized, and the requirements (framework if applicable, PRISM, system screen reader).
 - Avoid committing unnecessary binaries. **Don't create releases automatically**: only when the user
   explicitly asks.
+
+---
+
+## 11. Per-mod status ledger
+
+Each mod keeps a short **`STATUS.md`** at its repo root — a dashboard of where the mod is, so resuming it
+is instant instead of re-derived from the code/git every session (the biggest context/time saver
+day-to-day). Copy it from [the status template](reference/_mod-status-template.md).
+
+- **Open it first** when starting a session on a mod (§1, step 0); **update it** (the *Next step* line and
+  the section table) whenever you finish a chunk.
+- It records: identity (engine/framework/transport/build/install, from the §2 dispatch table), a
+  **section-status table** (features `done`/`wip`/`todo`), **derived facts** (offsets, symbols, type names
+  already recovered — *with their source*, so they're never re-RE'd), the single **next step**, and known
+  issues.
+- Keep it **short** — a dashboard, not documentation. The *how* lives in `reference/`; `STATUS.md` only
+  tracks *where this mod is*. Derive every value from real game data (no guessed offsets — PRINCIPLES §4).
