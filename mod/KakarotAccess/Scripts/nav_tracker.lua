@@ -707,12 +707,22 @@ local function bearing_clear(pawn, px, py, pz, nx, ny, dist, api)
     return Ray.clear(pawn, px, py, sz, px + nx * dist, py + ny * dist, sz)
 end
 
+-- Raycast obstacle avoidance is DISABLED on this game. Both LineTrace overloads are
+-- broken through reflection here: the calls raise a UFunction param-count error
+-- (expected 13, received 11) that the pcall CATCHES — so the abort fuse below never
+-- trips, steer_around retried every tick, and the repeated UE4SS error path ended in a
+-- fatal EXCEPTION_ACCESS_VIOLATION (2026-07-13, in-game crash). ForObjects had already
+-- aborted uncatchably on Area02/Area04 (2026-07-06). Guidance goes direct-to-target;
+-- only re-enable if a reflected trace is someday proven safe on this game.
+local RAYCAST_AVOIDANCE = false
+
 -- Which trace overload is still usable here? ForObjects first (validated where it
 -- works), else the channel overload: ForObjects aborts uncatchably on some maps
 -- (Area02 + Area04, 2026-07-06 — TArray marshalling suspected) where the simpler
 -- LineTraceSingle may survive. EACH overload has its own abort fuse, so fusing one
 -- falls through to the other instead of killing avoidance outright.
 local function ray_api()
+    if not RAYCAST_AVOIDANCE then return nil end
     if _G.__KakarotRayNative ~= "bad" then return "__KakarotRayNative", "objects" end
     if _G.__KakarotRayChan ~= "bad" then return "__KakarotRayChan", "channel" end
     return nil

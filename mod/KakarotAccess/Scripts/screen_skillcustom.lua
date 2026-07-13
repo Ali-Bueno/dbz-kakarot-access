@@ -27,10 +27,13 @@ local Skill = {}
 
 local ann = Core.make_announcer()
 local host, tick = nil, 0
-local last_slot = nil
+local last_slot, last_idx = nil, nil
 local last_group, cross_slot = nil, nil
+local assign_mode, last_mode = false, nil
+local SETTLE_TICKS = 3            -- entry debounce: slot must repeat this many polls
+local settle_slot, settle_n = nil, 0
 
--- Diagnostic: log slot/border/plate state per cursor move to dumps/dump_skill.txt.
+-- Diagnostic: log slot/border/plate/mode state per cursor move to dumps/dump_skill.txt.
 local DEBUG = false
 local last_dbg = nil
 local function dbg(s)
@@ -115,18 +118,95 @@ local function is_dashes(s)
     return s == nil or s == "" or s:match("^[%-–—%s]+$") ~= nil
 end
 
+local host_seen = false
 function Skill.is_active()
     tick = tick + 1
     host = Core.first_on_screen("Start_Skillcustom_C", tick)
-    return host ~= nil
+    if DEBUG and (host ~= nil) ~= host_seen then
+        dbg(host ~= nil and "HOST on" or "HOST off")
+    end
+    host_seen = host ~= nil
+    return host_seen
 end
 
-function Skill.reset() ann:reset() last_slot = nil last_group = nil cross_slot = nil end
+function Skill.reset()
+    if DEBUG then dbg("RESET") end
+    ann:reset()
+    last_slot, last_idx, last_group, cross_slot = nil, nil, nil, nil
+    assign_mode, last_mode = false, nil
+    settle_slot, settle_n = nil, 0
+end
+
+-- Level + Ki cost from the detail pane, ONLY while the pane names `base` (it lags the
+-- cursor and goes stale on empty slots — never let it mix another skill's data in).
+local function pane_value(pane, base)
+    if pane ~= base then return nil end
+    local lvl = field("SkillLevelTxt")
+    local ki = field("SkillSpTxt")
+    local v = Core.phrase(
+        lvl and I18n.t("skill_level"):format(lvl) or nil,
+        ki and I18n.t("skill_ki"):format(ki) or nil)
+    return v ~= "" and v or nil
+end
+
+-- Lazy tooltip (the announcer retries it briefly): the description, same pane gate.
+local function pane_tip(base)
+    return function()
+        if A.markup_to_speech(field("SkillNameTxt")) ~= base then return nil end
+        local desc = field("SkillDetailTxt")
+        return desc and A.markup_to_speech(desc) or nil
+    end
+end
 
 function Skill.update()
     local pane = A.markup_to_speech(field("SkillNameTxt"))
+
+    local list
+    pcall(function() list = host.SkillListMenu end)
+    local idx = A.list_select_index(list)
     local all = plates()
     local sel, slot, border_count = selected_plate(all)
+
+    -- MODE. Pressing A on a slot moves the focus into the acquired-skill list
+    -- (SkillListMenu) to pick the attack. There is NO static signal for which side has
+    -- the focus (dump 2026-07-13): the list is a permanent panel, its AllCurs highlight
+    -- renders in both modes, and the slot plate keeps its border while assigning. What
+    -- discriminates is which cursor MOVES: the plate border sweeps in slot mode with
+    -- GetSelectValue frozen, and GetSelectValue comes ALIVE in assign mode with the
+    -- plate frozen. So the mode follows whichever cursor moved last.
+    local slot_moved = slot ~= nil and last_slot ~= nil and slot ~= last_slot
+    local idx_moved = idx ~= nil and last_idx ~= nil and idx ~= last_idx
+    if slot ~= nil then last_slot = slot end
+    if idx ~= nil then last_idx = idx end
+    if slot_moved then assign_mode = false end
+    if idx_moved then assign_mode = true end
+    if last_mode ~= nil and assign_mode ~= last_mode then
+        -- Full context switch: re-open the announcer so entering speaks the "choose
+        -- skill" prompt and returning re-orients with character/category/slot.
+        ann:reset()
+        last_group, cross_slot = nil, nil
+    end
+    last_mode = assign_mode
+
+    if assign_mode then
+        local row = A.list_selected_row(list)
+        local rowname = row and row.name and A.markup_to_speech(row.name) or nil
+
+        if DEBUG then
+            dbg(string.format("ASSIGN o=%d idx=%s row=%s pane=%s slot=%s bc=%d",
+                ann.open and 1 or 0, tostring(idx), tostring(row and row.name),
+                tostring(pane), tostring(slot), border_count))
+        end
+
+        -- The row is cursor-synchronous (indexed by the live GetSelectValue); the pane
+        -- lags a beat behind it, so it only supplies the gated level/Ki/description.
+        local base = rowname or pane
+        if base == nil or is_dashes(base) then return end
+        -- Two rows may carry the same skill name — force the re-announce on index move.
+        if idx_moved then ann:invalidate() end
+        ann:focus(I18n.t("skill_assign"), nil, base, pane_value(pane, base), pane_tip(base))
+        return
+    end
 
     local raw, btn
     if sel then
@@ -154,8 +234,9 @@ function Skill.update()
                 node_visible(e.p, "BaseBlinkImage") and 1 or 0,
                 tostring(plate_button(e.p)))
         end
-        dbg(string.format("slot=%s bc=%d pane=%s | %s",
-            tostring(slot), border_count, tostring(pane), table.concat(ps, " ")))
+        dbg(string.format("SLOT o=%d slot=%s bc=%d idx=%s pane=%s | %s",
+            ann.open and 1 or 0, tostring(slot), border_count, tostring(idx),
+            tostring(pane), table.concat(ps, " ")))
     end
 
     -- Nothing readable this tick (screen mid-build, or a selected plate whose text hasn't
@@ -164,8 +245,7 @@ function Skill.update()
     if raw == nil then return end
 
     -- Same spoken text on a different slot (e.g. two empty slots) must still re-announce.
-    if slot ~= nil and last_slot ~= nil and slot ~= last_slot then ann:invalidate() end
-    if slot ~= nil then last_slot = slot end
+    if slot_moved then ann:invalidate() end
 
     local category = field("CategoryTitleTxt")
     local screen = Core.phrase(field("CharNameTxt"), category)
@@ -177,9 +257,24 @@ function Skill.update()
     -- the crossing row (the announcer diff-gates on the spoken name, so a one-tick prefix
     -- would immediately re-announce the row without it), hence it sticks until the cursor
     -- leaves that row.
+    -- ENTRY SETTLE: for the FIRST announcement after a reset, the plate border (and the
+    -- whole pooled widget) can still hold a STALE previous state during the opening
+    -- animation — the speech capture 2026-07-13 shows an entry announcing a leftover
+    -- slot, then the border landing on the real one ~0.6 s later, whose re-announce CUT
+    -- the entry phrase (perceived as "menus don't announce on entry"). Hold the first
+    -- announcement until the slot read repeats SETTLE_TICKS consecutive polls.
+    if not ann.open then
+        if slot ~= nil and slot == settle_slot then settle_n = settle_n + 1
+        else settle_slot, settle_n = slot, 1 end
+        if settle_n < SETTLE_TICKS then return end
+    end
+
     local gpfx = nil
     if sel and slot ~= nil then
         local group = field(btn and "Active1stGroupTitleText" or "Active2ndGroupTitleText")
+        -- The group title can EQUAL the category tab text (speech capture 2026-07-13:
+        -- "Súper Ataque, Súper Ataque") — skip the prefix when it adds nothing.
+        if group == category then group = nil end
         if group and group ~= "" then
             if group ~= last_group then
                 last_group = group
@@ -198,26 +293,7 @@ function Skill.update()
         return
     end
 
-    -- Detail-pane data is attached only while the pane shows THIS skill.
-    local value = nil
-    if pane == base then
-        local lvl = field("SkillLevelTxt")
-        local ki = field("SkillSpTxt")
-        value = Core.phrase(
-            lvl and I18n.t("skill_level"):format(lvl) or nil,
-            ki and I18n.t("skill_ki"):format(ki) or nil)
-        if value == "" then value = nil end
-    end
-
-    -- Lazy tooltip: the announcer retries it for a short window, so a description that
-    -- arrives after the pane catches up is still spoken (queued, no interrupt).
-    local tip = function()
-        if A.markup_to_speech(field("SkillNameTxt")) ~= base then return nil end
-        local desc = field("SkillDetailTxt")
-        return desc and A.markup_to_speech(desc) or nil
-    end
-
-    ann:focus(screen, category, Core.phrase(gpfx, btn, base), value, tip)
+    ann:focus(screen, category, Core.phrase(gpfx, btn, base), pane_value(pane, base), pane_tip(base))
 end
 
 return Skill

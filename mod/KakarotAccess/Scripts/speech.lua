@@ -28,9 +28,27 @@ function Speech.is_loaded()
     return loaded
 end
 
+-- Diagnostic: log EVERY utterance (with the interrupt flag) to dumps/dump_speech.txt,
+-- to see what reaches PRISM and what may be stomping what. Costs one synchronous file
+-- write per utterance on the game thread — keep OFF outside a diagnosis session.
+local DEBUG_LOG = false
+local function log_say(text, interrupt)
+    pcall(function()
+        local src = debug.getinfo(1, "S").source:sub(2)
+        local dir = src:match("^(.*)[/\\]") or "."
+        local f = io.open(dir .. "\\dumps\\dump_speech.txt", "a")
+        if f then
+            f:write(string.format("[%d|%.2f] %s%s\n", os.time(), os.clock(),
+                interrupt and "!" or " ", text))
+            f:close()
+        end
+    end)
+end
+
 -- Speak text. interrupt=true (default) cuts off current speech (use on context changes).
 function Speech.say(text, interrupt)
     if not loaded or not text or text == "" then return end
+    if DEBUG_LOG then log_say(tostring(text), interrupt ~= false) end
     prism.say(tostring(text), interrupt ~= false)
 end
 

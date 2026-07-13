@@ -130,6 +130,7 @@ local S = {
         skill_level = "nivel %s",
         skill_ki = "Ki necesario %s",
         skill_empty = "ranura vacía",
+        skill_assign = "elegir habilidad",
         -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
@@ -319,6 +320,7 @@ local S = {
         skill_level = "level %s",
         skill_ki = "Ki required %s",
         skill_empty = "empty slot",
+        skill_assign = "choose skill",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
         radar_cat_fishing = "Fishing",

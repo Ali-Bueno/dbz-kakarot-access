@@ -52,14 +52,35 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
-**Skill Palette VERIFIED & committed; group-crossing announcement pending verify.** The reader works
-(user-confirmed 2026-07-13, DEBUG off) — see the section table for the derived facts. The 6 visible rows
-span TWO groups (4 main slots + 2 in the second group, plates 5–6), which read seamlessly and confuse:
-NEXT = announce the group title (`Active1stGroupTitleText` / `Active2ndGroupTitleText`, picked by
-whether the selected plate has a button glyph) when the cursor crosses groups — implemented, needs an
-in-game listen. Minor open question: plates 4/7 (structural, always-on border+blink) — if the cursor can
-ever land on them they'd read via the stale-pane fallback (re-arm DEBUG if the user reports a bad row).
-"Acquired skills" assign list (after pressing A on a slot) is a later nicety.
+**Skill Palette committed (0b6e623, slots + groups verified); ASSIGN submenu v2 + CRASH FIX pending
+verify (uncommitted).** 2026-07-13 in-game CRASH root-caused from UE4SS.log: NOT the skill reader —
+`nav_tracker` steer_around → `raycast.lua` LineTrace calls raise a UFunction param-count Lua error
+(expected 13, received 11) that pcall CATCHES, so the abort fuse never trips and the call retried every
+tick until UE4SS died with a fatal ACCESS_VIOLATION. Fix: `RAYCAST_AVOIDANCE = false` in nav_tracker
+(ray_api() returns nil; guidance goes direct) — raycast was already sentenced dead on this game
+(uncatchable aborts Area02/04). LESSON: a pcall-CAUGHT reflected-call error retried per-tick can still
+crash the game; fuse on Lua errors too if raycast is ever revisited.
+ASSIGN mode v4 (movement state machine). Dump-proven (3rd capture, 2026-07-13): there is NO static focus
+signal — the list is a permanent panel, `AllCurs` renders in BOTH modes (v3 dead: everything read as
+assign again), the slot plate keeps its border while assigning. What discriminates is which cursor
+MOVES: slot browsing sweeps the plate border with `GetSelectValue` frozen; in assign mode
+**GetSelectValue comes ALIVE** (idx 0→1→2 with the plate frozen — earlier "dead list" captures were all
+slot-mode) and the list ROW is cursor-synchronous while the PANE lags (row=Martillo/pane=Masenko line).
+v4: mode = whichever cursor moved last (slot_moved → slots, idx_moved → assign); assign name = list row
+(pane only for gated level/Ki/desc); `ann:reset()` on mode flip. Known cosmetic limit: pressing A/B
+itself is silent until the first cursor move (no signal exists for the press itself).
+"No entry announcement" ROOT-CAUSED via a speech-sink tap (`speech.lua` DEBUG_LOG, now off): entry
+announcements WERE sent but got CUT 0.6–0.8 s later — partly the user's fast first move, partly OUR
+re-announce when the pooled plate border settles onto the real slot after the opening animation (one
+entry spoke a stale leftover slot). Fixed: entry SETTLE_TICKS=3 debounce (~300 ms; drop to 2 if entry
+feels slow) + group title suppressed when equal to the category text ("Súper Ataque, Súper Ataque").
+Entry VERIFIED reading 2026-07-13. Both debug taps OFF; everything committed.
+
+**NEW OPEN ISSUE — general announcement latency**: user reports navigation announcements across ALL
+screens are sometimes slow/variable. Candidates: the (now removed) debug taps' per-utterance disk
+writes; POLL_MS=100 baseline; FindAllOf scan-budget backoffs delaying reads. NEXT: user re-tests with
+taps off; if it persists, read the built-in step telemetry (`__KakarotStepStats` max/avg via the
+Ctrl+F5 nav dump) after a laggy session and profile from data. Minor open question: plates 4/7.
 F10 quest read: no Lua errors, bind present in main.lua — most likely the game wasn't fully restarted
 (Ctrl+Shift+R doesn't re-run main.lua); reactive reader only speaks on objective CHANGE, so a pre-existing
 objective staying on screen is expected silence. Re-test F10 after a full game restart.
