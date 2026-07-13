@@ -126,6 +126,10 @@ local S = {
         itemuse_levelup = "nivel %s a %s",
         -- Empty list category (screen_list.lua factory: Items / Dragon Balls).
         list_empty = "vacío",
+        -- Skill palette / Super Attack equip (screen_skillcustom.lua).
+        skill_level = "nivel %s",
+        skill_ki = "Ki necesario %s",
+        skill_empty = "ranura vacía",
         -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
@@ -311,6 +315,10 @@ local S = {
         itemuse_levelup = "level %s to %s",
         -- Empty list category (screen_list.lua factory: Items / Dragon Balls).
         list_empty = "empty",
+        -- Skill palette / Super Attack equip (screen_skillcustom.lua).
+        skill_level = "level %s",
+        skill_ki = "Ki required %s",
+        skill_empty = "empty slot",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
         radar_cat_fishing = "Fishing",

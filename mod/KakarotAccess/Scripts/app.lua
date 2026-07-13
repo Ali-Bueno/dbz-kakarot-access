@@ -106,6 +106,8 @@ Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
 Registry.register(require("screen_characters"))                    -- Characters
+-- Skill Palette / Super Attack equip (opened from a character): slot plates + detail pane.
+Registry.register(require("screen_skillcustom"))
 Registry.register(require("screen_party"))                         -- Party
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"))

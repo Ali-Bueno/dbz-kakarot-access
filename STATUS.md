@@ -28,6 +28,7 @@
 | Items inventory + Party + Characters | done | Party/Characters done. Items list reads populated categories (via `Txt_Title00` detail-pane live name; reflected index tracks). EMPTY categories: the whole item UI goes STALE (row/detail/visible-count keep the last item), so emptiness is read from the native flag `itemMenu.hasItems = 0x620` (F4-confirmed; 0 = empty) and announced ("vacío") via `screen_list.lua` factory `empty_off` param. Verified in-game 2026-07-11 |
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads the on-screen `AT_UIItemMenu.WL_Start_Party_Bars` bar (the selected char; only it animates in): `Txt_Name01` + `Txt_Lv01→Txt_Lv02` level-up preview, with the "choose character" prompt. Registered before the item list reader. Verified in-game 2026-07-11 |
 | Save / Load data slots | done | `screen_saveload.lua` — `AT_UIStartSaveLoad`. VIRTUALIZED 3-bar window (`UISaveLoadBar_List`), so pool-position ≠ ordinal. Ordinal from native index `saveLoad.selectedIndex = 0x410` (+1), cursor bar = `windowPos = 0x418` (F4-confirmed over ~11 saves); reads FILLED and EMPTY slots (Canvas_None checked first); SETTLE_TICKS debounce drops mid-scroll frames. Slow re-entry (widget destroyed+recreated → stale class-list cache) FIXED by `ui_core.first_on_screen` churn-force (re-scan a recently-on-screen class immediately, budget-gated). Verified in-game 2026-07-11 (reads all slots, correct index, fast entry, no lag). DEBUG off |
+| Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
 | Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
 | Fishing minigame | done | `screen_fishing.lua`; verified end-to-end (user landed a fish) |
@@ -51,13 +52,20 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
-Verify the 2026-07-11 menu batch: **Save/Load** (`screen_saveload.lua`) and **Quest objective HUD**
-(`quest_objective.lua`) — both load via Ctrl+Shift+R except the **F10** objective key (needs a game
-RESTART, it's a new keybind in `main.lua`). Then, for the **Items** list: open it with items present,
-move the cursor, and send `Scripts/dumps/dump_items.txt` (diagnostic re-armed) so the mute-when-populated
-path can be pinned. And confirm what the **item submenu** (press confirm on a usable item) shows, so the
-`WL_Start_Party_Bars` char-select reader can be built. Still pending from before: the "Caza"/Hunt radar
-category verify, the R2 picker hook log, and the radar 2.0 batch.
+**Skill Palette VERIFIED & committed; group-crossing announcement pending verify.** The reader works
+(user-confirmed 2026-07-13, DEBUG off) — see the section table for the derived facts. The 6 visible rows
+span TWO groups (4 main slots + 2 in the second group, plates 5–6), which read seamlessly and confuse:
+NEXT = announce the group title (`Active1stGroupTitleText` / `Active2ndGroupTitleText`, picked by
+whether the selected plate has a button glyph) when the cursor crosses groups — implemented, needs an
+in-game listen. Minor open question: plates 4/7 (structural, always-on border+blink) — if the cursor can
+ever land on them they'd read via the stale-pane fallback (re-arm DEBUG if the user reports a bad row).
+"Acquired skills" assign list (after pressing A on a slot) is a later nicety.
+F10 quest read: no Lua errors, bind present in main.lua — most likely the game wasn't fully restarted
+(Ctrl+Shift+R doesn't re-run main.lua); reactive reader only speaks on objective CHANGE, so a pre-existing
+objective staying on screen is expected silence. Re-test F10 after a full game restart.
+
+Also still pending: verify **Quest objective HUD** (`quest_objective.lua`; F10 needs a game RESTART).
+And older backlog: "Caza"/Hunt radar category verify, R2 picker hook log, radar 2.0 batch.
 
 ## Known issues / open questions
 - Cooking menu cursor read pending re-verify — confirm `dumps/dump_cooking.txt` shows the frozen-index diagnosis, then set `DEBUG=false`.
