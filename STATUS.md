@@ -76,11 +76,27 @@ entry spoke a stale leftover slot). Fixed: entry SETTLE_TICKS=3 debounce (~300 m
 feels slow) + group title suppressed when equal to the category text ("Súper Ataque, Súper Ataque").
 Entry VERIFIED reading 2026-07-13. Both debug taps OFF; everything committed.
 
-**NEW OPEN ISSUE — general announcement latency**: user reports navigation announcements across ALL
-screens are sometimes slow/variable. Candidates: the (now removed) debug taps' per-utterance disk
-writes; POLL_MS=100 baseline; FindAllOf scan-budget backoffs delaying reads. NEXT: user re-tests with
-taps off; if it persists, read the built-in step telemetry (`__KakarotStepStats` max/avg via the
-Ctrl+F5 nav dump) after a laggy session and profile from data. Minor open question: plates 4/7.
+**Menu latency — REDESIGNED to event-driven detection (2026-07-13, uncommitted, PENDING verify).**
+History: sub-screen entries paid detection (scan budget) + `CONFIRM_TICKS=2` + settle (400 ms–1 s;
+items had a latent ~10 s stale-cache case). First fix round (confirm_ticks=1 on deliberate sub-screens,
+saveload SETTLE 2→1, churn-mark on Start_Item_C) cut entry cost but the churn-mark REGRESSED navigation
+(per-tick re-scans saturating the budget — the known churn hazard). v2 (the better architecture, per
+our own UE4SS reference §2): **`NotifyOnNewObject("/Script/UMG.UserWidget")` feeds the ui_core caches**
+— constructed widgets are stashed by an ONCE-armed notify (survives Ctrl+Shift+R; handler via `_G`,
+transition.lua pattern) and drained into `all_cache`/backoff-clear each poll tick (newest first), so a
+(re)created screen is detectable within ~1 tick with ZERO extra scans. Both `mark_churning` call sites
+REMOVED (mechanism kept as documented fallback); `REFRESH_EVERY` 100→300 (periodic re-scan now only a
+safety net); pending feed wiped on transition (freed-object probes abort). confirm_ticks=1 + SETTLE=1
+kept. **v2.1 (2026-07-14)**: first round verified skill palette fast but Save/Load + items still slow —
+two feed holes, both fixed: (1) exact-name matching missed caches keyed by NATIVE BASE names
+(`AT_UIStartSaveLoad` — a constructed instance reports its blueprint class), now the drain feeds every
+tracked key along the CLASS CHAIN (`GetSuperStruct` walk, depth-capped 12); (2) the notify base was
+`/Script/UMG.UserWidget`, which never delivers the non-UserWidget `CFUIMultiLineTextBox` pool behind
+detail panes (items' text boxes invisible until the 30 s refresh) — now `/Script/UMG.Widget`
+(guard flag `__KakarotWidgetNotifyArmedV2`; a stale narrow notify after hot reload double-delivers,
+harmless). NEXT: user verifies with a FULL RESTART: (a) nav lag gone, (b) Save/Load + inventory +
+palette entry fast incl. quick close+reopen, (c) map travel clean. If good → commit. If a drain-tick
+spike appears when big screens open, cap widgets processed per drain. Minor open question: plates 4/7.
 F10 quest read: no Lua errors, bind present in main.lua — most likely the game wasn't fully restarted
 (Ctrl+Shift+R doesn't re-run main.lua); reactive reader only speaks on objective CHANGE, so a pre-existing
 objective staying on screen is expected silence. Re-test F10 after a full game restart.

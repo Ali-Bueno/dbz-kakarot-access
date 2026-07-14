@@ -150,7 +150,11 @@ local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-
 -- Reset once per poll tick by Core.loop (before the step runs).
 local scan_budget = 0
 local SCANS_PER_TICK = 3
-function Core.begin_scan_tick() scan_budget = SCANS_PER_TICK end
+local drain_new_widgets   -- fwd decl: the event-driven cache feed, defined after the caches
+function Core.begin_scan_tick()
+    scan_budget = SCANS_PER_TICK
+    if drain_new_widgets then drain_new_widgets() end
+end
 local function scan_allowed()
     if scan_budget <= 0 then return false end
     scan_budget = scan_budget - 1
@@ -175,10 +179,11 @@ end
 -- pick up any newly-created pooled instances. Callers still validity/visibility-check each
 -- returned widget, so stale entries are harmless. Returns the cached Lua array.
 local all_cache, all_next = {}, {}
-local REFRESH_EVERY = 100  -- ticks (~10s) between full re-scans of a class list (pools
-                           -- are ~static; raised from 30 to cut periodic lag spikes). A quick
-                           -- close+reopen that CHURNS a screen is handled separately, without
-                           -- scanning every screen often — see Core.first_on_screen's churn force.
+local REFRESH_EVERY = 300  -- ticks (~30s) between full re-scans of a class list. Pools are
+                           -- ~static AND newly constructed instances now arrive by EVENT
+                           -- (drain_new_widgets below), so the periodic re-scan is only a
+                           -- safety net — raised 100→300 (2026-07-13) to cut steady-state
+                           -- scan spikes felt as menu-navigation lag.
 
 function Core.cached_all(cls_name, tick)
     local c = all_cache[cls_name]
@@ -194,12 +199,69 @@ function Core.cached_all(cls_name, tick)
     return c
 end
 
+-- Event-driven cache feed. NotifyOnNewObject hands us every UserWidget CONSTRUCTION
+-- (subclasses included — ue4ss-api-reference §2), so a freshly (re)created screen enters
+-- the caches within ONE poll tick: no FindAllOf, no churn re-scan, no REFRESH wait. This
+-- is what makes sub-screen entry fast WITHOUT the per-tick scans that lagged navigation.
+-- The notify is armed ONCE per session (registrations survive Ctrl+Shift+R); it reaches
+-- the CURRENT module instance through _G, same pattern as transition.lua. The callback
+-- only stashes the ref — classification + cache insertion happen on the next poll tick,
+-- on the game thread (drain_new_widgets, called from Core.begin_scan_tick).
+local pending_new = {}                       -- table identity is PERMANENT (the armed
+_G.__KakarotOnNewWidget = function(w)        -- notify closes over _G, not over this local)
+    pending_new[#pending_new + 1] = w
+end
+-- Base class /Script/UMG.Widget, NOT UserWidget: adapters also track non-UserWidget
+-- widgets (the CFUIMultiLineTextBox pools behind detail panes), which a UserWidget
+-- notify never delivers — that kept the inventory's text boxes invisible until the
+-- 30 s refresh (2026-07-14). (After a hot reload an older, narrower notify may still
+-- be armed alongside — duplicate deliveries are harmless, entries are validity-checked.)
+if not _G.__KakarotWidgetNotifyArmedV2 then
+    _G.__KakarotWidgetNotifyArmedV2 = true
+    NotifyOnNewObject("/Script/UMG.Widget", function(w)
+        local h = _G.__KakarotOnNewWidget
+        if h then h(w) end
+    end)
+end
+
+drain_new_widgets = function()
+    local n = #pending_new
+    if n == 0 then return end
+    for i = 1, n do
+        local w = pending_new[i]
+        if Core.valid(w) then
+            -- Feed every tracked cache key along the CLASS CHAIN, not just the exact
+            -- class: adapters key caches by NATIVE BASE names too (AT_UIStartSaveLoad),
+            -- while a constructed instance reports its most-derived (blueprint) class —
+            -- the exact-name match missed those and Save/Load stayed slow (2026-07-14).
+            -- Newest first, so first_on_screen sees a recreated instance before a stale
+            -- one. Clearing an absent back-off lets cached_live re-scan promptly
+            -- (first_live must still run — it prefers the top-level instance).
+            pcall(function()
+                local c, depth = w:GetClass(), 0
+                while c and c:IsValid() and depth < 12 do
+                    local cls = c:GetFName():ToString()
+                    local list = all_cache[cls]
+                    if list then table.insert(list, 1, w) end
+                    if live_backoff[cls] then live_backoff[cls] = nil end
+                    c = c:GetSuperStruct()
+                    depth = depth + 1
+                end
+            end)
+        end
+        pending_new[i] = nil
+    end
+end
+
 -- Drop every cached widget reference. Run at each map switch (transition.lua): some
 -- cached widgets are per-level (the field HUD family), and probing a freed one after
 -- the level died — even just IsValid — is an uncatchable C++ abort. Pure Lua.
 Transition.on_begin("ui_core", function()
     live_cache, live_backoff = {}, {}
     all_cache, all_next = {}, {}
+    -- Widgets constructed by the DYING level must never be probed (even IsValid aborts):
+    -- wipe the pending feed in place (the table identity must survive — see above).
+    for i = #pending_new, 1, -1 do pending_new[i] = nil end
 end)
 
 -- First currently on-screen instance of a class, or nil. Use this instead of cached_live
@@ -216,11 +278,11 @@ end)
 -- so the new instance is picked up within a tick or two. Bounded to recently-seen classes:
 -- a screen closed long ago never forces, so idle/closed screens don't scan every tick (that
 -- was the mistake of shortening REFRESH globally — it saturated the budget and lagged nav).
--- OPT-IN churn set. The force below is ONLY for classes that a screen is DESTROYED and
--- recreated on a quick reopen (AT_UIStartSaveLoad — confirmed). Applying it to every class
--- lagged navigation: opening/closing many submenus put lots of classes in the churn window at
--- once, each demanding a re-scan every tick, saturating the scan budget continuously. So an
--- adapter must opt its class in with Core.mark_churning; everything else keeps the normal path.
+-- OPT-IN churn set. SUPERSEDED (2026-07-13) by the event-driven cache feed below, which
+-- delivers recreated instances without any re-scan — no adapter opts in anymore. Kept as a
+-- fallback: if a recreated screen ever fails to arrive via NotifyOnNewObject, its adapter
+-- can re-opt-in with Core.mark_churning. (History: churn-forcing broadly lagged navigation —
+-- many classes in the churn window saturated the scan budget with per-tick re-scans.)
 local churning = {}
 function Core.mark_churning(cls_name) churning[cls_name] = true end
 

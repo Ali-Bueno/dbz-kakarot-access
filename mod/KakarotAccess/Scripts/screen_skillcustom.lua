@@ -25,6 +25,10 @@ local I18n = require("i18n")
 
 local Skill = {}
 
+-- Deliberately opened sub-screen: one registry confirmation tick suffices (the global
+-- CONFIRM_TICKS=2 exists for screens that FLASH at boot) — shaves ~100 ms off entry.
+Skill.confirm_ticks = 1
+
 local ann = Core.make_announcer()
 local host, tick = nil, 0
 local last_slot, last_idx = nil, nil

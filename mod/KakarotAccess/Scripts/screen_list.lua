@@ -43,6 +43,10 @@ local M = {}
 -- empty category is announced instead of silently keeping the stale item.
 function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node, empty_off)
     local S = {}
+    -- Deliberately opened sub-screens (inventory, Dragon Balls, …): no boot-flash risk,
+    -- so one registry confirmation tick suffices — shaves ~100 ms off every entry (the
+    -- global CONFIRM_TICKS=2 exists for screens that FLASH at boot).
+    S.confirm_ticks = 1
     local ann = Core.make_announcer()
     local host, list, tick = nil, nil, 0
     local boxes = nil   -- detail-pane text boxes by detail_nodes index (lazy collect)

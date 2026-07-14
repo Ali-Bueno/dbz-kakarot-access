@@ -201,6 +201,20 @@ Shared principle for both: **context change → `interrupt=true`**; incremental 
 what changed; always follow the game's on-screen order. Future UI specs (HUD, combat) get their own doc
 in that folder.
 
+**Screen detection must be EVENT-DRIVEN, never per-tick scanning** (rule from the Kakarot latency
+episode, 2026-07-14). Discovering a just-opened screen by object scans (`FindAllOf`-style sweeps,
+budgets, back-offs, churn re-scans, short refresh periods) creates an unsolvable trade-off: entry
+latency vs navigation lag. Instead, arm ONE construction notify for the engine's widget base (UE4SS:
+`NotifyOnNewObject("/Script/UMG.Widget")`) that feeds the shared widget cache, and let adapters probe
+only cached refs. Details that made it correct in Kakarot (`ui_core.lua`, reuse them): feed every
+tracked cache key along the constructed widget's **class chain** (adapters may key caches by a native
+BASE name while instances report the blueprint class); use the **widest widget base** (detail panes
+read non-UserWidget text pools); arm the notify ONCE per session with the handler reached via a `_G`
+indirection (hot-reload safe); wipe the pending feed on map transitions (probing a freed object
+aborts). New menu adapters must NOT add per-tick scans, churn-forcing, or refresh shortening to fix
+slow detection — if a screen is slow to appear, fix the feed. Deliberately-opened sub-screens set
+`confirm_ticks = 1` (the global confirmation debounce exists only for screens that flash at boot).
+
 ---
 
 ## 9. Speech, audio cues and state tracking

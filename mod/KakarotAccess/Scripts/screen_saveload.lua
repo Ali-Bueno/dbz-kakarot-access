@@ -34,18 +34,24 @@ local OFF = require("native_offsets").saveLoad
 
 local SaveLoad = {}
 
--- This screen is DESTROYED and recreated on a quick close+reopen, which leaves the class-list
--- cache holding the old instance (detection stalled up to ~10s). Opt into the churn-force so
--- first_on_screen re-detects the new instance immediately (budget-gated). Only this screen opts
--- in — applying it globally lagged menu navigation (see ui_core.Core.mark_churning).
-Core.mark_churning("AT_UIStartSaveLoad")
+-- This screen is DESTROYED and recreated on a quick close+reopen. The recreated instance
+-- now arrives by EVENT (ui_core's NotifyOnNewObject cache feed, 2026-07-13), so the old
+-- churn-force opt-in (mark_churning) is no longer needed — re-enable it only if fast
+-- re-entry regresses.
 
 local ann = Core.make_announcer()
 local host, tick = nil, 0
 
+-- Deliberately opened sub-screen: no boot-flash risk, so one confirmation tick in the
+-- registry is enough (the global CONFIRM_TICKS=2 exists for screens that FLASH at boot).
+-- Shaves ~100 ms off every entry (entry-latency brief 2026-07-13).
+SaveLoad.confirm_ticks = 1
+
 -- Polls a (ordinal, text) must hold steady before it is spoken — filters the transient
--- title-only / flashing-empty frames the scroll animation produces (~200ms at 100ms poll).
-local SETTLE_TICKS = 2
+-- title-only / flashing-empty frames the scroll animation produces. 1 poll: bar_text
+-- already nils half-built rows, so the longer hold was redundant on entry and cost
+-- ~100 ms every time the screen opened (entry-latency brief 2026-07-13).
+local SETTLE_TICKS = 1
 local pend_key, pend_n = nil, 0
 
 -- Diagnostic: logs, on change, the native index/window state + focused text to
