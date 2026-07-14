@@ -131,6 +131,12 @@ local S = {
         skill_ki = "Ki necesario %s",
         skill_empty = "ranura vacía",
         skill_assign = "elegir habilidad",
+        -- Skill tree / learn super attacks (screen_skilltree.lua).
+        skilltree_screen = "árbol de habilidades",
+        skill_needs = "necesita: %s",
+        skill_owned = "tienes: %s",
+        orb_red = "rojo", orb_blue = "azul", orb_green = "verde",
+        orb_purple = "morado", orb_silver = "plateado", orb_gold = "dorado",
         -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
@@ -321,6 +327,12 @@ local S = {
         skill_ki = "Ki required %s",
         skill_empty = "empty slot",
         skill_assign = "choose skill",
+        -- Skill tree / learn super attacks (screen_skilltree.lua).
+        skilltree_screen = "skill tree",
+        skill_needs = "needs: %s",
+        skill_owned = "you have: %s",
+        orb_red = "red", orb_blue = "blue", orb_green = "green",
+        orb_purple = "purple", orb_silver = "silver", orb_gold = "gold",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
         radar_cat_fishing = "Fishing",

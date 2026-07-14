@@ -29,6 +29,7 @@
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads the on-screen `AT_UIItemMenu.WL_Start_Party_Bars` bar (the selected char; only it animates in): `Txt_Name01` + `Txt_Lv01→Txt_Lv02` level-up preview, with the "choose character" prompt. Registered before the item list reader. Verified in-game 2026-07-11 |
 | Save / Load data slots | done | `screen_saveload.lua` — `AT_UIStartSaveLoad`. VIRTUALIZED 3-bar window (`UISaveLoadBar_List`), so pool-position ≠ ordinal. Ordinal from native index `saveLoad.selectedIndex = 0x410` (+1), cursor bar = `windowPos = 0x418` (F4-confirmed over ~11 saves); reads FILLED and EMPTY slots (Canvas_None checked first); SETTLE_TICKS debounce drops mid-scroll frames. Slow re-entry (widget destroyed+recreated → stale class-list cache) FIXED by `ui_core.first_on_screen` churn-force (re-scan a recently-on-screen class immediately, budget-gated). Verified in-game 2026-07-11 (reads all slots, correct index, fast entry, no lag). DEBUG off |
 | Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
+| Skill Tree / learn super attacks | done | `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). Verified in-game 2026-07-14 |
 | Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
 | Fishing minigame | done | `screen_fishing.lua`; verified end-to-end (user landed a fish) |
@@ -108,6 +109,14 @@ Also still pending: verify **Quest objective HUD** (`quest_objective.lua`; F10 n
 And older backlog: "Caza"/Hunt radar category verify, R2 picker hook log, radar 2.0 batch.
 
 ## Known issues / open questions
+- F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught
+  `brush_of` "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a
+  3-failure fuse in `discover.lua brush_of`; avoid F7 during screen transitions/animations.
+- INTERMITTENT boot crash (2026-07-14, AV 0x10 right after "Event loop start", first map load):
+  the event feed's drain probed widgets whose classes the async loader was still linking.
+  HARDENED (uncommitted, pending boots to confirm): drain skips + wipes while `Transition.active()`,
+  1-tick quarantine (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM=2048 drop. **If any
+  boot crash recurs after this → revert the whole notify feed to polling (plan B).**
 - Cooking menu cursor read pending re-verify — confirm `dumps/dump_cooking.txt` shows the frozen-index diagnosis, then set `DEBUG=false`.
 - R2 picker: if boot log shows `hooked=false`, pad blocking is off (read-only) — needs a GetProcAddress/inline-hook fallback.
 - "View Controls" (from battle pause) reads jumbled and pause doesn't re-announce on return.

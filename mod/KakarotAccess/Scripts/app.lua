@@ -108,6 +108,9 @@ Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
 Registry.register(require("screen_characters"))                    -- Characters
 -- Skill Palette / Super Attack equip (opened from a character): slot plates + detail pane.
 Registry.register(require("screen_skillcustom"))
+-- Skill Tree / learn super attacks (Y from the character menu). AFTER the palette: the
+-- palette opens on top of the tree and the tree can stay on_screen underneath.
+Registry.register(require("screen_skilltree"))
 Registry.register(require("screen_party"))                         -- Party
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"))

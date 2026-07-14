@@ -224,11 +224,31 @@ if not _G.__KakarotWidgetNotifyArmedV2 then
     end)
 end
 
+-- Entries stashed by the notify wait ONE drain in `aged` before being probed: a widget
+-- constructed by the ASYNC LOADER can have a class that is still mid-link, and probing it
+-- immediately (GetClass/GetSuperStruct) races native data — the intermittent boot crash of
+-- 2026-07-14 (AV right after "Event loop start", during the first map load). One poll
+-- (~100 ms) is far beyond any link time. Same reason for the other two guards below:
+-- never probe while the transition gate is on, and drop construction STORMS outright
+-- (loads build thousands of objects; the periodic refresh net covers whatever we drop).
+local aged = {}
+local PROBE_CAP = 256     -- max widgets probed per tick (bounds reflected work)
+local STORM = 2048        -- backlog beyond this = a load storm: drop it, don't probe it
+
 drain_new_widgets = function()
-    local n = #pending_new
-    if n == 0 then return end
-    for i = 1, n do
-        local w = pending_new[i]
+    if Transition.active() then
+        for i = #aged, 1, -1 do aged[i] = nil end
+        for i = #pending_new, 1, -1 do pending_new[i] = nil end
+        return
+    end
+    local n = #aged
+    if n > STORM then
+        for i = n, 1, -1 do aged[i] = nil end
+        n = 0
+    end
+    local take = n < PROBE_CAP and n or PROBE_CAP
+    for i = 1, take do
+        local w = aged[i]
         if Core.valid(w) then
             -- Feed every tracked cache key along the CLASS CHAIN, not just the exact
             -- class: adapters key caches by NATIVE BASE names too (AT_UIStartSaveLoad),
@@ -249,6 +269,15 @@ drain_new_widgets = function()
                 end
             end)
         end
+    end
+    if take > 0 then
+        local m = #aged
+        for i = 1, m - take do aged[i] = aged[i + take] end
+        for i = m - take + 1, m do aged[i] = nil end
+    end
+    -- Ripen this tick's stash: probed no earlier than the NEXT drain.
+    for i = 1, #pending_new do
+        aged[#aged + 1] = pending_new[i]
         pending_new[i] = nil
     end
 end
@@ -260,8 +289,9 @@ Transition.on_begin("ui_core", function()
     live_cache, live_backoff = {}, {}
     all_cache, all_next = {}, {}
     -- Widgets constructed by the DYING level must never be probed (even IsValid aborts):
-    -- wipe the pending feed in place (the table identity must survive — see above).
+    -- wipe the pending feed AND the aged queue in place (table identities must survive).
     for i = #pending_new, 1, -1 do pending_new[i] = nil end
+    for i = #aged, 1, -1 do aged[i] = nil end
 end)
 
 -- First currently on-screen instance of a class, or nil. Use this instead of cached_live

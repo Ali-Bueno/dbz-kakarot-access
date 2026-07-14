@@ -140,12 +140,20 @@ function Discover.run()
         -- selected item's highlight to a DYNAMIC material (to animate it) while inactive
         -- items keep a shared MaterialInstanceConstant, so the brush TYPE can be the
         -- selection signal even when opacity/alpha are identical.
+        -- FUSE: a brush whose inner object throws "UObject instance is nullptr" DESPITE the
+        -- IsValid gate means the UI state is dying under the sweep — and hammering on (each
+        -- row re-probing) escalated to a fatal uncaught C++ exception in-game (crash
+        -- 2026-07-14, UE4SS.log: two caught brush_of errors, then 0xe06d7363). After a few
+        -- failures, stop probing brushes for the rest of this dump run.
+        local brush_fails = 0
         local function brush_of(o)
+            if brush_fails >= 3 then return "-" end
             local res
-            pcall(function()
+            local ok = pcall(function()
                 local ro = o.Brush.ResourceObject
                 if ro and ro:IsValid() then res = cname(ro) .. " " .. (ro:GetName() or "?") end
             end)
+            if not ok then brush_fails = brush_fails + 1 end
             return res or "-"
         end
         local function in_viewport(o)
