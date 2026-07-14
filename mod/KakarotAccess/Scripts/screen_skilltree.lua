@@ -26,6 +26,8 @@ local ann = Core.make_announcer()
 local host, tick = nil, 0
 
 -- Diagnostic: logs the 12 orb counters per node to dumps/dump_skilltree.txt.
+-- Re-armed 2026-07-14 with the HOVERED-NODE HUNT (see hunt_hovered below).
+-- Diagnostic: logs skill / level / Ki / lock state per node to dumps/dump_skilltree.txt.
 local DEBUG = false
 local last_dbg = nil
 local function dbg(s)
@@ -88,13 +90,48 @@ local function grid_phrase(list, owned)
     return table.concat(parts, ", ")
 end
 
+-- LOCKED nodes. The game marks a lock in exactly ONE place: the tree cursor's own padlock
+-- mini-icon (Skilltree_Cursor.WL_ImgIconMicon), and ONLY on a skill's ENTRY node (level 1)
+-- when the skill isn't owned at all. Established across 6 capture rounds (2026-07-14): no
+-- panel index/pointer/position is readable, the key-help bar is identical on every node,
+-- and no cover/lock widget exists on screen. The character-level gate ("you need level 10")
+-- lives only in the message window that opens on confirm — which the dialog reader speaks.
+--
+-- So a higher level of a NOT-OWNED skill carries no marker of its own, even though it is
+-- just as unreachable. We propagate it: once the entry node of a skill reads locked, every
+-- node of that same skill announces "bloqueada" too (user request — redundant but keeps the
+-- information complete while browsing). The map is per screen visit (cleared in reset), so
+-- switching character can never carry a stale lock over.
+local locked_skills = {}
+
+local function cursor_padlock()
+    local locked = false
+    pcall(function()
+        local tree = host.UISkillTree
+        if Core.valid(tree) then
+            locked = Core.is_visible(tree.Skilltree_Cursor.WL_ImgIconMicon)
+        end
+    end)
+    return locked
+end
+
+-- A skill's family name, so levels of the same skill share a key. The tree names each
+-- level node with the SAME skill name (only Txt_Lv_Num differs), so the name IS the key.
+local function hovered_locked(name)
+    if cursor_padlock() then
+        if name then locked_skills[name] = true end
+        return true
+    end
+    return name ~= nil and locked_skills[name] == true
+end
+
 function Tree.is_active()
     tick = tick + 1
     host = Core.first_on_screen("Start_Skilltree_C", tick)
     return host ~= nil
 end
 
-function Tree.reset() ann:reset() end
+function Tree.reset() ann:reset() locked_skills = {} end
 
 function Tree.update()
     local name = A.markup_to_speech(field("Txt_Skillname"))
@@ -102,14 +139,10 @@ function Tree.update()
 
     local orbs = zorbs()
 
-    if DEBUG and orbs then
-        local ps = {}
-        for _, e in ipairs(orbs) do
-            ps[#ps + 1] = string.format("%d:%s=%s", e.i, tostring(e.num), e.color)
-        end
-        dbg(string.format("skill=%s lv=%s ki=%s | %s",
-            name, tostring(field("Txt_Lv_Num")), tostring(field("Txt_Energy_Num")),
-            table.concat(ps, " ")))
+    if DEBUG then
+        dbg(string.format("skill=%s lv=%s ki=%s locked=%d", name,
+            tostring(field("Txt_Lv_Num")), tostring(field("Txt_Energy_Num")),
+            hovered_locked(name) and 1 or 0))
     end
 
     local screen = Core.phrase(field("Txt_Name"), I18n.t("skilltree_screen"))
@@ -119,6 +152,7 @@ function Tree.update()
     local ki = field("Txt_Energy_Num")
     local need = orbs and grid_phrase(orbs, false)
     local value = Core.phrase(
+        hovered_locked(name) and I18n.t("skill_locked") or nil,
         lvl and I18n.t("skill_level"):format(lvl) or nil,
         ki and I18n.t("skill_ki"):format(ki) or nil,
         need and I18n.t("skill_needs"):format(need) or nil)
