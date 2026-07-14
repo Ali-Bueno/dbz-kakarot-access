@@ -71,6 +71,22 @@ menus OR gameplay; (b) no `UObject instance is nullptr` in the log; (c) the read
 the longer you play; (d) re-entry into the item menu / skill palette / skill tree starts reading within a
 few seconds. Do NOT bring the notify feed back whatever happens (see Known issues).
 
+**OPEN — residual gameplay slowness (next session's #1).** The crashes are fixed but free-roam still feels
+sluggish. It is NOT the removed feed and NOT the scan-net saturation (that was fixed — one fixed 4 s cadence,
+no per-tick forcing). Profile before touching: **Ctrl+F5's nav dump prints per-tick step timing**
+(`_G.__KakarotStepStats`: max/avg game-thread ms of one registry step) — read that first to see if the
+registry poll is even the cost. Concrete candidates, cheapest to check first:
+- **Too many concurrent loops.** Free-roam runs, all at once: registry poll (100 ms), nav_tracker (100 ms,
+  heavy world reflection every tick), radar_menu (20 ms), battle_monitor (250 ms), quest_objective (300 ms),
+  the map travel loop (20 ms — inert off-map but still ticks), and the NEW status pad loop (20 ms). Three
+  separate 20 ms `ExecuteInGameThread` loops is a lot of game-thread queueing. The status pad loop is the
+  newest suspect: it runs 50×/s ALL session just to catch a d-pad press on ONE menu — consider folding pad
+  handling into the registry step (100 ms) or only starting it while the status page is active.
+- **`nav_tracker` per-100 ms cost.** It does a lot of reflection every tick (player pawn, minimap scan,
+  aim watch, route repath). Time it in isolation.
+- **`FindAllOf` is O(all UObjects).** Budget is 3/tick but each scan is expensive; if many classes sit in
+  the ~4 s `DEAD_BACKOFF` and their timers align, a tick can still run 3 full scans. Check the dump's max ms.
+
 Then: **verify the character STATUS page + the contextual-action reader in game** (one RESTART covers both
 — F11/Shift+F11 and Ctrl+F2 are new keybinds in main.lua). On the status page: entering a character should
 speak name, level, "Siguiente N", the HP and Ki gauges and BP; the **d-pad down/up** (or F11 / Shift+F11)
