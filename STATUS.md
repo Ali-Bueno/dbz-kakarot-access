@@ -94,9 +94,12 @@ tracked key along the CLASS CHAIN (`GetSuperStruct` walk, depth-capped 12); (2) 
 `/Script/UMG.UserWidget`, which never delivers the non-UserWidget `CFUIMultiLineTextBox` pool behind
 detail panes (items' text boxes invisible until the 30 s refresh) — now `/Script/UMG.Widget`
 (guard flag `__KakarotWidgetNotifyArmedV2`; a stale narrow notify after hot reload double-delivers,
-harmless). NEXT: user verifies with a FULL RESTART: (a) nav lag gone, (b) Save/Load + inventory +
-palette entry fast incl. quick close+reopen, (c) map travel clean. If good → commit. If a drain-tick
-spike appears when big screens open, cap widgets processed per drain. Minor open question: plates 4/7.
+harmless). **VERIFIED in-game 2026-07-14 (nav fluid, all entries fast) — committed & pushed (14ac601);
+the rule is now in CLAUDE.md §8: new adapters must use the event-driven cache, never per-tick scans.**
+
+Backlog (older pending): verify Quest objective HUD F10 + reactive (`quest_objective.lua`); radar 2.0
+batch + "Caza" category + R2 picker hook log; cooking menu re-verify; "View Controls" jumbled read.
+Niceties: skill palette plates 4/7 (structural, unreachable so far); assign-mode A/B press silence.
 F10 quest read: no Lua errors, bind present in main.lua — most likely the game wasn't fully restarted
 (Ctrl+Shift+R doesn't re-run main.lua); reactive reader only speaks on objective CHANGE, so a pre-existing
 objective staying on screen is expected silence. Re-test F10 after a full game restart.
