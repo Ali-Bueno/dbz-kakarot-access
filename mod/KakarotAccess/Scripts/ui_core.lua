@@ -232,8 +232,60 @@ end
 -- never probe while the transition gate is on, and drop construction STORMS outright
 -- (loads build thousands of objects; the periodic refresh net covers whatever we drop).
 local aged = {}
-local PROBE_CAP = 256     -- max widgets probed per tick (bounds reflected work)
-local STORM = 2048        -- backlog beyond this: keep the OLDEST STORM entries, drop the tail
+-- THROUGHPUT is what makes this feed work: the game constructs widgets in bursts of
+-- thousands (any menu with pooled rows, not just the Skill Tree), so if the drain consumes
+-- slower than the game produces, a PERMANENT backlog forms — and then the truncation below
+-- throws away the NEWEST arrivals, which are precisely the screen the player just opened.
+-- That is what left the skill palette / item menu waiting ~30 s for the refresh net on a
+-- RE-entry while the first entry (empty caches, direct scan) was instant (2026-07-14; the
+-- session log showed 30+ storms, backlogs up to 8167).
+--
+-- So the per-widget probe is kept CHEAP: a class's ancestor chain never changes, so it is
+-- resolved once per CLASS and memoized. A widget then costs GetClass + a table lookup
+-- instead of a 12-deep GetSuperStruct walk, which is what lets PROBE_CAP be this high.
+local PROBE_CAP = 1024    -- max widgets probed per tick (bounds reflected work)
+local STORM = 8192        -- last-resort backlog bound: keep the OLDEST, drop the tail
+local chain_cache = {}    -- class FName -> its ancestor chain, oldest-derived first
+
+-- A tracked class's cached list grows by one on every construction, and pooled screens are
+-- recreated all session, so a hot class (list rows, button glyphs) would grow without bound —
+-- and adapters WALK these lists every tick. Keep them bounded: drop the dead entries first
+-- (a recreated screen leaves its predecessor invalid), and only if it's still oversized cut
+-- the OLDEST tail. Entries are inserted newest-first, so what survives is what's live now.
+local LIST_MAX = 256
+local function prune(list)
+    if #list <= LIST_MAX then return end
+    local keep = {}
+    for i = 1, #list do
+        local o = list[i]
+        if Core.valid(o) then keep[#keep + 1] = o end
+    end
+    for i = #list, 1, -1 do list[i] = nil end
+    local n = #keep < LIST_MAX and #keep or LIST_MAX
+    for i = 1, n do list[i] = keep[i] end
+end
+
+-- The class chain of a constructed widget, memoized. nil if the class can't be read (an
+-- async-loading class mid-link — the caller skips the widget; the refresh net covers it).
+local function class_chain(w)
+    local names
+    pcall(function()
+        local c = w:GetClass()
+        if not (c and c:IsValid()) then return end
+        local first = c:GetFName():ToString()
+        local hit = chain_cache[first]
+        if hit then names = hit return end
+        local out, depth = {}, 0
+        while c and c:IsValid() and depth < 12 do
+            out[#out + 1] = c:GetFName():ToString()
+            c = c:GetSuperStruct()
+            depth = depth + 1
+        end
+        chain_cache[first] = out
+        names = out
+    end)
+    return names
+end
 
 drain_new_widgets = function()
     if Transition.active() then
@@ -243,15 +295,10 @@ drain_new_widgets = function()
     end
     local n = #aged
     if n > STORM then
-        -- Construction STORM. This used to DROP THE WHOLE BACKLOG, which silently defeated
-        -- the feed for the biggest screen in the game: the Skill Tree builds ~108 panels plus
-        -- ~100 nodes (each a UserWidget with its own images/texts) in one frame — thousands of
-        -- widgets — so its root went in the bin with everything else and the screen was only
-        -- detected by the 300-tick refresh net (~30 s to start reading; every other menu builds
-        -- far too few widgets to ever trip this). Truncate instead: UMG constructs a screen's
-        -- ROOT BEFORE its children, so the OLDEST entries are exactly the ones adapters key on.
-        -- Keeping them costs nothing extra (PROBE_CAP still bounds the per-tick work) and the
-        -- dropped tail is leaf widgets the periodic refresh picks up anyway.
+        -- UMG constructs a screen's ROOT BEFORE its children, so the OLDEST entries are the
+        -- ones adapters key on — those are what we keep. (This must stay a LAST RESORT: with
+        -- a standing backlog it would drop the freshest screen, see the note above. If this
+        -- line starts logging again, the drain is too slow, not the queue too small.)
         for i = n, STORM + 1, -1 do aged[i] = nil end
         print(string.format("[KakarotAccess] widget storm: %d queued, kept the oldest %d\n", n, STORM))
         n = STORM
@@ -267,17 +314,18 @@ drain_new_widgets = function()
             -- Newest first, so first_on_screen sees a recreated instance before a stale
             -- one. Clearing an absent back-off lets cached_live re-scan promptly
             -- (first_live must still run — it prefers the top-level instance).
-            pcall(function()
-                local c, depth = w:GetClass(), 0
-                while c and c:IsValid() and depth < 12 do
-                    local cls = c:GetFName():ToString()
+            local chain = class_chain(w)
+            if chain then
+                for j = 1, #chain do
+                    local cls = chain[j]
                     local list = all_cache[cls]
-                    if list then table.insert(list, 1, w) end
+                    if list then
+                        table.insert(list, 1, w)
+                        prune(list)
+                    end
                     if live_backoff[cls] then live_backoff[cls] = nil end
-                    c = c:GetSuperStruct()
-                    depth = depth + 1
                 end
-            end)
+            end
         end
     end
     if take > 0 then
