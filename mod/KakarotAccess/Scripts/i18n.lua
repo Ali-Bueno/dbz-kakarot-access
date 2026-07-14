@@ -134,6 +134,7 @@ local S = {
         -- Skill tree / learn super attacks (screen_skilltree.lua).
         skilltree_screen = "árbol de habilidades",
         skill_locked = "bloqueada",
+        skill_acquired = "adquirida",
         skill_needs = "necesita: %s",
         skill_owned = "tienes: %s",
         orb_red = "rojo", orb_blue = "azul", orb_green = "verde",
@@ -331,6 +332,7 @@ local S = {
         -- Skill tree / learn super attacks (screen_skilltree.lua).
         skilltree_screen = "skill tree",
         skill_locked = "locked",
+        skill_acquired = "acquired",
         skill_needs = "needs: %s",
         skill_owned = "you have: %s",
         orb_red = "red", orb_blue = "blue", orb_green = "green",

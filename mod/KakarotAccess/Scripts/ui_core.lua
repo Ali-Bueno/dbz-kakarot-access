@@ -233,7 +233,7 @@ end
 -- (loads build thousands of objects; the periodic refresh net covers whatever we drop).
 local aged = {}
 local PROBE_CAP = 256     -- max widgets probed per tick (bounds reflected work)
-local STORM = 2048        -- backlog beyond this = a load storm: drop it, don't probe it
+local STORM = 2048        -- backlog beyond this: keep the OLDEST STORM entries, drop the tail
 
 drain_new_widgets = function()
     if Transition.active() then
@@ -243,8 +243,18 @@ drain_new_widgets = function()
     end
     local n = #aged
     if n > STORM then
-        for i = n, 1, -1 do aged[i] = nil end
-        n = 0
+        -- Construction STORM. This used to DROP THE WHOLE BACKLOG, which silently defeated
+        -- the feed for the biggest screen in the game: the Skill Tree builds ~108 panels plus
+        -- ~100 nodes (each a UserWidget with its own images/texts) in one frame — thousands of
+        -- widgets — so its root went in the bin with everything else and the screen was only
+        -- detected by the 300-tick refresh net (~30 s to start reading; every other menu builds
+        -- far too few widgets to ever trip this). Truncate instead: UMG constructs a screen's
+        -- ROOT BEFORE its children, so the OLDEST entries are exactly the ones adapters key on.
+        -- Keeping them costs nothing extra (PROBE_CAP still bounds the per-tick work) and the
+        -- dropped tail is leaf widgets the periodic refresh picks up anyway.
+        for i = n, STORM + 1, -1 do aged[i] = nil end
+        print(string.format("[KakarotAccess] widget storm: %d queued, kept the oldest %d\n", n, STORM))
+        n = STORM
     end
     local take = n < PROBE_CAP and n or PROBE_CAP
     for i = 1, take do

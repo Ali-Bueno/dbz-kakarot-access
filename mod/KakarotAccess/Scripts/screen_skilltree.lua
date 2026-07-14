@@ -90,18 +90,59 @@ local function grid_phrase(list, owned)
     return table.concat(parts, ", ")
 end
 
--- LOCKED nodes. The game marks a lock in exactly ONE place: the tree cursor's own padlock
--- mini-icon (Skilltree_Cursor.WL_ImgIconMicon), and ONLY on a skill's ENTRY node (level 1)
--- when the skill isn't owned at all. Established across 6 capture rounds (2026-07-14): no
--- panel index/pointer/position is readable, the key-help bar is identical on every node,
--- and no cover/lock widget exists on screen. The character-level gate ("you need level 10")
--- lives only in the message window that opens on confirm — which the dialog reader speaks.
---
--- So a higher level of a NOT-OWNED skill carries no marker of its own, even though it is
--- just as unreachable. We propagate it: once the entry node of a skill reads locked, every
--- node of that same skill announces "bloqueada" too (user request — redundant but keeps the
--- information complete while browsing). The map is per screen visit (cleared in reset), so
--- switching character can never carry a stale lock over.
+-- NODE STATE (locked / purchasable / acquired). Reflection exposes none of it: the only
+-- visible marker is the tree cursor's padlock, and it lights up ONLY on a skill's entry node
+-- (6 capture rounds, 2026-07-14). But the game caches the answer per node: it stores its own
+-- tri-state on each node widget (zorb + 0x460), computed from HaveSkillTreeId / OpenSkillTreeId,
+-- and OnInputDecide gates on exactly that byte. So we read it natively (Ghidra 2026-07-14; the
+-- offsets and the proof live in native_offsets.skillTree) — correct on EVERY node, whatever
+-- path the player took to reach it.
+local NO = require("native_offsets").skillTree
+local Mem = require("mem")
+
+local ACQUIRED, OPEN, LOCKED = "acquired", "open", "locked"
+local STATE = {
+    [0] = LOCKED, [1] = LOCKED,                    -- 1 = hard-gated (the cursor even skips it)
+    [2] = ACQUIRED, [5] = ACQUIRED, [8] = ACQUIRED,
+    [3] = OPEN, [4] = OPEN, [6] = OPEN, [7] = OPEN, [9] = OPEN, [10] = OPEN,
+}
+
+-- The node under the cursor, as the game itself resolves it:
+--   cell = grid[row*30 + col] (1-based node index) -> zorb widget -> its state byte.
+-- Returns nil if anything is off, so a wrong offset degrades to the old heuristic instead of
+-- announcing a lie. SELF-CHECK: the FName the widget caches must equal the one in the parallel
+-- id array at the same index — if the index arithmetic were wrong, they wouldn't match.
+local function hovered_state()
+    if not Mem.is_loaded() then return nil end
+    local tree
+    if not pcall(function() tree = host.UISkillTree end) or not Core.valid(tree) then return nil end
+
+    local col, row = Mem.i32(tree, NO.cursorCol), Mem.i32(tree, NO.cursorRow)
+    local max_col, max_row = Mem.i32(tree, NO.maxCol), Mem.i32(tree, NO.maxRow)
+    if not col or not row or col < 0 or row < 0 or col >= NO.gridCols then return nil end
+    if (max_col and max_col > 0 and col > max_col) or (max_row and max_row > 0 and row > max_row) then
+        return nil
+    end
+
+    local cell = Mem.i32(tree, NO.grid + (row * NO.gridCols + col) * 4)
+    if not cell or cell <= 0 then return nil end          -- empty grid cell: no node hovered
+    local i = cell - 1
+
+    local ids, count = Mem.ptr(tree, NO.nodeIdData), Mem.i32(tree, NO.nodeIdCount)
+    local data = Mem.ptr(tree, NO.zorbData)
+    if not ids or not count or not data or i >= count then return nil end
+
+    local zorb = Mem.at_ptr(data, i * 8)
+    if not zorb or zorb == 0 then return nil end
+    if Mem.at_bytes(zorb, NO.zorbNodeId, 8) ~= Mem.at_bytes(ids, i * 8, 8) then return nil end
+
+    return STATE[Mem.at_u8(zorb, NO.zorbState) or -1]
+end
+
+-- FALLBACK (native read unavailable): the pre-Ghidra heuristic. The cursor padlock only marks a
+-- skill's entry node, so we propagate the lock by skill name within a screen visit — every level
+-- of the same skill then reads locked. Blind to a level-2/3 node reached without passing level 1;
+-- that limit is exactly what the native read above removes.
 local locked_skills = {}
 
 local function cursor_padlock()
@@ -115,8 +156,7 @@ local function cursor_padlock()
     return locked
 end
 
--- A skill's family name, so levels of the same skill share a key. The tree names each
--- level node with the SAME skill name (only Txt_Lv_Num differs), so the name IS the key.
+-- The tree names every level node of a skill with the SAME skill name, so the name is the key.
 local function hovered_locked(name)
     if cursor_padlock() then
         if name then locked_skills[name] = true end
@@ -139,10 +179,14 @@ function Tree.update()
 
     local orbs = zorbs()
 
+    -- Native tri-state when available; the name-propagation heuristic only as a fallback.
+    local state = hovered_state()
+    local locked = (state == LOCKED) or (state == nil and hovered_locked(name))
+
     if DEBUG then
-        dbg(string.format("skill=%s lv=%s ki=%s locked=%d", name,
+        dbg(string.format("skill=%s lv=%s ki=%s state=%s", name,
             tostring(field("Txt_Lv_Num")), tostring(field("Txt_Energy_Num")),
-            hovered_locked(name) and 1 or 0))
+            tostring(state or (locked and "locked?" or "unknown"))))
     end
 
     local screen = Core.phrase(field("Txt_Name"), I18n.t("skilltree_screen"))
@@ -152,7 +196,8 @@ function Tree.update()
     local ki = field("Txt_Energy_Num")
     local need = orbs and grid_phrase(orbs, false)
     local value = Core.phrase(
-        hovered_locked(name) and I18n.t("skill_locked") or nil,
+        locked and I18n.t("skill_locked") or nil,
+        state == ACQUIRED and I18n.t("skill_acquired") or nil,
         lvl and I18n.t("skill_level"):format(lvl) or nil,
         ki and I18n.t("skill_ki"):format(ki) or nil,
         need and I18n.t("skill_needs"):format(need) or nil)

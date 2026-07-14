@@ -79,6 +79,33 @@ transport, and which reference docs to open. One glance routes the whole mod; sk
 - **Navigation mods:** pick the style(s) via the [audio-navigation decision guide](reference/audio-navigation/README.md) (§5).
 - If after investigating the framework is still unclear, **ask the user** before assuming.
 
+### Reflection vs. decompiler: three tools, three questions (rule from the Kakarot skill-tree episode, 2026-07-14)
+
+They are not ranked, they answer **different questions** — pick by what you're missing, and don't grind
+one tool against a wall the other walks around:
+
+| Tool | Answers | Use it for |
+|---|---|---|
+| **Dumps / reflection** (CXX header dump, UE4SS ObjectDump, pak assets) | *What exists* | On-screen text, widget names, declared properties, class layouts, the **UFunction name list** |
+| **Decompiler** (Ghidra) | *What the game does* | Hidden selection indices, private state, and any **predicate the game computes** (locked / owned / available / enabled) |
+| **Runtime memory diff** (the F4 dev tool) | *Which address holds this value* | Pinning an offset when the static scan is ambiguous (it beat Ghidra for the battle-pause index: 540 false hits statically) |
+
+- **Go straight to the decompiler** — do not open with in-game capture rounds — when the datum is a
+  selection index, private state, or a computed predicate. Tells you it will never be reflected: the
+  class **dumps as empty**, it exposes **zero reflected functions**, or the value must live in the
+  **tail gap** after the last reflected member. In this game *every* hidden selection index (pause,
+  field ring, community board, save/load, skill tree) turned out to be native — assume the next one is too.
+- **Stop rule:** if **two** in-game capture rounds produce no readable signal, there is no third round —
+  switch to native RE. (The skill tree cost seven rounds to conclude what the empty `USkillSave` dump
+  said on day one.)
+- They are **complementary, in this order**: the dumps make the decompiler *possible*. This game ships
+  no C++ RTTI for its own classes, so the only way in is the **UFunction native-registration table**
+  (ASCII name → exec thunk → impl) — and those names, plus every struct offset you check the result
+  against, come from the dumps. Never skip the dump pass; just don't mistake it for the whole answer.
+- The Ghidra setup cost (unpack, 51-min analysis, 16 GB heap) is **already paid** and permanent: a new
+  question now costs ~3 headless minutes. Price your decision accordingly — the old "reflection first
+  because native is expensive" reflex is stale.
+
 ---
 
 ## 3. Dependencies

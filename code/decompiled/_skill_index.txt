@@ -1,0 +1,69 @@
+DIRECT 'HasSkill': 3 string hits
+  entry @ 0x143f83aa8  exec 0x141753600
+  entry @ 0x143f86d00  exec 0x141756130
+DIRECT 'HasSkill_BPCharaCode': 3 string hits
+  entry @ 0x143f83ab8  exec 0x141753630
+  entry @ 0x143f86d10  exec 0x1417561f0
+DIRECT 'ATDebugSetSkillLevel': 3 string hits
+  entry @ 0x14419a6d0  exec 0x141824ea0
+  entry @ 0x144195118  exec 0x1418205b0
+DIRECT 'LearnCharacterSkill': 3 string hits
+  entry @ 0x1442d9618  exec 0x1418a8750
+  entry @ 0x1442e10e0  exec 0x1418aeee0
+DIRECT 'RequestImportantLogSkillUnlockCheck': 3 string hits
+  entry @ 0x143f86f60  exec 0x141757430
+  entry @ 0x143f83d08  exec 0x141753dd0
+WALK 'OnInputGotoSkillCustomize': 3 string hits
+  --- class table containing entry @ 0x14405cc00 ---
+    OnInputCancel                                exec 0x1417b2ee0
+    OnInputDecide                                exec 0x1417b2f80
+    OnInputDPadDown                              exec 0x1417b2f00
+    OnInputDPadLeft                              exec 0x1417b2f20
+    OnInputDPadRight                             exec 0x1417b2f40
+    OnInputDPadUp                                exec 0x1417b2f60
+    OnInputGotoSkillCustomize                    exec 0x1417b2fa0
+    OnInputZoomOut                               exec 0x1417b2fc0
+    Open                                         exec 0x1417b31a0
+    Open_BPCharaCode                             exec 0x1417b3370
+    In_Header_Bg                                 exec 0x1417b2a80
+    OnMessegeWindowCancel                        exec 0x1417b2fe0
+    OnMessegeWindowDecide                        exec 0x1417b3000
+    OnMessegeWindowDown                          exec 0x1417b3020
+    OnMessegeWindowUp                            exec 0x1417b3040
+    OnSkillGetWindowClosed                       exec 0x1417b30a0
+    OnSkillGetWindowClosedInSuperPassiveOpend    exec 0x1417b3120
+    Out_Bg                                       exec 0x1417ace80
+    Out_Header                                   exec 0x1417770e0
+    OnIn_Line                                    exec 0x1417b2ec0
+  --- class table containing entry @ 0x14405b6e8 ---
+    OnInputCancel                                exec 0x1417b0720
+    OnInputDecide                                exec 0x1417b0750
+    OnInputDPadDown                              exec 0x1417b0780
+    OnInputDPadLeft                              exec 0x1417b07b0
+    OnInputDPadRight                             exec 0x1417b07e0
+    OnInputDPadUp                                exec 0x1417b0810
+    OnInputGotoSkillCustomize                    exec 0x1417b0840
+    OnInputZoomOut                               exec 0x1417b0870
+    Open                                         exec 0x1417b08a0
+WALK 'OnIn_Line': 3 string hits
+  --- class table containing entry @ 0x14405ccd0 ---
+    OnInputCancel                                exec 0x1417b2ee0
+    OnInputDecide                                exec 0x1417b2f80
+    OnInputDPadDown                              exec 0x1417b2f00
+    OnInputDPadLeft                              exec 0x1417b2f20
+    OnInputDPadRight                             exec 0x1417b2f40
+    OnInputDPadUp                                exec 0x1417b2f60
+    OnInputGotoSkillCustomize                    exec 0x1417b2fa0
+    OnInputZoomOut                               exec 0x1417b2fc0
+    Open                                         exec 0x1417b31a0
+    Open_BPCharaCode                             exec 0x1417b3370
+    In_Header_Bg                                 exec 0x1417b2a80
+    OnMessegeWindowCancel                        exec 0x1417b2fe0
+    OnMessegeWindowDecide                        exec 0x1417b3000
+    OnMessegeWindowDown                          exec 0x1417b3020
+    OnMessegeWindowUp                            exec 0x1417b3040
+    OnSkillGetWindowClosed                       exec 0x1417b30a0
+    OnSkillGetWindowClosedInSuperPassiveOpend    exec 0x1417b3120
+    Out_Bg                                       exec 0x1417ace80
+    Out_Header                                   exec 0x1417770e0
+    OnIn_Line                                    exec 0x1417b2ec0

@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-14
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -29,7 +29,7 @@
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads the on-screen `AT_UIItemMenu.WL_Start_Party_Bars` bar (the selected char; only it animates in): `Txt_Name01` + `Txt_Lv01→Txt_Lv02` level-up preview, with the "choose character" prompt. Registered before the item list reader. Verified in-game 2026-07-11 |
 | Save / Load data slots | done | `screen_saveload.lua` — `AT_UIStartSaveLoad`. VIRTUALIZED 3-bar window (`UISaveLoadBar_List`), so pool-position ≠ ordinal. Ordinal from native index `saveLoad.selectedIndex = 0x410` (+1), cursor bar = `windowPos = 0x418` (F4-confirmed over ~11 saves); reads FILLED and EMPTY slots (Canvas_None checked first); SETTLE_TICKS debounce drops mid-scroll frames. Slow re-entry (widget destroyed+recreated → stale class-list cache) FIXED by `ui_core.first_on_screen` churn-force (re-scan a recently-on-screen class immediately, budget-gated). Verified in-game 2026-07-11 (reads all slots, correct index, fast entry, no lag). DEBUG off |
 | Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
-| Skill Tree / learn super attacks | done | `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). LOCKED nodes: the ONLY marker the game exposes is the tree cursor's padlock (`UISkillTree.Skilltree_Cursor.WL_ImgIconMicon` visible), and only on a skill's ENTRY (lv-1) node when the skill is unowned — 6 capture rounds proved there is nothing else: no readable panel index/pointer/position (cursor grid coords do live at tree+0x15F8/+0x15FC as grid×95), key-help bar identical on every node, no cover/lock widget on screen; the char-level gate ("need level 10") exists ONLY in the post-confirm message window (dialog reader speaks it). So the lock is PROPAGATED by skill name within a screen visit (`locked_skills`, cleared in reset): once the entry node reads locked, every level of that skill announces "bloqueada". KNOWN LIMIT (accepted): reaching a level-2/3 node WITHOUT passing its level-1 node first announces no lock — unfixable by reflection. Round-7 panel sweep closed the last door: all 108 `WL_Ins_Panel_Cover` are visible always (a frame, not a padlock) and every skill icon is an anonymous `MaterialInstanceDynamic`, so panels can't be matched to skills. The real data (`USkillManager`/`USkillTree`) exposes ZERO reflected functions and owned levels live in private save memory (`USkillSave`) — a full fix needs native RE (Ghidra), deferred. Verified in-game 2026-07-14 |
+| Skill Tree / learn super attacks | done | **2026-07-14: the lock is read NATIVELY** from the game's own per-node state byte (offsets in *Derived facts*), so "bloqueada"/"adquirida" is correct on EVERY node whatever the browsing path — the old KNOWN LIMIT (noted below) is GONE. The name-propagation heuristic survives only as the fallback if the native read fails its bounds/FName self-check. Entry was slow (~30 s) until the feed's storm guard was fixed (see *Known issues*). Verified in-game 2026-07-14. — `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). LOCKED nodes: the ONLY marker the game exposes is the tree cursor's padlock (`UISkillTree.Skilltree_Cursor.WL_ImgIconMicon` visible), and only on a skill's ENTRY (lv-1) node when the skill is unowned — 6 capture rounds proved there is nothing else: no readable panel index/pointer/position (cursor grid coords do live at tree+0x15F8/+0x15FC as grid×95), key-help bar identical on every node, no cover/lock widget on screen; the char-level gate ("need level 10") exists ONLY in the post-confirm message window (dialog reader speaks it). So the lock is PROPAGATED by skill name within a screen visit (`locked_skills`, cleared in reset): once the entry node reads locked, every level of that skill announces "bloqueada". KNOWN LIMIT (accepted): reaching a level-2/3 node WITHOUT passing its level-1 node first announces no lock — unfixable by reflection. Round-7 panel sweep closed the last door: all 108 `WL_Ins_Panel_Cover` are visible always (a frame, not a padlock) and every skill icon is an anonymous `MaterialInstanceDynamic`, so panels can't be matched to skills. The real data (`USkillManager`/`USkillTree`) exposes ZERO reflected functions and owned levels live in private save memory (`USkillSave`) — a full fix needs native RE (Ghidra), deferred. Verified in-game 2026-07-14 |
 | Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
 | Fishing minigame | done | `screen_fishing.lua`; verified end-to-end (user landed a fish) |
@@ -49,36 +49,21 @@
 | Overworld item entry id | `UAT_UIStartTopList +0x404` u8 = `START_TOP_LIST_ID` | Ghidra `FUN_1416bca00`; `native_offsets.lua` |
 | Reliable player field char | `AT_UIMiniMapRadar.PlayerIns` (camera `.CameraMng`) — NOT `PlayerController.Pawn` | live verify 2026-07-03 |
 | Community board hovered socket | `Start_Commu_Brd_C +0x5D8` (game cache) / mode gate `+0x500` = 7 | Ghidra `FUN_1414c7de0`; `native_offsets.commuBoard` |
+| Skill-tree hovered node + its state | cursor `UAT_UISkillTree +0x15F8/+0x15FC` (raw grid col/row) → `cell = i32[+0x4CC + (row*30+col)*4]` (1-based) → `zorb = ptr[+0x438][cell-1]` → **state `u8[zorb+0x460]`**: `{0,1}` locked, `{2,5,8}` acquired, `{3,4,6,7,9,10}` open. Node `FName` at `zorb+0x418` (= `ptr[+0x1538][cell-1]`, self-check) | Ghidra `FUN_141672080` (cursor refresh), `FUN_141664ab0` (OnInputDecide gates on `0x124>>state&1`); `native_offsets.skillTree` |
+| Skill ownership (authoritative) | `USkillManager+0x138` = `USkillSave`; `FSkillSaveInfo` via a **TMap** at `SkillSave+0x28` keyed by `CHARACTER_TYPE` (elem stride 0x18, value = `FSkillSaveInfo*` at elem+0x08 — NOT a flat array); then `HaveSkillTreeId` +0x100 / `OpenSkillTreeId` +0xF0 | Ghidra `HasSkill` → `FUN_14145efc0`, `FUN_14145e140`, tri-state `FUN_14145c4b0` |
+| Skill-tree "requires level N" | `SkillTreeDataTable = USkillManager+0x108`; row via `RowMap` TSet at `DataTable+0x30` (hash = `FName.ComparisonIndex + Number`); `CharacterLevel` = `i32[row+0x58]`. Lock reason codes in `FUN_14144efc0` (2 = level too low) | Ghidra `FUN_14145e360` (row lookup), `skill_rowmap.java`. **`+0x30` is DERIVED, not read from an instruction — sanity-check `RowMap.Num` at runtime before trusting** |
 | Fishing phase/cursor/zone | `Mgame_Fishing_C +0x50C` phase, `+0x518` cursor, `[0x520,0x524]` zone | live verify; `native_offsets.fishing` |
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
-**NEXT SESSION = GHIDRA: recover the per-skill OWNED LEVEL (skill-tree lock, the one open gap).**
-Goal: given the hovered node (skill display name + level from the reflected detail pane), know whether
-that node is acquired / learnable / locked — without needing to browse through the level-1 node first
-(today's propagation limit, see the Skill Tree row).
+**Skill tree phase 2 (optional): announce "requiere nivel N" on a locked node.** Everything needed is
+already RE'd (see the last two rows of *Derived facts*): `CharacterLevel` = `i32[row+0x58]`, with the row
+reached by walking the `SkillTreeDataTable` `RowMap` with the hovered node's FName. Two cautions: (1)
+`RowMap` at `DataTable+0x30` is the ONE value that was derived, not read from an instruction — sanity-check
+`RowMap.Num` (should be a few hundred) before trusting the walk; (2) the tri-state already distinguishes
+"locked" from "purchasable", so this only adds the REASON — decide if it earns its complexity.
 
-Ready-made context (do NOT re-derive):
-- Reflection is EXHAUSTED (7 in-game capture rounds, 2026-07-14). `USkillManager` (UActorComponent) and
-  `USkillTree` expose ZERO reflected functions; the tree cursor's padlock is the only lock signal and it
-  only marks a skill's entry node; panels are not identifiable (covers always on, icons are anonymous
-  MIDs); no readable panel index/pointer/position exists.
-- The DATA, from the CXX dump: `USkillManager` (size 0x140) holds `SkillDataTable` 0x100,
-  `SkillTreeDataTable` 0x108, `SkillPaletteDataTable` 0x110, `SkillTree` 0x130, **`USkillSave* SkillSave`
-  0x138**. `struct FSkillSaveInfo` has `TArray<FName> OpenSkillTreeId` (+0xF0) and
-  **`TArray<FName> HaveSkillTreeId` (+0x100)** = the ACQUIRED node ids. `struct FSkillTreeDataTable`
-  (a DataTable row) = `CHARACTER_TYPE Character` 0x18, `FName Skill` 0x20, `int32 SkillLevel` 0x28,
-  `FName OpenSkillTree1/2/3`, **`int32 CharacterLevel` 0x58** (the "need level 10" gate), `int32 cost` 0x70.
-- Plan: unpack the exe with Steamless first (SteamStub — see [[dbz-kakarot-decompilation-setup]]), then in
-  Ghidra find where `USkillSave` stores per-character `FSkillSaveInfo` (offset inside the 0x19750 blob) and
-  how a skill id maps to its tree rows. Read it at runtime through `mem_bridge` (the hybrid pattern already
-  used for saveload/items native flags). The BLOCKER to solve is the mapping **localized display name →
-  skill FName id** (the reader only has the display name): candidates = the SkillDataTable rows (reflected
-  UDataTable: row name = FName id, and a row field likely holds the localization key), or reading the
-  hovered node's id straight from the tree widget's private memory (cursor grid coords are at
-  `tree+0x15F8/+0x15FC`, grid×95 — a per-node record may sit near them).
-- Once the owned level is readable: announce "bloqueada" / "requiere nivel N" on EVERY node regardless of
-  the browsing path, and drop the `locked_skills` name-propagation heuristic in `screen_skilltree.lua`.
+Otherwise the skill tree is closed, and the backlog below is the open work.
 
 ## Backlog
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
@@ -99,8 +84,15 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
 - INTERMITTENT boot crash (2026-07-14, AV 0x10 right after "Event loop start", during the first map
   load): the event feed's drain probed widgets whose classes the async loader was still linking.
   HARDENED (committed): the drain skips + wipes while `Transition.active()`, every stashed widget waits
-  one tick (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM=2048 drop. **If a boot crash
+  one tick (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM backlog bound. **If a boot crash
   recurs → revert the notify feed to polling (plan B), stability over latency.**
+- FIXED 2026-07-14 — the storm guard silently defeated the feed on the biggest screen. It used to DROP
+  THE WHOLE BACKLOG past STORM=2048; the Skill Tree constructs 2064–2862 widgets in one frame (logged),
+  so its ROOT went in the bin and the screen was only found by the 300-tick refresh (~30 s to start
+  reading — every other menu builds far too few widgets to trip it). Now the drain TRUNCATES instead:
+  UMG builds a screen's root before its children, so the oldest entries are the ones adapters key on;
+  the dropped tail is leaf widgets the refresh net picks up. Per-tick cost is unchanged (PROBE_CAP still
+  bounds it). **Lesson: a slow screen is a FEED bug — never "fix" it with scans or shorter refreshes.**
 - F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught `brush_of`
   "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a 3-failure fuse in
   `discover.lua brush_of`; still, avoid F7 during screen transitions/animations.

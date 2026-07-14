@@ -207,6 +207,33 @@ return {
         cursorY = 0x94,   -- float RenderTransform.Translation.Y
     },
 
+    -- Skill Tree: UAT_UISkillTree (the tree inside Start_Skilltree_C / UAT_UISkillTreeMenu).
+    -- Reflection can't tell an ACQUIRED node from a LOCKED one, but the game caches the answer
+    -- on each node widget. SOLVED STATICALLY (Ghidra 2026-07-14, code/decompiled/
+    -- manual_141672080.c = the post-cursor-move refresh, manual_141664ab0.c = OnInputDecide):
+    --   cell = *(int*)(tree + 0x4cc + (row*0x1e + col)*4)     -- 1-based node index, <=0 = empty cell
+    --   zorb = ((UAT_UISkilltreeZorb**)(tree + 0x438))[cell-1]
+    --   id   = ((FName*)(tree + 0x1538))[cell-1]              -- also cached on the widget at +0x418
+    -- and OnInputDecide gates on the node's own state byte (zorb + 0x460), refusing to act on
+    -- exactly {2,5,8} (the `0x124 >> state & 1` test) = the already-ACQUIRED nodes. The byte is
+    -- written from the game's authoritative tri-state FUN_14145c4b0: node in HaveSkillTreeId -> 2
+    -- (acquired), in OpenSkillTreeId -> 1 (purchasable), else 0 (locked).
+    skillTree = {
+        cursorCol   = 0x15f8,   -- int32, cursor column (RAW grid index)  (CONFIRMED)
+        cursorRow   = 0x15fc,   -- int32, cursor row (RAW grid index)  (CONFIRMED)
+        maxCol      = 0x15ec,   -- int32, column bound (from the cursor-move impls)
+        maxRow      = 0x15f4,   -- int32, row bound
+        grid        = 0x4cc,    -- int32[], cell -> 1-based node index (0 = empty)  (CONFIRMED)
+        gridCols    = 0x1e,     -- 30 columns per row (the row stride of that grid)  (CONFIRMED)
+        zorbData    = 0x438,    -- TArray<UAT_UISkilltreeZorb*> data ptr (node widgets, 0-based)
+        nodeIdData  = 0x1538,   -- TArray<FName> data ptr (the tree-node ids, parallel to zorbData)
+        nodeIdCount = 0x1540,   -- int32 count
+        character   = 0x1584,   -- int32 CHARACTER_TYPE of the tree being shown
+        -- on each node widget (UAT_UISkilltreeZorb)
+        zorbState   = 0x460,    -- u8 state: {0,1} LOCKED, {2,5,8} ACQUIRED, {3,4,6,7,9,10} OPEN
+        zorbNodeId  = 0x418,    -- FName (8 bytes) of this node — cross-check against nodeIdData
+    },
+
     -- Battle pause: UAT_UIXCmnPause.  The selected row index is a non-UPROPERTY member
     -- in the tail 0x438..0x500. Not yet pinned statically (nav is C++-direct, no named
     -- UFunction). ListBarArray is the reflected TArray at 0x3a8 (data) / 0x3b0 (count).

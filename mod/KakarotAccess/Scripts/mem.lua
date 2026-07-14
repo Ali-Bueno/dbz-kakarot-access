@@ -67,8 +67,11 @@ function Mem.bytes(obj, off, n)
     return m.read_bytes(a, off or 0, n)
 end
 
--- Read directly from an absolute address (when you already have the VA).
+-- Read directly from an absolute address (when you already have the VA) — needed to walk a
+-- native array whose data pointer we just read (the element addresses aren't UObject bases).
 function Mem.at_i32(addr, off) if loaded and addr then return m.read_i32(addr, off or 0) end end
+function Mem.at_u8(addr, off) if loaded and addr then return m.read_u8(addr, off or 0) end end
+function Mem.at_ptr(addr, off) if loaded and addr then return m.read_ptr(addr, off or 0) end end
 function Mem.at_bytes(addr, off, n) if loaded and addr then return m.read_bytes(addr, off or 0, n) end end
 
 -- Guarded WRITES. Same SEH guard as reads (a bad address is a no-op returning false).
