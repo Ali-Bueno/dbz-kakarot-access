@@ -33,6 +33,10 @@ local Fishing = {}
 -- (the default 2-tick debounce added ~200 ms before anything could speak).
 Fishing.confirm_ticks = 1
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Fishing.keyhelp_auto = false
+
 -- Re-enable to append tail samples + button internals to dumps/dump_fishing.txt
 -- (how the fishing offsets in native_offsets.lua were found). OFF since the full
 -- flow was verified end-to-end in-game (user landed a fish, 2026-07-03).

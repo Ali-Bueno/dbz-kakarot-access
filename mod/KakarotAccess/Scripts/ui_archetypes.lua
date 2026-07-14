@@ -184,12 +184,18 @@ local PLATBTN_TOKEN = {  -- EATPlatBtnId -> canonical Btn_ token (AT_enums.hpp)
     [11] = "Left", [12] = "Up", [13] = "Right", [14] = "Down",
     [19] = "Start", [20] = "Back",
 }
--- Xbox-layout face buttons by glyph index. The KeyConfig asset's IconName pairing
--- gave a WRONG answer live (glyph index 3 resolved to "B", and a press INSIDE the
--- timing zone still failed — dump_fishing 2026-07-03), so the platform-standard
--- order is the primary source (this game renders Xbox glyphs, PLAT_X, on the
--- user's pad) and the asset pairing is only a fallback for exotic devices.
-local FACE_TOKEN = { [0] = "A", [1] = "B", [2] = "X", [3] = "Y" }
+-- Face buttons by glyph index (EATPlatBtnId Btn00..Btn03), spoken in the Xbox names the
+-- game DRAWS. The enum itself is PlayStation-flavoured (its shoulders are BtnR1/BtnL1 and
+-- it has BtnOptions/BtnTouchPad — AT_enums.hpp), and it enumerates the faces in the
+-- Japanese order RIGHT, BOTTOM, LEFT, TOP = ○ ✕ □ △, which in Xbox names is B A X Y.
+-- CONFIRMED live off the keyhelp bar (dump_keyhelp 2026-07-14): the item menu's "Usar"
+-- (= A on the pad) carries index 1 and "Atrás" (= B) carries index 0 — so the A/B pair is
+-- the mirror of the naive Xbox order, while index 2/3 (X/Y) already matched. Fixing this
+-- also corrects the item quick-slot palette, whose four slots ARE these four buttons.
+-- The KeyConfig asset's IconName pairing is NOT a substitute (it resolved index 3 to "B"
+-- and a press inside the timing zone still failed — dump_fishing 2026-07-03); it stays a
+-- fallback for exotic devices only.
+local FACE_TOKEN = { [0] = "B", [1] = "A", [2] = "X", [3] = "Y" }
 
 -- Canonical Btn_ token for a raw EATPlatBtnId value: semantic ids directly; the
 -- indexed face buttons (Btn00..03) via the standard layout, then the asset pairing.

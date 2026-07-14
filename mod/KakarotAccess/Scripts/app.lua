@@ -10,6 +10,7 @@
 
 local Registry = require("ui_registry")
 local Keyhelp = require("keyhelp")
+local KeyhelpWatch = require("keyhelp_watch")
 local HeaderReader = require("header_reader")
 local Speech = require("speech")
 local I18n = require("i18n")
@@ -183,6 +184,14 @@ function App.read_keyhelp()
         if require("transition").active() then return end
         Keyhelp.announce()
     end)
+end
+
+-- Toggle the AUTOMATIC action announcement (the screen's choices, read on entry and when
+-- they change — keyhelp_watch.lua). F2 (above) keeps reading the bar on demand either way.
+function App.keyhelp_auto_toggle()
+    local on = KeyhelpWatch.toggle()
+    Speech.say(I18n.t(on and "keyhelp_auto_on" or "keyhelp_auto_off"), true)
+    return on
 end
 
 -- Announce an overworld menu section from its EXCmnHeaderFontType enum value. Called by the

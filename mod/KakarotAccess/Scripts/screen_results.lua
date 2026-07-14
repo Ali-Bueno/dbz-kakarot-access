@@ -22,6 +22,10 @@ local I18n = require("i18n")
 
 local Results = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Results.keyhelp_auto = false
+
 local ann = Core.make_announcer()   -- unused for speech (incremental), kept for API symmetry
 local host = nil
 local tick = 0

@@ -15,6 +15,10 @@ local A = require("ui_archetypes")
 
 local Loading = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Loading.keyhelp_auto = false
+
 local ann = Core.make_announcer()
 local loadC = nil
 local tick = 0

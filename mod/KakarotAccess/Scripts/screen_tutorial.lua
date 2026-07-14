@@ -23,6 +23,10 @@ local Tutorial = {}
 -- minimap gate). See nav_tracker's gated().
 Tutorial.nav_mute = false
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Tutorial.keyhelp_auto = false
+
 local ROW_COUNT = 9    -- Battle_Tips_List_00..08
 local SCAN_EVERY = 3
 

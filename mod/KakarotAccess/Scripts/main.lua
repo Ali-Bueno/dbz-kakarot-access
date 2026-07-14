@@ -81,8 +81,12 @@ RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, function() App.nav_companion() en
 -- Scripts/dumps/dump_nav_targets.txt for offline diagnosis.
 RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)
 
--- F2: read the on-screen button prompts (the contextual keyhelp bar).
+-- F2: read the on-screen button prompts (the contextual keyhelp bar) in full.
 RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)
+
+-- Ctrl+F2: toggle the AUTOMATIC announcement of a screen's actions ("X: assign to a slot",
+-- "Y: skill tree"), spoken on entering a menu and whenever they change. F2 still works.
+RegisterKeyBind(Key.F2, { ModifierKey.CONTROL }, function() App.keyhelp_auto_toggle() end)
 
 -- F10: read the current quest objective text ("investigate the house", "cook", …).
 -- The objective is ALSO announced automatically whenever it changes (quest_objective.lua);

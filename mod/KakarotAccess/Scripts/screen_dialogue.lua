@@ -25,6 +25,10 @@ local Dialogue = {}
 -- nav tracker checks this flag; every other adapter (menus, dialogs) keeps muting.
 Dialogue.nav_mute = false
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Dialogue.keyhelp_auto = false
+
 local ann = Core.make_announcer()
 local tick = 0
 local cached = nil   -- current "Speaker: line" computed in is_active, reused by update

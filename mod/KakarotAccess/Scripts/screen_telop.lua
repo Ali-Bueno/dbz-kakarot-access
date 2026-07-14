@@ -19,6 +19,10 @@ local Telop = {}
 
 Telop.nav_mute = false
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Telop.keyhelp_auto = false
+
 local tick = 0
 local seen = {}      -- text -> true while its banner is still on screen
 local pending = {}   -- unspoken texts, in discovery order

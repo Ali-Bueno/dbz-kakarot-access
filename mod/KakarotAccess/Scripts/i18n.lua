@@ -90,6 +90,8 @@ local S = {
         board_socket = "hueco %d de %d",
         reader_on = "Lector de menús activado",
         reader_off = "Lector de menús desactivado",
+        keyhelp_auto_on = "Anuncio de acciones activado",
+        keyhelp_auto_off = "Anuncio de acciones desactivado",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Radar de misión activado",
         nav_off = "Radar de misión desactivado",
@@ -288,6 +290,8 @@ local S = {
         board_socket = "socket %d of %d",
         reader_on = "Menu reader on",
         reader_off = "Menu reader off",
+        keyhelp_auto_on = "Action announcements on",
+        keyhelp_auto_off = "Action announcements off",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Quest radar on",
         nav_off = "Quest radar off",

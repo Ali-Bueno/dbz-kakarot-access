@@ -21,6 +21,10 @@ local A = require("ui_archetypes")
 
 local Choice = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Choice.keyhelp_auto = false
+
 -- Diagnostics: if the NPC response menu still reads wrong/silent, this writes what it
 -- found (window class + message, each row's class/label/hover) to dumps/dump_choice.txt
 -- on every prompt change. Turn OFF once confirmed working in-game.

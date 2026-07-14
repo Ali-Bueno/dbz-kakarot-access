@@ -7,6 +7,7 @@
 
 local Core = require("ui_core")
 local Transition = require("transition")
+local KeyhelpWatch = require("keyhelp_watch")
 
 local Registry = {}
 
@@ -32,6 +33,7 @@ local function step()
     if Transition.active() then
         if active and active.reset then active.reset() end
         active, pending, pending_n = nil, nil, 0
+        KeyhelpWatch.screen_changed(nil)
         return
     end
 
@@ -55,11 +57,17 @@ local function step()
         if active and active.reset then active.reset() end
         if cur and cur.reset then cur.reset() end
         active, pending, pending_n = cur, nil, 0
+        -- New context: the screen's actions ("X: assign", "Y: skill tree") are read once,
+        -- queued behind its own announcement (keyhelp_watch.lua).
+        KeyhelpWatch.screen_changed(cur)
     else
         pending, pending_n = nil, 0
     end
 
-    if active then active.update() end
+    if active then
+        active.update()
+        KeyhelpWatch.update()
+    end
 end
 
 function Registry.start()
@@ -71,6 +79,7 @@ end
 
 function Registry.stop()
     enabled = false
+    KeyhelpWatch.screen_changed(nil)   -- reader off: nothing pending, nothing remembered
 end
 
 function Registry.is_enabled() return enabled end

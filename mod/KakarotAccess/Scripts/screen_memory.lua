@@ -13,6 +13,10 @@ local A = require("ui_archetypes")
 
 local Memory = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Memory.keyhelp_auto = false
+
 local ann = Core.make_announcer()
 local host = nil
 local tick = 0

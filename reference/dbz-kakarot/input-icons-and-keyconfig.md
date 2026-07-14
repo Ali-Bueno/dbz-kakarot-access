@@ -76,6 +76,51 @@ Two id shapes:
   uses a **proprietary CFramework input system**. Reading the literal key would need native RE of the exe.
   → Keyboard config tabs can announce the controller-equivalent button, not the literal key.
 
+## Face-button GLYPH INDEX order (`EATPlatBtnId`) — the A/B mirror trap
+
+The prompt glyphs (`UAT_UIXcmnPlatBtn`, incl. every entry of the keyhelp bar) carry no semantic id at
+all in most screens — `DynamicAssignInputControllerId` and `CurrentActionID` come back EMPTY, and the
+only thing that answers is the **pad index** (`KeyIdsForPad` / the indexed texture `Btn00..03`). So the
+index→button table is the whole ballgame, and it is **not** the naive Xbox order:
+
+`EATPlatBtnId` is a PlayStation enum (`BtnR1`/`BtnL1`, `BtnOptions`, `BtnTouchPad` — AT_enums.hpp) and it
+enumerates the faces in the Japanese order **right, bottom, left, top** = ○ ✕ □ △:
+
+| index | physical | Xbox name (what the game DRAWS) |
+|---|---|---|
+| `Btn00` = 0 | right | **B** |
+| `Btn01` = 1 | bottom | **A** |
+| `Btn02` = 2 | left | X |
+| `Btn03` = 3 | top | Y |
+
+Confirmed live (dump_keyhelp 2026-07-14): the item menu's "Usar" (the pad's A) carries index **1** and
+"Atrás" (B) carries index **0**. Only the A/B pair mirrors — X/Y already line up, which is exactly why a
+half-checked fix ("just swap them all") is wrong. The KeyConfig asset's `IconName` pairing does NOT
+substitute for this table (it mis-resolved index 3 → "B", dump_fishing 2026-07-03). Table lives in
+`ui_archetypes.lua` (`FACE_TOKEN`) and is shared by the keyhelp bar, the QTE/fishing prompts and the item
+quick-slot palette (whose four slots ARE these four buttons).
+
+## The keyhelp bar (`Xcmn_Keyhelp_C`) — reading the row in the order it's shown
+
+The bar exposes 9 index-aligned pairs (`Txt_Keyhelp_01..09` + `Xcmn_Btn_Plat_01..09`). **The number is
+a slot id, not a place in the row**: the bar is a CanvasPanel whose row the native class lays out itself
+(`UAT_UIKeyHelp`: `KeyHelpRightMargin`, `KeyHelpItemGapX`), so reading in index order announces the row
+in an order matching nothing on screen (in the character menu it put "Atrás" first and "Paleta de Súper
+Ataque" last — the reverse of what the player sees).
+
+Getting the real position, in the order that actually works (`keyhelp.lua widget_x`):
+1. `widget.Slot:GetPosition()` — a `CanvasPanelSlot`; **this is the one that answers**;
+2. `Slot.LayoutData.Offsets.Left` — reads back **0.0 on every entry** through reflection, so it is
+   useless here (a nested-struct property read that returns a zeroed struct — don't trust it alone);
+3. `widget.RenderTransform.Translation.X`, then the same probes up the ancestors (a leaf can sit at 0
+   inside a container that carries the placement).
+
+Sort by that X and you get the on-screen left-to-right order. If ANY entry can't be placed, don't sort at
+all — a partial sort interleaves placed and unplaced entries into an order matching nothing.
+
+Also: the direction/stick glyphs (`Btn_Key_Ud/Lr/All`, `Stk_*`) are *navigation*, not choices — an
+accessibility reader should drop them and speak only the real button presses.
+
 ## Platform glyph sets
 
 `PLAT_X` = **Xbox** glyph set (`/Game/Art/UI/Xcmn/PLAT_X/…`), `PLAT_P` = PlayStation, `PLAT_W` = other.

@@ -22,6 +22,10 @@ local Toasts = {}
 
 Toasts.nav_mute = false
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Toasts.keyhelp_auto = false
+
 local RECENT_S = 8     -- seconds before an identical toast line may re-announce
 local BAR_COUNT = 5    -- Info_Log_Bar00..04 (Info_Log.hpp)
 

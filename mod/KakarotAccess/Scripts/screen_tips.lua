@@ -20,6 +20,10 @@ local Speech = require("speech")
 
 local Tips = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Tips.keyhelp_auto = false
+
 local WINDOWS = { "Tips_Win00", "Tips_Win01" }
 local LAYOUTS = {
     { canvas = "Canvas_TextOnly",     box = "TextBox_TextOnly" },

@@ -14,6 +14,10 @@ local A = require("ui_archetypes")
 
 local Choice = {}
 
+-- Passive / time-critical reader: excluded from the automatic keyhelp read
+-- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
+Choice.keyhelp_auto = false
+
 local ann = Core.make_announcer()
 local win = nil
 local tick = 0
