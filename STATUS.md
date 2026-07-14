@@ -53,73 +53,59 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
-**Skill Palette committed (0b6e623, slots + groups verified); ASSIGN submenu v2 + CRASH FIX pending
-verify (uncommitted).** 2026-07-13 in-game CRASH root-caused from UE4SS.log: NOT the skill reader —
-`nav_tracker` steer_around → `raycast.lua` LineTrace calls raise a UFunction param-count Lua error
-(expected 13, received 11) that pcall CATCHES, so the abort fuse never trips and the call retried every
-tick until UE4SS died with a fatal ACCESS_VIOLATION. Fix: `RAYCAST_AVOIDANCE = false` in nav_tracker
-(ray_api() returns nil; guidance goes direct) — raycast was already sentenced dead on this game
-(uncatchable aborts Area02/04). LESSON: a pcall-CAUGHT reflected-call error retried per-tick can still
-crash the game; fuse on Lua errors too if raycast is ever revisited.
-ASSIGN mode v4 (movement state machine). Dump-proven (3rd capture, 2026-07-13): there is NO static focus
-signal — the list is a permanent panel, `AllCurs` renders in BOTH modes (v3 dead: everything read as
-assign again), the slot plate keeps its border while assigning. What discriminates is which cursor
-MOVES: slot browsing sweeps the plate border with `GetSelectValue` frozen; in assign mode
-**GetSelectValue comes ALIVE** (idx 0→1→2 with the plate frozen — earlier "dead list" captures were all
-slot-mode) and the list ROW is cursor-synchronous while the PANE lags (row=Martillo/pane=Masenko line).
-v4: mode = whichever cursor moved last (slot_moved → slots, idx_moved → assign); assign name = list row
-(pane only for gated level/Ki/desc); `ann:reset()` on mode flip. Known cosmetic limit: pressing A/B
-itself is silent until the first cursor move (no signal exists for the press itself).
-"No entry announcement" ROOT-CAUSED via a speech-sink tap (`speech.lua` DEBUG_LOG, now off): entry
-announcements WERE sent but got CUT 0.6–0.8 s later — partly the user's fast first move, partly OUR
-re-announce when the pooled plate border settles onto the real slot after the opening animation (one
-entry spoke a stale leftover slot). Fixed: entry SETTLE_TICKS=3 debounce (~300 ms; drop to 2 if entry
-feels slow) + group title suppressed when equal to the category text ("Súper Ataque, Súper Ataque").
-Entry VERIFIED reading 2026-07-13. Both debug taps OFF; everything committed.
+**NEXT SESSION = GHIDRA: recover the per-skill OWNED LEVEL (skill-tree lock, the one open gap).**
+Goal: given the hovered node (skill display name + level from the reflected detail pane), know whether
+that node is acquired / learnable / locked — without needing to browse through the level-1 node first
+(today's propagation limit, see the Skill Tree row).
 
-**Menu latency — REDESIGNED to event-driven detection (2026-07-13, uncommitted, PENDING verify).**
-History: sub-screen entries paid detection (scan budget) + `CONFIRM_TICKS=2` + settle (400 ms–1 s;
-items had a latent ~10 s stale-cache case). First fix round (confirm_ticks=1 on deliberate sub-screens,
-saveload SETTLE 2→1, churn-mark on Start_Item_C) cut entry cost but the churn-mark REGRESSED navigation
-(per-tick re-scans saturating the budget — the known churn hazard). v2 (the better architecture, per
-our own UE4SS reference §2): **`NotifyOnNewObject("/Script/UMG.UserWidget")` feeds the ui_core caches**
-— constructed widgets are stashed by an ONCE-armed notify (survives Ctrl+Shift+R; handler via `_G`,
-transition.lua pattern) and drained into `all_cache`/backoff-clear each poll tick (newest first), so a
-(re)created screen is detectable within ~1 tick with ZERO extra scans. Both `mark_churning` call sites
-REMOVED (mechanism kept as documented fallback); `REFRESH_EVERY` 100→300 (periodic re-scan now only a
-safety net); pending feed wiped on transition (freed-object probes abort). confirm_ticks=1 + SETTLE=1
-kept. **v2.1 (2026-07-14)**: first round verified skill palette fast but Save/Load + items still slow —
-two feed holes, both fixed: (1) exact-name matching missed caches keyed by NATIVE BASE names
-(`AT_UIStartSaveLoad` — a constructed instance reports its blueprint class), now the drain feeds every
-tracked key along the CLASS CHAIN (`GetSuperStruct` walk, depth-capped 12); (2) the notify base was
-`/Script/UMG.UserWidget`, which never delivers the non-UserWidget `CFUIMultiLineTextBox` pool behind
-detail panes (items' text boxes invisible until the 30 s refresh) — now `/Script/UMG.Widget`
-(guard flag `__KakarotWidgetNotifyArmedV2`; a stale narrow notify after hot reload double-delivers,
-harmless). **VERIFIED in-game 2026-07-14 (nav fluid, all entries fast) — committed & pushed (14ac601);
-the rule is now in CLAUDE.md §8: new adapters must use the event-driven cache, never per-tick scans.**
+Ready-made context (do NOT re-derive):
+- Reflection is EXHAUSTED (7 in-game capture rounds, 2026-07-14). `USkillManager` (UActorComponent) and
+  `USkillTree` expose ZERO reflected functions; the tree cursor's padlock is the only lock signal and it
+  only marks a skill's entry node; panels are not identifiable (covers always on, icons are anonymous
+  MIDs); no readable panel index/pointer/position exists.
+- The DATA, from the CXX dump: `USkillManager` (size 0x140) holds `SkillDataTable` 0x100,
+  `SkillTreeDataTable` 0x108, `SkillPaletteDataTable` 0x110, `SkillTree` 0x130, **`USkillSave* SkillSave`
+  0x138**. `struct FSkillSaveInfo` has `TArray<FName> OpenSkillTreeId` (+0xF0) and
+  **`TArray<FName> HaveSkillTreeId` (+0x100)** = the ACQUIRED node ids. `struct FSkillTreeDataTable`
+  (a DataTable row) = `CHARACTER_TYPE Character` 0x18, `FName Skill` 0x20, `int32 SkillLevel` 0x28,
+  `FName OpenSkillTree1/2/3`, **`int32 CharacterLevel` 0x58** (the "need level 10" gate), `int32 cost` 0x70.
+- Plan: unpack the exe with Steamless first (SteamStub — see [[dbz-kakarot-decompilation-setup]]), then in
+  Ghidra find where `USkillSave` stores per-character `FSkillSaveInfo` (offset inside the 0x19750 blob) and
+  how a skill id maps to its tree rows. Read it at runtime through `mem_bridge` (the hybrid pattern already
+  used for saveload/items native flags). The BLOCKER to solve is the mapping **localized display name →
+  skill FName id** (the reader only has the display name): candidates = the SkillDataTable rows (reflected
+  UDataTable: row name = FName id, and a row field likely holds the localization key), or reading the
+  hovered node's id straight from the tree widget's private memory (cursor grid coords are at
+  `tree+0x15F8/+0x15FC`, grid×95 — a per-node record may sit near them).
+- Once the owned level is readable: announce "bloqueada" / "requiere nivel N" on EVERY node regardless of
+  the browsing path, and drop the `locked_skills` name-propagation heuristic in `screen_skilltree.lua`.
 
-Backlog (older pending): verify Quest objective HUD F10 + reactive (`quest_objective.lua`); radar 2.0
-batch + "Caza" category + R2 picker hook log; cooking menu re-verify; "View Controls" jumbled read.
-Niceties: skill palette plates 4/7 (structural, unreachable so far); assign-mode A/B press silence.
-F10 quest read: no Lua errors, bind present in main.lua — most likely the game wasn't fully restarted
-(Ctrl+Shift+R doesn't re-run main.lua); reactive reader only speaks on objective CHANGE, so a pre-existing
-objective staying on screen is expected silence. Re-test F10 after a full game restart.
+## Backlog
+All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
+feature was derived lives in PROGRESS.md and in the git log; this list is only what is still OPEN.
 
-Also still pending: verify **Quest objective HUD** (`quest_objective.lua`; F10 needs a game RESTART).
-And older backlog: "Caza"/Hunt radar category verify, R2 picker hook log, radar 2.0 batch.
+- **Quest objective HUD** (`quest_objective.lua`) — pending verify. The F10 on-demand read needs a FULL
+  game restart (Ctrl+Shift+R does not re-run main.lua, where the keybind is registered); no Lua errors in
+  the log and the bind is present, so most likely it was just never restarted. The reactive reader only
+  speaks when the objective CHANGES — an objective already on screen staying put is expected silence.
+- **Radar 2.0 batch** — sites/enemies/collectibles categories + the "Caza"/Hunt category: built, never
+  verified in-game. R2 target picker: check the boot log for `hooked=true`.
+- **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
+- **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
+- Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the
+  A/B press itself is silent until the first cursor move (no signal exists for the press).
 
 ## Known issues / open questions
-- F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught
-  `brush_of` "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a
-  3-failure fuse in `discover.lua brush_of`; avoid F7 during screen transitions/animations.
-- INTERMITTENT boot crash (2026-07-14, AV 0x10 right after "Event loop start", first map load):
-  the event feed's drain probed widgets whose classes the async loader was still linking.
-  HARDENED (uncommitted, pending boots to confirm): drain skips + wipes while `Transition.active()`,
-  1-tick quarantine (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM=2048 drop. **If any
-  boot crash recurs after this → revert the whole notify feed to polling (plan B).**
-- Cooking menu cursor read pending re-verify — confirm `dumps/dump_cooking.txt` shows the frozen-index diagnosis, then set `DEBUG=false`.
-- R2 picker: if boot log shows `hooked=false`, pad blocking is off (read-only) — needs a GetProcAddress/inline-hook fallback.
-- "View Controls" (from battle pause) reads jumbled and pause doesn't re-announce on return.
+- INTERMITTENT boot crash (2026-07-14, AV 0x10 right after "Event loop start", during the first map
+  load): the event feed's drain probed widgets whose classes the async loader was still linking.
+  HARDENED (committed): the drain skips + wipes while `Transition.active()`, every stashed widget waits
+  one tick (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM=2048 drop. **If a boot crash
+  recurs → revert the notify feed to polling (plan B), stability over latency.**
+- F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught `brush_of`
+  "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a 3-failure fuse in
+  `discover.lua brush_of`; still, avoid F7 during screen transitions/animations.
+- R2 picker: if the boot log shows `hooked=false`, pad blocking is off (read-only) — needs a
+  GetProcAddress/inline-hook fallback.
 - After any game patch, re-verify offsets in `native_offsets.lua` via the F4 probe.
 
 **Detailed history:** see PROGRESS.md.
