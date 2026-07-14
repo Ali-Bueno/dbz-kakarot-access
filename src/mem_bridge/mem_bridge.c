@@ -161,6 +161,18 @@ static int l_module_base(lua_State *L) {
     return 1;
 }
 
+/* thread_id() -> integer : the OS thread this call is running on (a TEB read, free).
+ *
+ * Diagnostic for the intermittent AV inside UE4SS.dll (2026-07-14): UE4SS does not document
+ * which thread it delivers a NotifyOnNewObject callback on. If it runs on the engine's ASYNC
+ * LOADING thread, our Lua callback executes concurrently with the poll loop on the same
+ * lua_State — which corrupts it, and would explain a crash at a garbage address during a map
+ * load. Comparing this inside the callback against its value on the game thread answers it. */
+static int l_thread_id(lua_State *L) {
+    lua_pushinteger(L, (lua_Integer)GetCurrentThreadId());
+    return 1;
+}
+
 static const luaL_Reg mem_funcs[] = {
     {"read_i8",  l_read_i8},   {"read_u8",  l_read_u8},
     {"read_i16", l_read_i16},  {"read_u16", l_read_u16},
@@ -175,6 +187,7 @@ static const luaL_Reg mem_funcs[] = {
     {"write_float", l_write_float}, {"write_double", l_write_double},
     {"readable", l_readable},
     {"module_base", l_module_base},
+    {"thread_id", l_thread_id},
     {NULL, NULL}
 };
 

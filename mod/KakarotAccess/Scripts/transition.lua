@@ -80,12 +80,25 @@ _G.__KakarotTransitionBegin = M.begin_transition
 
 -- Install the GameMode-construction notify. Called once from main.lua (NOT on hot
 -- reload); guarded so a second call is a no-op. Returns true when installed.
+-- This is now the ONLY NotifyOnNewObject left in the mod: the widget feed was removed on
+-- 2026-07-14 because UE4SS delivers such callbacks on the engine's async LOADING thread too,
+-- and Lua on a foreign thread corrupts the shared lua_State (see the long note in ui_core).
+-- A GameMode is an ACTOR — actors are spawned on the game thread, not by the package loader —
+-- so this one should be safe, and it fires a handful of times per map instead of thousands of
+-- times per load. "Should" is not "is", so it reports its own thread in the line it already
+-- prints: if that ever says FOREIGN, this notify has to go the same way as the feed and the
+-- gate must be driven from a game-thread poll instead.
 function M.install()
     if _G.__KakarotTransitionHooked then return true end
     local ok, err = pcall(function()
         NotifyOnNewObject("/Script/Engine.GameModeBase", function(_gm)
             -- _gm is half-constructed — never touch it. Pure Lua only.
-            print("[KakarotAccess] New game mode — transition gate ON\n")
+            local tid = require("mem").thread_id()
+            local game = _G.__KakarotGameTid
+            local where = (tid == nil or game == nil) and "?"
+                or (tid == game and "game thread" or "FOREIGN!")
+            print(string.format("[KakarotAccess] New game mode — transition gate ON (notify thread: %s)\n",
+                where))
             pcall(_G.__KakarotTransitionBegin)
         end)
     end)

@@ -23,10 +23,8 @@ local cached_name = nil   -- selected topic label, computed once per tick in is_
 local function selected_topic()
     local list
     if not pcall(function() list = host.UIXlistTutorial end) or not Core.valid(list) then return nil end
-    local plates
-    if not pcall(function() plates = list.ListPlateCtn end) or not plates then return nil end
-    local num
-    if not pcall(function() num = plates:GetArrayNum() end) or type(num) ~= "number" then return nil end
+    local plates, num = Core.array_of(list, "ListPlateCtn")
+    if not plates then return nil end
     for i = 1, num do
         local row
         if pcall(function() row = plates[i] end) and Core.valid(row) then

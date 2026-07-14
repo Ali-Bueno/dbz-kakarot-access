@@ -501,8 +501,9 @@ local function best_candidate(px, py, pz)
         local mm = minimap()
         if Core.valid(mm) then
             pcall(function()
-                local arr = mm.MapIconList
-                for i = 1, #arr do
+                local arr, n = Core.array_of(mm, "MapIconList")   -- raw #arr = uncatchable throw
+                if not arr then return end
+                for i = 1, n do
                     local icon = arr[i]
                     if Core.valid(icon) then
                         local ta = icon.TargetActor
@@ -657,12 +658,13 @@ local function compute_route(pawn, px, py, pz, tx, ty, tz)
         local e = project_to_nav(navsys, pawn, tx, ty, tz, mesh) or { x = tx, y = ty, z = tz }
         local path = navsys:FindPathToLocationSynchronously(pawn,
             { X = s.x, Y = s.y, Z = s.z }, { X = e.x, Y = e.y, Z = e.z }, mesh or pawn, nil)
-        -- NOTE: we don't call the path's reflected IsValid() — UE4SS shadows it with
-        -- its own UObject validity check. An unusable path just has <2 PathPoints.
-        if not path then return nil end
-        local arr = path.PathPoints
-        local n = #arr
-        if n < 2 then return nil end
+        -- The path is a REFLECTED NavigationSystem result and level streaming can hand back
+        -- one whose object is already dead — reading .PathPoints or #arr on it is the
+        -- uncatchable C++ throw that crashed free-roam (2026-07-14; pcall does NOT catch it,
+        -- see Core.array_of). So validate the path (UE4SS-shadowed IsValid) and the array
+        -- before touching its length. An unusable path just yields <2 points.
+        local arr, n = Core.array_of(path, "PathPoints")
+        if not arr or n < 2 then return nil end
         local out = {}
         for i = 1, n do
             local p = arr[i]
@@ -1115,8 +1117,8 @@ local function aim_watch(pawn, px, py, pz)
     pcall(function()
         local comp = pawn.LockonList
         if comp and comp:IsValid() then
-            local arr = comp.m_xActors
-            if arr and #arr > 0 then
+            local arr, n = Core.array_of(comp, "m_xActors")   -- raw #arr here is the uncatchable throw
+            if arr and n > 0 then
                 local a = arr[1]
                 if a and a:IsValid() then locked = a end
             end
@@ -2088,8 +2090,9 @@ function Nav.list_targets()
     local mm = minimap()
     if Core.valid(mm) then
         pcall(function()
-            local arr = mm.MapIconList
-            for i = 1, #arr do
+            local arr, n = Core.array_of(mm, "MapIconList")   -- raw #arr = uncatchable throw
+            if not arr then return end
+            for i = 1, n do
                 local icon = arr[i]
                 if Core.valid(icon) then
                     local ta = icon.TargetActor
@@ -2453,8 +2456,8 @@ function Nav.list_targets()
         pcall(function()
             local ic = pawn.InteractComponent
             if not Core.valid(ic) then pr[#pr + 1] = "  InteractComponent: nil" return end
-            local n = 0
-            pcall(function() n = #ic.TalkObjectArray end)
+            local _, n = Core.array_of(ic, "TalkObjectArray")
+            n = n or 0
             pr[#pr + 1] = string.format("  InteractComponent.TalkObjectArray: %d", n)
             pcall(function()
                 for i = 1, n do
@@ -2726,12 +2729,13 @@ function Nav.dump()
         -- Regular minimap icons (the fallback source): list every entry that has a
         -- typed map-icon component; count the untyped rest.
         if Core.valid(mm) then
-            local ok, cnt = pcall(function() return #mm.MapIconList end)
-            f:write("radar.MapIconList: " .. tostring(ok and cnt or "unreadable") .. "\n")
+            local iconarr, cnt = Core.array_of(mm, "MapIconList")
+            f:write("radar.MapIconList: " .. tostring(iconarr and cnt or "unreadable") .. "\n")
             pcall(function()
-                local arr = mm.MapIconList
+                local arr, n = Core.array_of(mm, "MapIconList")
+                if not arr then return end
                 local untyped = 0
-                for i = 1, #arr do
+                for i = 1, n do
                     local icon = arr[i]
                     if Core.valid(icon) then
                         local ta = icon.TargetActor

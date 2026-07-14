@@ -106,12 +106,18 @@ Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
     require("native_offsets").itemMenu.hasItems))   -- native "category has items" flag → announce empty
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
     function() return I18n.startlist(1) end))                       -- Dragon Balls
-Registry.register(require("screen_characters"))                    -- Characters
 -- Skill Palette / Super Attack equip (opened from a character): slot plates + detail pane.
 Registry.register(require("screen_skillcustom"))
 -- Skill Tree / learn super attacks (Y from the character menu). AFTER the palette: the
 -- palette opens on top of the tree and the tree can stay on_screen underneath.
 Registry.register(require("screen_skilltree"))
+-- Character STATUS page (confirm on a character): the stats sheet. It sits BELOW the palette
+-- and the tree — X/Y open those OVER it while it stays on_screen underneath — and ABOVE the
+-- Characters list it opened from, which likewise stays on_screen behind it. Kept in a local:
+-- the F11 keybinds step through its stat blocks.
+local StatusScreen = require("screen_status")
+Registry.register(StatusScreen)
+Registry.register(require("screen_characters"))                    -- Characters list
 Registry.register(require("screen_party"))                         -- Party
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"))
@@ -133,6 +139,7 @@ function App.start()
     RadarMenu.start()
     Battle.start()
     MapScreen.start()
+    StatusScreen.start()
     QuestObjective.start()
 end
 
@@ -142,6 +149,7 @@ function App.stop()
     RadarMenu.stop()
     Battle.stop()
     MapScreen.stop()
+    StatusScreen.stop()
     QuestObjective.stop()
 end
 
@@ -167,6 +175,16 @@ function App.nav_dump() Nav.dump() end
 -- F10: read the current quest objective text on demand (kept here so quest_objective
 -- stays hot-reloadable; the keybind in main.lua only delegates).
 function App.read_objective() QuestObjective.read() end
+
+-- F11 / Shift+F11: walk the character status page's stat blocks (HP, Ki, the five attributes),
+-- reading one at a time. Touches live widgets, so it runs on the game thread and stays inert
+-- during a level transition (same teardown-abort risk as the loops). Silent off that screen.
+function App.status_step(dir)
+    ExecuteInGameThread(function()
+        if require("transition").active() then return end
+        StatusScreen.step(dir)
+    end)
+end
 
 -- Toggle the menu reader and announce the new state in the game's language. Announced
 -- here (not in main.lua) so the i18n layer stays reloadable.

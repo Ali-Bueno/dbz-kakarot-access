@@ -14,6 +14,7 @@
 
 local Speech = require("speech")
 local Transition = require("transition")
+local Mem = require("mem")   -- only for Mem.thread_id (stamping the game thread, see begin_scan_tick)
 
 local Core = {}
 
@@ -105,6 +106,26 @@ function Core.read_text(node)
     return nil
 end
 
+-- Guarded TArray access: returns the array and its length, or nil, nil.
+--
+-- `owner[name]` does NOT return nil when things are wrong — UE4SS hands back an INVALID
+-- RemoteObject (api-reference §1), and `arr:GetArrayNum()` on that is not a Lua error: UE4SS
+-- raises a C++ exception that pcall CANNOT catch and that takes the process down (0xe06d7363).
+-- That is exactly how the skill palette killed the game on 2026-07-14, once per tick until the
+-- throw escaped. So `arr ~= nil` is NOT a validity check — the array (a RemoteObject, so it has
+-- IsValid) and its owner must both be checked before the call. Every TArray read goes through
+-- here; never call GetArrayNum directly.
+function Core.array_of(owner, name)
+    if not Core.valid(owner) then return nil, nil end
+    local arr
+    if not pcall(function() arr = owner[name] end) or not Core.valid(arr) then return nil, nil end
+    local n
+    if not pcall(function() n = arr:GetArrayNum() end) or type(n) ~= "number" or n < 0 then
+        return nil, nil
+    end
+    return arr, n
+end
+
 -- First live (runtime, not archetype/CDO) instance of a class. PREFERS the shared
 -- top-level widget — a DIRECT child of the GameInstance (…BP_ATGameInstance_C_0.<Name>) —
 -- over a nested/pooled copy inside another screen's WidgetTree. This matters for classes
@@ -150,10 +171,12 @@ local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-
 -- Reset once per poll tick by Core.loop (before the step runs).
 local scan_budget = 0
 local SCANS_PER_TICK = 3
-local drain_new_widgets   -- fwd decl: the event-driven cache feed, defined after the caches
 function Core.begin_scan_tick()
     scan_budget = SCANS_PER_TICK
-    if drain_new_widgets then drain_new_widgets() end
+    -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
+    -- thread). It is the reference the remaining NotifyOnNewObject — the transition gate — checks
+    -- itself against, so we can never again ASSUME a callback is on the right thread.
+    if _G.__KakarotGameTid == nil then _G.__KakarotGameTid = Mem.thread_id() end
 end
 local function scan_allowed()
     if scan_budget <= 0 then return false end
@@ -179,11 +202,28 @@ end
 -- pick up any newly-created pooled instances. Callers still validity/visibility-check each
 -- returned widget, so stale entries are harmless. Returns the cached Lua array.
 local all_cache, all_next = {}, {}
-local REFRESH_EVERY = 300  -- ticks (~30s) between full re-scans of a class list. Pools are
-                           -- ~static AND newly constructed instances now arrive by EVENT
-                           -- (drain_new_widgets below), so the periodic re-scan is only a
-                           -- safety net — raised 100→300 (2026-07-13) to cut steady-state
-                           -- scan spikes felt as menu-navigation lag.
+local REFRESH_EVERY = 300  -- ticks (~30s) between re-scans of a class whose cached pool is
+                           -- ALIVE. A screen that merely CLOSED keeps its (collapsed)
+                           -- instances, so for the steady state this can stay slow and cheap.
+local DEAD_BACKOFF = 40    -- ticks (~4s) between scans for a class whose cached list holds NO
+                           -- live instance — a menu not opened yet, OR one destroyed on close.
+                           -- This is the whole re-detection mechanism now (the event feed is
+                           -- gone): a destroyed screen is re-found within ~4s of its recreation,
+                           -- and a class costs a scan only every ~4s, never per tick. It MUST be
+                           -- a plain fixed backoff: an earlier cut gave freshly-dead classes a
+                           -- 1s "fast lane" and forced a rescan the very next tick, and as a play
+                           -- session accumulated closed screens they all demanded scans at once,
+                           -- saturated the 3-per-tick budget, and starved live detection — the
+                           -- whole reader went sluggish the longer you played (2026-07-14).
+
+-- Does this cached list still hold anything live? Only ever called right after a scan (a screen
+-- class has a handful of pooled instances), never per tick over a long list.
+local function any_valid(list)
+    for i = 1, #list do
+        if Core.valid(list[i]) then return true end
+    end
+    return false
+end
 
 function Core.cached_all(cls_name, tick)
     local c = all_cache[cls_name]
@@ -194,151 +234,37 @@ function Core.cached_all(cls_name, tick)
         if not scan_allowed() then return c or {} end
         c = FindAllOf(cls_name) or {}
         all_cache[cls_name] = c
-        if tick then all_next[cls_name] = tick + REFRESH_EVERY end
+        -- Alive pool → slow idle refresh; nothing live (absent or destroyed) → the ~4s
+        -- re-detection cadence. One fixed cadence for both: no per-tick forcing anywhere,
+        -- so a session full of closed screens can never saturate the scan budget.
+        if tick then all_next[cls_name] = tick + (any_valid(c) and REFRESH_EVERY or DEAD_BACKOFF) end
     end
     return c
 end
 
--- Event-driven cache feed. NotifyOnNewObject hands us every UserWidget CONSTRUCTION
--- (subclasses included — ue4ss-api-reference §2), so a freshly (re)created screen enters
--- the caches within ONE poll tick: no FindAllOf, no churn re-scan, no REFRESH wait. This
--- is what makes sub-screen entry fast WITHOUT the per-tick scans that lagged navigation.
--- The notify is armed ONCE per session (registrations survive Ctrl+Shift+R); it reaches
--- the CURRENT module instance through _G, same pattern as transition.lua. The callback
--- only stashes the ref — classification + cache insertion happen on the next poll tick,
--- on the game thread (drain_new_widgets, called from Core.begin_scan_tick).
-local pending_new = {}                       -- table identity is PERMANENT (the armed
-_G.__KakarotOnNewWidget = function(w)        -- notify closes over _G, not over this local)
-    pending_new[#pending_new + 1] = w
-end
--- Base class /Script/UMG.Widget, NOT UserWidget: adapters also track non-UserWidget
--- widgets (the CFUIMultiLineTextBox pools behind detail panes), which a UserWidget
--- notify never delivers — that kept the inventory's text boxes invisible until the
--- 30 s refresh (2026-07-14). (After a hot reload an older, narrower notify may still
--- be armed alongside — duplicate deliveries are harmless, entries are validity-checked.)
-if not _G.__KakarotWidgetNotifyArmedV2 then
-    _G.__KakarotWidgetNotifyArmedV2 = true
-    NotifyOnNewObject("/Script/UMG.Widget", function(w)
-        local h = _G.__KakarotOnNewWidget
-        if h then h(w) end
-    end)
-end
-
--- Entries stashed by the notify wait ONE drain in `aged` before being probed: a widget
--- constructed by the ASYNC LOADER can have a class that is still mid-link, and probing it
--- immediately (GetClass/GetSuperStruct) races native data — the intermittent boot crash of
--- 2026-07-14 (AV right after "Event loop start", during the first map load). One poll
--- (~100 ms) is far beyond any link time. Same reason for the other two guards below:
--- never probe while the transition gate is on, and drop construction STORMS outright
--- (loads build thousands of objects; the periodic refresh net covers whatever we drop).
-local aged = {}
--- THROUGHPUT is what makes this feed work: the game constructs widgets in bursts of
--- thousands (any menu with pooled rows, not just the Skill Tree), so if the drain consumes
--- slower than the game produces, a PERMANENT backlog forms — and then the truncation below
--- throws away the NEWEST arrivals, which are precisely the screen the player just opened.
--- That is what left the skill palette / item menu waiting ~30 s for the refresh net on a
--- RE-entry while the first entry (empty caches, direct scan) was instant (2026-07-14; the
--- session log showed 30+ storms, backlogs up to 8167).
+-- REMOVED (2026-07-14): the event-driven cache feed (NotifyOnNewObject → stash → drain).
+-- DO NOT BRING IT BACK IN LUA. It is what crashed the game, twice.
 --
--- So the per-widget probe is kept CHEAP: a class's ancestor chain never changes, so it is
--- resolved once per CLASS and memoized. A widget then costs GetClass + a table lookup
--- instead of a 12-deep GetSuperStruct walk, which is what lets PROBE_CAP be this high.
-local PROBE_CAP = 1024    -- max widgets probed per tick (bounds reflected work)
-local STORM = 8192        -- last-resort backlog bound: keep the OLDEST, drop the tail
-local chain_cache = {}    -- class FName -> its ancestor chain, oldest-derived first
-
--- A tracked class's cached list grows by one on every construction, and pooled screens are
--- recreated all session, so a hot class (list rows, button glyphs) would grow without bound —
--- and adapters WALK these lists every tick. Keep them bounded: drop the dead entries first
--- (a recreated screen leaves its predecessor invalid), and only if it's still oversized cut
--- the OLDEST tail. Entries are inserted newest-first, so what survives is what's live now.
-local LIST_MAX = 256
-local function prune(list)
-    if #list <= LIST_MAX then return end
-    local keep = {}
-    for i = 1, #list do
-        local o = list[i]
-        if Core.valid(o) then keep[#keep + 1] = o end
-    end
-    for i = #list, 1, -1 do list[i] = nil end
-    local n = #keep < LIST_MAX and #keep or LIST_MAX
-    for i = 1, n do list[i] = keep[i] end
-end
-
--- The class chain of a constructed widget, memoized. nil if the class can't be read (an
--- async-loading class mid-link — the caller skips the widget; the refresh net covers it).
-local function class_chain(w)
-    local names
-    pcall(function()
-        local c = w:GetClass()
-        if not (c and c:IsValid()) then return end
-        local first = c:GetFName():ToString()
-        local hit = chain_cache[first]
-        if hit then names = hit return end
-        local out, depth = {}, 0
-        while c and c:IsValid() and depth < 12 do
-            out[#out + 1] = c:GetFName():ToString()
-            c = c:GetSuperStruct()
-            depth = depth + 1
-        end
-        chain_cache[first] = out
-        names = out
-    end)
-    return names
-end
-
-drain_new_widgets = function()
-    if Transition.active() then
-        for i = #aged, 1, -1 do aged[i] = nil end
-        for i = #pending_new, 1, -1 do pending_new[i] = nil end
-        return
-    end
-    local n = #aged
-    if n > STORM then
-        -- UMG constructs a screen's ROOT BEFORE its children, so the OLDEST entries are the
-        -- ones adapters key on — those are what we keep. (This must stay a LAST RESORT: with
-        -- a standing backlog it would drop the freshest screen, see the note above. If this
-        -- line starts logging again, the drain is too slow, not the queue too small.)
-        for i = n, STORM + 1, -1 do aged[i] = nil end
-        print(string.format("[KakarotAccess] widget storm: %d queued, kept the oldest %d\n", n, STORM))
-        n = STORM
-    end
-    local take = n < PROBE_CAP and n or PROBE_CAP
-    for i = 1, take do
-        local w = aged[i]
-        if Core.valid(w) then
-            -- Feed every tracked cache key along the CLASS CHAIN, not just the exact
-            -- class: adapters key caches by NATIVE BASE names too (AT_UIStartSaveLoad),
-            -- while a constructed instance reports its most-derived (blueprint) class —
-            -- the exact-name match missed those and Save/Load stayed slow (2026-07-14).
-            -- Newest first, so first_on_screen sees a recreated instance before a stale
-            -- one. Clearing an absent back-off lets cached_live re-scan promptly
-            -- (first_live must still run — it prefers the top-level instance).
-            local chain = class_chain(w)
-            if chain then
-                for j = 1, #chain do
-                    local cls = chain[j]
-                    local list = all_cache[cls]
-                    if list then
-                        table.insert(list, 1, w)
-                        prune(list)
-                    end
-                    if live_backoff[cls] then live_backoff[cls] = nil end
-                end
-            end
-        end
-    end
-    if take > 0 then
-        local m = #aged
-        for i = 1, m - take do aged[i] = aged[i + take] end
-        for i = m - take + 1, m do aged[i] = nil end
-    end
-    -- Ripen this tick's stash: probed no earlier than the NEXT drain.
-    for i = 1, #pending_new do
-        aged[#aged + 1] = pending_new[i]
-        pending_new[i] = nil
-    end
-end
+-- The idea was sound — a widget-construction notify fed the caches, so a reopened screen was
+-- detected within one tick with no FindAllOf. The flaw is not in the design but in WHERE the
+-- callback runs: UE4SS delivers it on the engine's ASYNC LOADING thread as well as the game
+-- thread. MEASURED, not assumed (mem_bridge.thread_id, 2026-07-14):
+--     widget notify thread(s): 5744 (FOREIGN!), 38620 (game thread) | game thread: 38620
+-- Any Lua on that foreign thread — even the two table writes the stash did — runs the SAME
+-- lua_State concurrently with the poll step: the allocator and the incremental GC race, and a
+-- userdata the game thread still holds gets freed/overwritten. The symptom was a cached widget
+-- that passed IsValid() and then reported a NULL UObject on the very next member call:
+--     Error: Tried calling a member function but the UObject instance is nullptr
+--     [C]: in method 'GetArrayNum' → screen_skillcustom.lua:92
+-- repeated every tick (the poisoned entry was inserted at the HEAD of the cached list, so it
+-- shadowed the real screen forever) until UE4SS's uncatchable C++ throw killed the process
+-- (0xe06d7363). The earlier AV at a garbage address was the same corruption, one draw earlier.
+--
+-- Two dead ends, so nobody retries them: wrapping the callback body in ExecuteInGameThread does
+-- NOT help (the wrapper itself is Lua, already running on the foreign thread), and neither does
+-- moving the stash into a mutex-protected C bridge (calling into C still executes Lua bytecode
+-- to get there). A safe event feed would have to be armed from a native UE4SS C++ mod, outside
+-- this lua_State — that is the only door left if the scan net below ever proves too slow.
 
 -- Drop every cached widget reference. Run at each map switch (transition.lua): some
 -- cached widgets are per-level (the field HUD family), and probing a freed one after
@@ -346,10 +272,6 @@ end
 Transition.on_begin("ui_core", function()
     live_cache, live_backoff = {}, {}
     all_cache, all_next = {}, {}
-    -- Widgets constructed by the DYING level must never be probed (even IsValid aborts):
-    -- wipe the pending feed AND the aged queue in place (table identities must survive).
-    for i = #pending_new, 1, -1 do pending_new[i] = nil end
-    for i = #aged, 1, -1 do aged[i] = nil end
 end)
 
 -- First currently on-screen instance of a class, or nil. Use this instead of cached_live
@@ -358,35 +280,75 @@ end)
 -- would lock onto one and go silent whenever the OTHER is the live one; this picks the live
 -- one each tick from the cached list (still cheap — the list is cached, not re-scanned).
 --
--- CHURN FORCE: some screens are DESTROYED and recreated on a quick close+reopen (e.g.
--- AT_UIStartSaveLoad). The cached list then still holds the OLD (collapsed) instance, so this
--- keeps returning nil — for up to REFRESH_EVERY (~10s) — even though a fresh scan would find
--- the NEW on-screen one (confirmed 2026-07-11: raw=2/onscreen=1 while this returned nil ~14s).
--- Fix: for a class we saw on-screen RECENTLY, force its list eligible for an immediate re-scan,
--- so the new instance is picked up within a tick or two. Bounded to recently-seen classes:
--- a screen closed long ago never forces, so idle/closed screens don't scan every tick (that
--- was the mistake of shortening REFRESH globally — it saturated the budget and lagged nav).
--- OPT-IN churn set. SUPERSEDED (2026-07-13) by the event-driven cache feed below, which
--- delivers recreated instances without any re-scan — no adapter opts in anymore. Kept as a
--- fallback: if a recreated screen ever fails to arrive via NotifyOnNewObject, its adapter
--- can re-opt-in with Core.mark_churning. (History: churn-forcing broadly lagged navigation —
--- many classes in the churn window saturated the scan budget with per-tick re-scans.)
-local churning = {}
-function Core.mark_churning(cls_name) churning[cls_name] = true end
-
-local last_onscreen = {}
-local CHURN_WINDOW = 100   -- ticks (~10s) after a churning class was last on-screen during which
-                           -- we force fast re-detection of a churned reopen.
+-- Re-detection is driven entirely by cached_all's backoff: a destroyed screen leaves its list
+-- with no live instance, so cached_all re-scans it on the ~4s DEAD_BACKOFF cadence and picks up
+-- the recreated one. This just walks the current list and returns the first on-screen instance.
+-- It does NOT force any re-scan — an earlier version did (all_next=0 for a dead-but-nonempty
+-- list) and that per-tick forcing, multiplied across every screen closed during a play session,
+-- saturated the scan budget and made the whole reader slow (2026-07-14).
 function Core.first_on_screen(cls_name, tick)
     for _, o in ipairs(Core.cached_all(cls_name, tick)) do
-        if Core.on_screen(o) then
-            if tick and churning[cls_name] then last_onscreen[cls_name] = tick end
-            return o
-        end
+        if Core.valid(o) and Core.on_screen(o) then return o end
     end
-    if tick and churning[cls_name] and last_onscreen[cls_name]
-       and (tick - last_onscreen[cls_name]) <= CHURN_WINDOW then
-        all_next[cls_name] = 0   -- recently on-screen but now missing: re-scan now (budget-gated)
+    return nil
+end
+
+-- ---- where a widget sits on screen -----------------------------------------
+-- Widget NUMBERS are slot ids, not places: this game lays its rows/columns out itself
+-- (the keyhelp bar is a CanvasPanel the game positions; the status page's stat blocks are
+-- pooled instances found in construction order), so reading them in index order can
+-- announce them in an order matching nothing on screen. Ask the widget where it IS.
+--
+-- Guarded on the slot's real class: calling a member a UObject does NOT have is an
+-- UNCATCHABLE abort on this game, so GetPosition() is only ever called on a CanvasPanelSlot.
+local function slot_of(w)
+    if not Core.valid(w) then return nil, nil end
+    local s, cn
+    pcall(function()
+        s = w.Slot
+        if s and s:IsValid() then cn = s:GetClass():GetFName():ToString() end
+    end)
+    if not cn then return nil, nil end
+    return s, cn
+end
+
+-- One coordinate ("X" or "Y") of a widget, from every source the engine exposes, most
+-- authoritative first. The canvas slot's LayoutData offsets read back as 0.0 on the keyhelp
+-- bar (dump_keyhelp 2026-07-14) — that row is not laid out through them — so GetPosition()
+-- and the render transform are tried too.
+local LAYOUT_EDGE = { X = "Left", Y = "Top" }
+local function widget_axis(w, axis)
+    local s, cn = slot_of(w)
+    if s and cn == "CanvasPanelSlot" then
+        local v
+        pcall(function()
+            local p = s:GetPosition()
+            if p then v = p[axis] end
+        end)
+        if type(v) == "number" and v ~= 0 then return v end
+        v = nil
+        pcall(function() v = s.LayoutData.Offsets[LAYOUT_EDGE[axis]] end)
+        if type(v) == "number" and v ~= 0 then return v end
+    end
+    local rt
+    pcall(function() rt = w.RenderTransform.Translation[axis] end)
+    if type(rt) == "number" and rt ~= 0 then return rt end
+    return nil
+end
+
+-- Walk up until some ancestor knows where it is (bounded): on this UI a leaf often sits at 0
+-- inside a per-entry container that carries the real placement. nil if nothing knows — the
+-- caller then keeps its own (at least stable) order.
+local POS_ANCESTORS = 4
+Core.slot_of = slot_of   -- exposed for the keyhelp dump (it reports the raw sources)
+function Core.slot_pos(w, axis)
+    local cur, depth = w, 0
+    while Core.valid(cur) and depth < POS_ANCESTORS do
+        local v = widget_axis(cur, axis)
+        if v then return v end
+        local p
+        pcall(function() p = cur:GetParent() end)
+        cur, depth = p, depth + 1
     end
     return nil
 end

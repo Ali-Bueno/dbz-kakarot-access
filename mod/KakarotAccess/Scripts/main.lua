@@ -93,6 +93,14 @@ RegisterKeyBind(Key.F2, { ModifierKey.CONTROL }, function() App.keyhelp_auto_tog
 -- this key repeats the current one on demand.
 RegisterKeyBind(Key.F10, function() App.read_objective() end)
 
+-- F11 / Shift+F11: on the character status page (confirm a character in Characters), step
+-- forward/back through the stat blocks — HP, Ki and the five attributes — reading each as its
+-- total plus the breakdown (base, state boost, food effect). Entering the page already speaks
+-- the header (name, level, EXP to next, HP, Ki, BP); these keys are the detail on demand.
+-- The GAMEPAD does the same with d-pad down/up (screen_status.lua) — no keyboard needed.
+RegisterKeyBind(Key.F11, function() App.status_step(1) end)
+RegisterKeyBind(Key.F11, { ModifierKey.SHIFT }, function() App.status_step(-1) end)
+
 -- F6: diagnostic — report whether the SetFontType section hook installed and how many times
 -- it has fired (fired=0 means the game doesn't call it via a hookable path). Dev-only.
 RegisterKeyBind(Key.F6, function()

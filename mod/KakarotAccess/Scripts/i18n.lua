@@ -92,6 +92,10 @@ local S = {
         reader_off = "Lector de menús desactivado",
         keyhelp_auto_on = "Anuncio de acciones activado",
         keyhelp_auto_off = "Anuncio de acciones desactivado",
+        -- Character status page (screen_status.lua): the gauges read "19591/19591" on
+        -- screen, and F11/Shift+F11 walk the stat blocks.
+        gauge_fmt = "%s de %s",
+        status_pos = "%d de %d",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Radar de misión activado",
         nav_off = "Radar de misión desactivado",
@@ -292,6 +296,9 @@ local S = {
         reader_off = "Menu reader off",
         keyhelp_auto_on = "Action announcements on",
         keyhelp_auto_off = "Action announcements off",
+        -- Character status page (screen_status.lua).
+        gauge_fmt = "%s of %s",
+        status_pos = "%d of %d",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Quest radar on",
         nav_off = "Quest radar off",

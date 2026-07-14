@@ -61,10 +61,8 @@ end
 -- The 12 orb counters as { color = spoken color, num = count } (nil if unreadable).
 -- Entry i (0-based): i < 6 → required grid, i >= 6 → owned grid; slot within grid = i % 6.
 local function zorbs()
-    local arr
-    if not pcall(function() arr = host.WL_Skilltree_Zorb00 end) or arr == nil then return nil end
-    local n
-    if not pcall(function() n = arr:GetArrayNum() end) or type(n) ~= "number" then return nil end
+    local arr, n = Core.array_of(host, "WL_Skilltree_Zorb00")
+    if not arr then return nil end
     local out = {}
     for i = 0, n - 1 do
         local z

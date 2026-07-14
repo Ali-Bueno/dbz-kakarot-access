@@ -28,6 +28,7 @@
 | Items inventory + Party + Characters | done | Party/Characters done. Items list reads populated categories (via `Txt_Title00` detail-pane live name; reflected index tracks). EMPTY categories: the whole item UI goes STALE (row/detail/visible-count keep the last item), so emptiness is read from the native flag `itemMenu.hasItems = 0x620` (F4-confirmed; 0 = empty) and announced ("vacío") via `screen_list.lua` factory `empty_off` param. Verified in-game 2026-07-11 |
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads the on-screen `AT_UIItemMenu.WL_Start_Party_Bars` bar (the selected char; only it animates in): `Txt_Name01` + `Txt_Lv01→Txt_Lv02` level-up preview, with the "choose character" prompt. Registered before the item list reader. Verified in-game 2026-07-11 |
 | Save / Load data slots | done | `screen_saveload.lua` — `AT_UIStartSaveLoad`. VIRTUALIZED 3-bar window (`UISaveLoadBar_List`), so pool-position ≠ ordinal. Ordinal from native index `saveLoad.selectedIndex = 0x410` (+1), cursor bar = `windowPos = 0x418` (F4-confirmed over ~11 saves); reads FILLED and EMPTY slots (Canvas_None checked first); SETTLE_TICKS debounce drops mid-scroll frames. Slow re-entry (widget destroyed+recreated → stale class-list cache) FIXED by `ui_core.first_on_screen` churn-force (re-scan a recently-on-screen class immediately, budget-gated). Verified in-game 2026-07-11 (reads all slots, correct index, fast entry, no lag). DEBUG off |
+| Character status page (stats sheet) | wip | `screen_status.lua` — `UAT_UIStartStatus`, the sheet you get by confirming a character in Personajes. ALL reflected: `WL_Txt_Name/_Lv/_Title/_Num/_Power/_Power_Num`, the two `UAT_UIStartStatusHud` gauges (`HpGauge`/`SpGauge` → `TextBox_Number`) with their `TxtStatus`/`TxtStatusNum` row TArrays, and the five `UAT_UIStartStatusList01` attribute blocks (`WL_Txt_Power(_Num)` = total, `TxtStatusList`/`TxtStatusNumList` = rows). `WL_Start_Char_List01` is a fixed C array → UE4SS COLLAPSES it (never index it — the `WL_StartCharBarList` lesson), so the blocks come from the class's cached instance list, on-screen ones only, ordered by `Core.slot_pos(w,"Y")`. Entry reads the header (name, level, next, HP, Ki, BP); the 7 blocks (total + base/estado/comida) are walked with the **d-pad down/up** on the gamepad (own 20 ms `Input.read` loop — the 100 ms registry poll misses quick taps — pad only READ, never blocked; gated on `Registry.active_adapter()` so the palette/tree opening OVER the page don't inherit it) and with **F11 / Shift+F11** on the keyboard. Registered below the palette+tree, above the Characters list. Pending in-game verify (needs a full RESTART) |
 | Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
 | Skill Tree / learn super attacks | done | **2026-07-14: the lock is read NATIVELY** from the game's own per-node state byte (offsets in *Derived facts*), so "bloqueada"/"adquirida" is correct on EVERY node whatever the browsing path — the old KNOWN LIMIT (noted below) is GONE. The name-propagation heuristic survives only as the fallback if the native read fails its bounds/FName self-check. Entry was slow (~30 s) until the feed's storm guard was fixed (see *Known issues*). Verified in-game 2026-07-14. — `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). LOCKED nodes: the ONLY marker the game exposes is the tree cursor's padlock (`UISkillTree.Skilltree_Cursor.WL_ImgIconMicon` visible), and only on a skill's ENTRY (lv-1) node when the skill is unowned — 6 capture rounds proved there is nothing else: no readable panel index/pointer/position (cursor grid coords do live at tree+0x15F8/+0x15FC as grid×95), key-help bar identical on every node, no cover/lock widget on screen; the char-level gate ("need level 10") exists ONLY in the post-confirm message window (dialog reader speaks it). So the lock is PROPAGATED by skill name within a screen visit (`locked_skills`, cleared in reset): once the entry node reads locked, every level of that skill announces "bloqueada". KNOWN LIMIT (accepted): reaching a level-2/3 node WITHOUT passing its level-1 node first announces no lock — unfixable by reflection. Round-7 panel sweep closed the last door: all 108 `WL_Ins_Panel_Cover` are visible always (a frame, not a padlock) and every skill icon is an anonymous `MaterialInstanceDynamic`, so panels can't be matched to skills. The real data (`USkillManager`/`USkillTree`) exposes ZERO reflected functions and owned levels live in private save memory (`USkillSave`) — a full fix needs native RE (Ghidra), deferred. Verified in-game 2026-07-14 |
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` — the screen's ACTION prompts ("X: asignar", "Y: árbol de habilidades", "A: usar") read once on entering any menu and again only when the set CHANGES (diff-gated, queued behind the screen's own readout). Hangs off the `ui_registry` dispatcher, so every menu (incl. future ones) is covered; passive/time-critical readers opt out with `keyhelp_auto = false` (13 adapters). Face buttons are finally NAMED: `keyhelp.lua` now falls through to `A.platbtn_token` (the palettes' resolver) when the bar's device-INDEXED textures (Btn00..03) can't name themselves. Nav entries ("mover", "cambiar pestaña") are dropped. Ctrl+F2 toggles it (needs a game RESTART — main.lua); F2 still reads the whole bar. Read LEFT-TO-RIGHT as on screen: the bar is a CanvasPanel the game lays out itself, so the widget number is a slot id, NOT a position — the place comes from the slot's `GetPosition()` (its `LayoutData` offsets reflect back as 0.0), falling back to the render transform / ancestors. COST RULE (learned the hard way: the first cut lagged the item + skill-palette menus to a crawl): inside the poll step it may ONLY use `Core.cached_all` (tick passed — a raw `FindAllOf` per poll stalls the game thread) and it polls the bar's LABELS, resolving the glyphs just once, on the poll where they changed. Verified in-game 2026-07-14 |
@@ -63,11 +64,24 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-Next: **verify the contextual-action reader in game** (needs a full RESTART — the Ctrl+F2 toggle is a new
-keybind in main.lua). Open the inventory and the character menu and check you hear the choices ("botón X:
-asignar", "botón Y: árbol de habilidades", "botón A: usar") once on entry, and again only when they change
-(e.g. hovering an item that can't be used drops "usar"). Then the **backlog** below: the quest-objective
-HUD and the radar 2.0 batch are both built but never verified in-game.
+**FIRST, verify the crash + slowness fixes** (2026-07-14, needs a RESTART — `mem_bridge.dll` is new):
+play a normal session — menus, a map load, and several minutes of free-roam WITH a quest tracked (route
+radar on) crossing streaming boundaries (that is what reproduced the crash). Expect: (a) NO crash, in
+menus OR gameplay; (b) no `UObject instance is nullptr` in the log; (c) the reader does NOT get sluggish
+the longer you play; (d) re-entry into the item menu / skill palette / skill tree starts reading within a
+few seconds. Do NOT bring the notify feed back whatever happens (see Known issues).
+
+Then: **verify the character STATUS page + the contextual-action reader in game** (one RESTART covers both
+— F11/Shift+F11 and Ctrl+F2 are new keybinds in main.lua). On the status page: entering a character should
+speak name, level, "Siguiente N", the HP and Ki gauges and BP; the **d-pad down/up** (or F11 / Shift+F11)
+should then walk the 7 blocks (PS, Ki, ATQ/DEF cuerpo a cuerpo, ATQ/DEF de Ki, crítico), each as its total
++ base/aumento/comida, in the on-screen order top→bottom. Two things to watch: if the order comes out
+scrambled, the block sort had no positions to work with (`Core.slot_pos`) — dump it before changing
+anything; and if the GAME turns out to react to the d-pad on that page (it shows only R-stick rotate + X/Y/B,
+so it shouldn't), move the binding to LB/RB rather than blocking the pad. For the keyhelp: open the inventory and the character
+menu and check you hear the choices ("botón X: asignar", "botón Y: árbol de habilidades", "botón A: usar")
+once on entry, and again only when they change. Then the **backlog** below: the quest-objective HUD and the
+radar 2.0 batch are both built but never verified in-game.
 
 ## Backlog
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
@@ -85,27 +99,56 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   A/B press itself is silent until the first cursor move (no signal exists for the press).
 
 ## Known issues / open questions
-- INTERMITTENT boot crash (2026-07-14, AV 0x10 right after "Event loop start", during the first map
-  load): the event feed's drain probed widgets whose classes the async loader was still linking.
-  HARDENED (committed): the drain skips + wipes while `Transition.active()`, every stashed widget waits
-  one tick (`aged` queue) before any probe, PROBE_CAP=256/tick, STORM backlog bound. **If a boot crash
-  recurs → revert the notify feed to polling (plan B), stability over latency.**
-- FIXED 2026-07-14 — the storm guard silently defeated the feed on the biggest screen. It used to DROP
-  THE WHOLE BACKLOG past STORM=2048; the Skill Tree constructs 2064–2862 widgets in one frame (logged),
-  so its ROOT went in the bin and the screen was only found by the 300-tick refresh (~30 s to start
-  reading — every other menu builds far too few widgets to trip it). Now the drain TRUNCATES instead:
-  UMG builds a screen's root before its children, so the oldest entries are the ones adapters key on;
-  the dropped tail is leaf widgets the refresh net picks up. Per-tick cost is unchanged (PROBE_CAP still
-  bounds it). **Lesson: a slow screen is a FEED bug — never "fix" it with scans or shorter refreshes.**
-- FIXED 2026-07-14 — the widget feed was THROUGHPUT-starved, and that (not any adapter) was
-  what made the item/skill-palette menus take ~30 s to read on a RE-entry. The drain walked each
-  widget's class chain with up to 12 reflected calls and only took 256/tick, so the game produced
-  faster than we consumed: the log showed 30+ storms with backlogs up to 8167, and the storm guard
-  (keep the OLDEST, drop the tail) then binned the NEWEST arrivals — precisely the screen just
-  opened, which fell back to the 300-tick refresh net. Now the class chain is memoized per class
-  (2 calls per widget), PROBE_CAP=1024, STORM=8192 (a last resort again), and the cached lists are
-  pruned (they grew unbounded as pooled screens were recreated). **If "widget storm" lines come
-  back in the log, the drain is too slow — do NOT just raise the cap.**
+- **SOLVED 2026-07-14 (round 2) — the mid-GAMEPLAY crash was `nav_tracker` reading a TArray length on a
+  dying world object.** Separate bug from the feed (this one survived the feed removal). Signature: the same
+  uncatchable `0xe06d7363` throw, no Lua error logged, mid free-roam after a while. Root cause: `Transition.active()`
+  fires only on a full map load (new GameMode), NOT on streamed sublevels — so streaming frees world actors
+  during free-roam with no gate, and only per-object re-validation protects us. `nav_tracker` read raw
+  `#arr` / `.PathPoints` on objects that were only nil-checked: `compute_route` (`path.PathPoints` — a
+  reflected NavigationSystem result, ran every ~3 s with route tracking, the prime site), `aim_watch`
+  (`comp.m_xActors`, every 100 ms), and the `MapIconList` scans in `best_candidate`/`list_targets`. All now
+  go through `Core.array_of` (validates owner+array before `GetArrayNum`; `pcall` can't catch the throw, so
+  the validity check BEFORE the call is the only defence). Dev-only dumps (`nav_dump`, F7) fixed too.
+  Verify: free-roam with a quest tracked (route radar on) for several minutes across streaming boundaries.
+- **FIXED 2026-07-14 — the reader went sluggish the longer you played** (my own regression from the feed
+  removal). The first no-feed detection gave freshly-destroyed classes a 1 s "fast lane" and forced a
+  re-scan the next tick; as a session accumulated closed screens they all demanded scans at once and
+  saturated the 3-per-tick budget, starving live detection. Now: ONE fixed cadence — alive pool refreshes
+  every ~30 s, a list with no live instance (absent OR destroyed) re-scans every ~4 s (`DEAD_BACKOFF`), no
+  per-tick forcing anywhere. Re-entry to a churned screen ≤ ~4 s; no saturation regardless of play length.
+- **SOLVED 2026-07-14 — the widget event feed. It is REMOVED; do not rebuild it in Lua.**
+  Root cause, measured (not assumed): UE4SS delivers a `NotifyOnNewObject` callback on the engine's async
+  LOADING thread as well as the game thread (`widget notify thread(s): 5744 (FOREIGN!), 38620 (game
+  thread)` — via the new `mem_bridge.thread_id()`). Any Lua there — even the feed's two table writes —
+  runs the shared `lua_State` concurrently with the poll step, so the allocator/GC race frees userdata the
+  game thread still holds. Symptom: a cached widget that passed `IsValid()` and then reported a NULL
+  UObject on the next member call (`GetArrayNum` → `screen_skillcustom.lua:92`), once per tick — the
+  poisoned entry was inserted at the HEAD of the cached list, so it shadowed the real screen permanently —
+  until UE4SS's uncatchable C++ throw killed the process (0xe06d7363). The earlier AV at a garbage address
+  was the same corruption. **Dead ends (do not retry):** `ExecuteInGameThread` inside the callback (the
+  wrapper is itself Lua on the foreign thread) and moving the stash into a mutex-protected C bridge
+  (reaching C still executes Lua bytecode). A safe event feed would have to be armed from a native UE4SS
+  C++ mod, outside this `lua_State`.
+  - Replacement (no notify, no per-tick scans): `Core.first_on_screen` already walks the cached list, so it
+    spots for free when a class's instances have all gone invalid — the screen was DESTROYED and its reopen
+    will build a new one — and puts that class in a fast lane (`CHURN_FAST` ~1 s scans for a `CHURN_WINDOW`
+    of ~15 s). A screen that is merely CLOSED keeps its instances valid, so the steady state costs nothing.
+    **The distinction is load-bearing** (first cut got it wrong and half the menus, main menu included, went
+    SILENT): an EMPTY cached list means "never opened", which is the normal state of nearly every menu — it
+    must NOT force a scan, or all ~25 idle classes ask every tick, the 3-scans-per-tick budget is eaten by
+    whoever probes first, and the adapters at the BOTTOM of the registry never get scanned at all. Empty →
+    `DEAD_BACKOFF` (~4 s, cheap). Dead-but-not-empty → fast lane. **Verify in game: re-entry into the item
+    menu / skill palette / skill tree should start reading in a second or two, not 30.**
+  - `Core.array_of(owner, name)` is now the ONLY way to read a TArray: `owner[prop]` returns an INVALID
+    RemoteObject rather than nil, and a raw `GetArrayNum` on that is the uncatchable throw. Migrated:
+    `screen_skillcustom`, `screen_skilltree`, `screen_tutorials`, `screen_status`, `ui_archetypes`.
+  - The transition gate is now the mod's ONLY `NotifyOnNewObject`. A GameMode is an actor (spawned on the
+    game thread), so it should be safe — and it now PROVES it: its log line reports its own thread
+    (`New game mode — transition gate ON (notify thread: game thread)`). If that ever says FOREIGN, that
+    notify has to go too and the gate must be driven from a poll.
+  - (Superseded by the above: the whole 2026-07-13/14 series of feed fixes — the boot-crash hardening,
+    the storm guard, the throughput/memoized-chain rework — is gone with the feed. The "a slow screen is
+    a FEED bug, never fix it with scans" lesson is void: the feed itself was the bug.)
 - F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught `brush_of`
   "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a 3-failure fuse in
   `discover.lua brush_of`; still, avoid F7 during screen transitions/animations.

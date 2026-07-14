@@ -228,19 +228,29 @@ Shared principle for both: **context change → `interrupt=true`**; incremental 
 what changed; always follow the game's on-screen order. Future UI specs (HUD, combat) get their own doc
 in that folder.
 
-**Screen detection must be EVENT-DRIVEN, never per-tick scanning** (rule from the Kakarot latency
-episode, 2026-07-14). Discovering a just-opened screen by object scans (`FindAllOf`-style sweeps,
-budgets, back-offs, churn re-scans, short refresh periods) creates an unsolvable trade-off: entry
-latency vs navigation lag. Instead, arm ONE construction notify for the engine's widget base (UE4SS:
-`NotifyOnNewObject("/Script/UMG.Widget")`) that feeds the shared widget cache, and let adapters probe
-only cached refs. Details that made it correct in Kakarot (`ui_core.lua`, reuse them): feed every
-tracked cache key along the constructed widget's **class chain** (adapters may key caches by a native
-BASE name while instances report the blueprint class); use the **widest widget base** (detail panes
-read non-UserWidget text pools); arm the notify ONCE per session with the handler reached via a `_G`
-indirection (hot-reload safe); wipe the pending feed on map transitions (probing a freed object
-aborts). New menu adapters must NOT add per-tick scans, churn-forcing, or refresh shortening to fix
-slow detection — if a screen is slow to appear, fix the feed. Deliberately-opened sub-screens set
+**NEVER run mod logic from an engine object-construction notify in a scripting VM** (rule from the
+Kakarot crash episode, 2026-07-14 — it REPLACES the earlier "screen detection must be event-driven"
+rule, which was wrong and cost two crashed sessions). Discovering a just-opened screen with a
+construction notify (UE4SS: `NotifyOnNewObject("/Script/UMG.Widget")`) looks like the elegant answer to
+menu-entry latency. It is a trap: **the engine constructs UMG widgets on its async LOADING thread**, and
+the notify callback runs there — so the callback's Lua executes on the SAME `lua_State` as the poll loop,
+concurrently. Even a two-line stash corrupts it (allocator + incremental GC race): a cached widget then
+passes `IsValid()` and reports a NULL UObject on the very next member call, and UE4SS's *uncatchable* C++
+throw (0xe06d7363) kills the process. MEASURE the thread before trusting any callback — expose
+`GetCurrentThreadId()` from a native bridge and compare (`mem_bridge.thread_id()`); UE4SS does not
+document it. Dead ends, do not retry: wrapping the callback body in `ExecuteInGameThread` (the wrapper is
+itself Lua, already on the foreign thread) and moving the stash into a mutex-protected C module (reaching
+C still executes Lua bytecode). Only ACTOR-spawn notifies (game thread) are safe, and they should say so
+in their own log line. A genuine event feed must be armed from a NATIVE plugin outside the VM.
+So: detect screens by **polling cached refs** — and make it fast the honest way, which costs nothing in
+the steady state: pooled widgets stay valid while a screen is merely CLOSED, so re-scan a class only when
+its cached list has NOTHING valid left in it (the screen was destroyed and will be recreated), gated by a
+per-tick scan budget (`ui_core.lua`: `Core.first_on_screen` + `DEAD_BACKOFF`). Do not shorten the global
+refresh and do not scan per tick — that is what lags navigation. Deliberately-opened sub-screens set
 `confirm_ticks = 1` (the global confirmation debounce exists only for screens that flash at boot).
+**Every TArray read goes through a guarded helper** (`Core.array_of`): `owner[prop]` yields an INVALID
+RemoteObject, not nil, and a raw `GetArrayNum` on it is the uncatchable throw — `arr ~= nil` is not a
+validity check.
 
 ---
 

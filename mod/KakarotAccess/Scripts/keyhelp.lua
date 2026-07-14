@@ -95,57 +95,10 @@ end
 -- lays out ITSELF (UAT_UIKeyHelp: KeyHelpRightMargin / KeyHelpItemGapX), so Txt_Keyhelp_NN's
 -- number is a SLOT ID, not a place in the row — reading in index order announced "Atrás"
 -- first and "Paleta de Súper Ataque" last, the reverse of what the player sees. The real
--- place is the canvas slot's own offset. nil if it can't be read (then order falls back to
--- the slot ids, which is at least stable).
--- Guarded on the slot's real class: calling a member a UObject does NOT have is an
--- UNCATCHABLE abort on this game, so GetPosition() is only ever called on a CanvasPanelSlot.
-local function slot_of(w)
-    if not Core.valid(w) then return nil, nil end
-    local s, cn
-    pcall(function()
-        s = w.Slot
-        if s and s:IsValid() then cn = s:GetClass():GetFName():ToString() end
-    end)
-    if not cn then return nil, nil end
-    return s, cn
-end
-
--- X of a widget from every source the engine exposes, most authoritative first. The canvas
--- slot's LayoutData offsets read back as 0.0 on EVERY entry of this bar (dump_keyhelp
--- 2026-07-14) — the row is not laid out through them — so GetPosition() and the render
--- transform are tried too, and finally the ancestors: on this UI a leaf often sits at 0
--- inside a per-entry container that carries the real placement.
-local function widget_x(w)
-    local s, cn = slot_of(w)
-    if s and cn == "CanvasPanelSlot" then
-        local x
-        pcall(function()
-            local p = s:GetPosition()
-            if p then x = p.X end
-        end)
-        if type(x) == "number" and x ~= 0 then return x end
-        x = nil
-        pcall(function() x = s.LayoutData.Offsets.Left end)
-        if type(x) == "number" and x ~= 0 then return x end
-    end
-    local rt
-    pcall(function() rt = w.RenderTransform.Translation.X end)
-    if type(rt) == "number" and rt ~= 0 then return rt end
-    return nil
-end
-
--- Walk up until some ancestor knows where it is (bounded; the bar is shallow).
-local function slot_x(w)
-    local cur, depth = w, 0
-    while Core.valid(cur) and depth < 4 do
-        local x = widget_x(cur)
-        if x then return x end
-        local p
-        pcall(function() p = cur:GetParent() end)
-        cur, depth = p, depth + 1
-    end
-    return nil
-end
+-- place is the canvas slot's own offset (Core.slot_pos, shared with the status page's stat
+-- blocks). nil if it can't be read — then order falls back to the slot ids, at least stable.
+local function slot_x(w) return Core.slot_pos(w, "X") end
+local slot_of = Core.slot_of
 
 -- The texture tokens of a glyph's visible Dmy_Btn images (a combo glyph shows several).
 local function glyph_tokens(plat)
@@ -195,7 +148,7 @@ end
 -- Japanese one, which is why A/B came out mirrored. See FACE_TOKEN in ui_archetypes.lua.
 -- It ALSO answered the on-screen ORDER question: the canvas slot's LayoutData offsets read
 -- back 0.0 on every entry, so the row isn't placed through them — asking the slot itself
--- (GetPosition) is what returns the real place. That is why widget_x is a chain.
+-- (GetPosition) is what returns the real place. That is why Core.slot_pos is a chain.
 -- FILE-SAFE: the first cut wrote straight to the handle and a probe threw mid-loop, so the
 -- handle never closed and the buffered lines were LOST — the dump came back EMPTY, which
 -- reads exactly like "no data" and isn't. Collect first, then write once, and record the

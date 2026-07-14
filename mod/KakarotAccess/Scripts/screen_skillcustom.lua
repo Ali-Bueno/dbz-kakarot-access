@@ -87,9 +87,10 @@ end
 -- All live slot plates (0-based ordinal preserved). Bounds-safe TArray walk.
 local function plates()
     local out = {}
-    local arr, n
-    if not pcall(function() arr = host.CategoryPlateCtn end) or arr == nil then return out end
-    if not pcall(function() n = arr:GetArrayNum() end) or type(n) ~= "number" then return out end
+    -- Core.array_of, never a raw GetArrayNum: an invalid array here is an UNCATCHABLE C++ throw
+    -- that killed the game (2026-07-14) — see the note on Core.array_of.
+    local arr, n = Core.array_of(host, "CategoryPlateCtn")
+    if not arr then return out end
     for i = 0, n - 1 do
         local p
         if pcall(function() p = arr[i + 1] end) and Core.valid(p) then

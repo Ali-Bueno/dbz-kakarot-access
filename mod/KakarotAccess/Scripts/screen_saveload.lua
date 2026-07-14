@@ -34,10 +34,11 @@ local OFF = require("native_offsets").saveLoad
 
 local SaveLoad = {}
 
--- This screen is DESTROYED and recreated on a quick close+reopen. The recreated instance
--- now arrives by EVENT (ui_core's NotifyOnNewObject cache feed, 2026-07-13), so the old
--- churn-force opt-in (mark_churning) is no longer needed — re-enable it only if fast
--- re-entry regresses.
+-- This screen is DESTROYED and recreated on a quick close+reopen, which used to leave the
+-- cached class list holding only the dead instance. Core.first_on_screen now notices that (a
+-- list with nothing valid left in it) and asks for a re-scan on the next tick, so the recreated
+-- instance is picked up in a tick or two with no per-adapter opt-in. (The event feed that once
+-- did this was removed on 2026-07-14 — it ran Lua on a foreign thread and crashed the game.)
 
 local ann = Core.make_announcer()
 local host, tick = nil, 0

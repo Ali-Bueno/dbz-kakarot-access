@@ -30,6 +30,15 @@ end
 
 function Mem.is_loaded() return loaded end
 
+-- The OS thread this call runs on. Used to answer a question UE4SS does not document: whether
+-- a NotifyOnNewObject callback is delivered on the GAME thread or on the engine's async loading
+-- thread (Lua on a foreign thread races the poll loop on the same lua_State — the suspect for
+-- the intermittent AV inside UE4SS.dll). See the widget feed in ui_core.lua.
+function Mem.thread_id()
+    if loaded and m.thread_id then return m.thread_id() end
+    return nil
+end
+
 -- Absolute base VA of a live UObject, or nil. Guards every hop (stale objects error).
 function Mem.addr(obj)
     if not loaded or not obj then return nil end

@@ -384,14 +384,12 @@ end
 function A.list_selected_row(list)
     local idx = A.list_select_index(list)
     if not idx then return nil end
-    local plates
-    if not pcall(function() plates = list.ListPlateCtn end) or plates == nil then return nil end
     -- Bounds-check against the live array count BEFORE indexing. When a list rebuilds (e.g. a
     -- tutorials tab switch), GetSelectValue can momentarily exceed the repopulated ListPlateCtn,
     -- and an out-of-range index into a TArray ABORTS UNCATCHABLY (pcall can't save it).
-    local num
-    if not pcall(function() num = plates:GetArrayNum() end) then return nil end
-    if type(num) ~= "number" or idx < 0 or idx >= num then return nil end
+    -- Core.array_of also validates the array itself — an invalid one throws the same way.
+    local plates, num = Core.array_of(list, "ListPlateCtn")
+    if not plates or idx < 0 or idx >= num then return nil end
     local row
     if not pcall(function() row = plates[idx + 1] end) or not Core.valid(row) then return nil end
     return {
