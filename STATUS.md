@@ -56,14 +56,13 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
-**Skill tree phase 2 (optional): announce "requiere nivel N" on a locked node.** Everything needed is
-already RE'd (see the last two rows of *Derived facts*): `CharacterLevel` = `i32[row+0x58]`, with the row
-reached by walking the `SkillTreeDataTable` `RowMap` with the hovered node's FName. Two cautions: (1)
-`RowMap` at `DataTable+0x30` is the ONE value that was derived, not read from an instruction — sanity-check
-`RowMap.Num` (should be a few hundred) before trusting the walk; (2) the tri-state already distinguishes
-"locked" from "purchasable", so this only adds the REASON — decide if it earns its complexity.
+**The Skill Tree is CLOSED — do not reopen it.** The "requiere nivel N" reason was deliberately DROPPED
+(user, 2026-07-14): pressing A on a locked node makes the game state the requirement itself, in the message
+window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
+needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-Otherwise the skill tree is closed, and the backlog below is the open work.
+Next is the **backlog** below: the quest-objective HUD and the radar 2.0 batch are both built but never
+verified in-game.
 
 ## Backlog
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
