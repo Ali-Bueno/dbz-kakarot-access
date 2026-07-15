@@ -174,7 +174,12 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   stale dish — the ring family is registered BELOW cooking and the minimap gate is moot inside
   menus): cooking/shoplist yield when the ring is GENUINELY open via `Core.ring_open` (the
   live_ring test — on_screen AND GetVisibility()==0; bare on_screen over-triggers on the pooled
-  closed ring; screen_field now shares the helper). Pending verify.
+  closed ring; screen_field now shares the helper); (5) round 4 (user: it sneaked in again on
+  the EMBLEMS menu, which closes the ring → gate moot): ROOT gate `pane_live(host)` — the pane
+  must be genuinely live (ESlateVisibility Visible(0) AND RenderOpacity > ~0, both
+  pcall-guarded, unreadable = live) — plus `LATCH_DEBUG` (one `[latch]` line per activation
+  with vis/opacity/free_roam/ring to `dump_cooking.txt`) so any remaining leak names its state.
+  Pending verify.
   (General lessons: mapping a POOLED multi-instance class to ONE field silently drops the other
   instances — map every holder or don't map; a pooled pane that never collapses needs the
   free-roam cross-check + spoken-key suppression, not a content gate.)
