@@ -445,14 +445,21 @@ local grid_slots, grid_byai = nil, nil
 -- AT_UICommunityStart returns nothing for it (the board's Start_Commu_Brd_C lesson),
 -- which is why the menu flow stayed silent even unmapped. The board flow's instance
 -- keeps the native name; try both.
+-- The live grid host. ENUMERATES the pool instead of first_on_screen: the game can
+-- keep an older parked instance on-screen (pane_live false) next to the live one, and
+-- taking the first match latched the parked ghost (the fishing pooled-ring lesson).
 local function grid_host()
-    local g = Core.first_on_screen("AT_UICommunityStart", tick)
-        or Core.first_on_screen("Start_Commu_Emb_C", tick)
-    -- A parked ghost grid must not latch this adapter in free roam (the cooking
-    -- pane_live lesson) — only a genuinely live pane counts.
-    if g and not Core.pane_live(g) then return nil end
-    return g
+    for _, cls in ipairs({ "AT_UICommunityStart", "Start_Commu_Emb_C" }) do
+        for _, g in ipairs(Core.cached_all(cls, tick)) do
+            if Core.valid(g) and Core.on_screen(g) and Core.pane_live(g) then
+                return g
+            end
+        end
+    end
+    return nil
 end
+
+local ghost_refresh_done = false   -- one forced pool rescan per menu-flow visit
 
 -- Board mode-machine values under which the BOARD genuinely owns input (Ghidra
 -- FUN_1414c7de0): 7 free-cursor browse, 9 detail, 12/13/14/17 tutorial-popup waits,
@@ -467,6 +474,7 @@ local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true, [13] = true,
 function Commu.is_active()
     tick = tick + 1
     grid_slots, grid_byai = nil, nil
+    local ghost_board = false
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     local m = det and "detail" or nil
     if not m then
@@ -498,7 +506,8 @@ function Commu.is_active()
                 elseif BOARD_LIVE_MODES[mode_v or -1] then
                     m = "board"
                 else
-                    board = nil   -- parked/ghost pane: not this adapter's screen
+                    board = nil        -- parked/ghost pane: not this adapter's screen
+                    ghost_board = true -- …but it IS the menu-flow signature (see below)
                 end
             else
                 board = nil   -- host up but frame not rendered (or wrong base class)
@@ -510,8 +519,18 @@ function Commu.is_active()
         if grid then
             grid_slots, grid_byai = slots()
             if #grid_slots > 0 then m = "grid" end
+        elseif ghost_board and not ghost_refresh_done then
+            -- "Reads only after a mod reload" (user 2026-07-15 night): the menu flow
+            -- spawns a FRESH grid widget per visit while the older parked one keeps
+            -- the pool cache "alive", so the scan never re-runs and the new screen
+            -- stays invisible until the ~30 s pool refresh — the items-rebuild
+            -- lesson. A parked board with no live grid is that flow's signature:
+            -- force ONE budgeted rescan per visit.
+            ghost_refresh_done = true
+            Core.refresh_all("Start_Commu_Emb_C")
         end
     end
+    if m then ghost_refresh_done = false end
     if m ~= mode then
         ann:reset()
         clear_state()
