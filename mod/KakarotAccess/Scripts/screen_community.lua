@@ -516,6 +516,31 @@ local function cached_label(idx, make)
     return label_cache
 end
 
+-- GRID CURSOR DEBUG (user bug 2026-07-15 evening: the MENU-opened grid reads on entry
+-- but says nothing while moving — the native cursor offsets were mapped on the BOARD
+-- flow and the menu flow may not drive them). One line per raw-value change to
+-- dumps/dump_community.txt: raw slot / col / row / anim fallback / mapped position.
+-- Turn OFF once cursor movement is verified spoken.
+local GRID_DEBUG = true
+local grid_dbg_last = nil
+
+local function grid_debug(el, list, byai, raw, idx)
+    local col, row = Mem.i32(el, GRID.colIndex), Mem.i32(el, GRID.rowIndex)
+    local np = newest_playing(list)
+    local sig = string.format("raw=%s col=%s row=%s np=%s idx=%s n=%d",
+        tostring(raw), tostring(col), tostring(row), tostring(np), tostring(idx), #list)
+    if sig == grid_dbg_last then return end
+    grid_dbg_last = sig
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\dump_community.txt", "a")
+    if not f then return end
+    local fn = "?"
+    pcall(function() fn = grid:GetFullName():match("%s(.+)$") or "?" end)
+    f:write(string.format("[gridcurs %s] %s host=%s\n", os.date("%H:%M:%S"), sig, fn))
+    f:close()
+end
+
 local function grid_update()
     local list, byai = grid_slots, grid_byai
     if not list then list, byai = slots() end
@@ -530,6 +555,7 @@ local function grid_update()
     if Core.valid(el) then
         local raw = Mem.i32(el, GRID.cursorIndex)
         if raw and raw >= 0 then idx = (byai or {})[raw] end
+        if GRID_DEBUG then pcall(grid_debug, el, list, byai, raw, idx) end
     end
     if not idx then idx = newest_playing(list) end
     if idx then last_idx = idx else idx = last_idx end

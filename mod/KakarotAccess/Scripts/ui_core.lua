@@ -616,6 +616,16 @@ end)
 -- It does NOT force any re-scan — an earlier version did (all_next=0 for a dead-but-nonempty
 -- list) and that per-tick forcing, multiplied across every screen closed during a play session,
 -- saturated the scan budget and made the whole reader slow (2026-07-14).
+-- The minimap is the game's own "free-roaming" signal: it is hidden the moment ANY
+-- real menu/battle/cutscene owns the screen and back the moment control returns (the
+-- screen_map lesson, re-used by nav_tracker's world gate). Adapters whose pooled
+-- widgets never collapse on close (the cook-NPC flow keeps the cooking pane visible
+-- with its last dish) gate on this: minimap up = that menu is genuinely CLOSED.
+function Core.free_roam(tick)
+    local mm = Core.cached_live("AT_UIMiniMapRadar", tick)
+    return Core.valid(mm) and Core.on_screen(mm)
+end
+
 function Core.first_on_screen(cls_name, tick)
     local list = Core.cached_all(cls_name, tick)
     local saw_valid = false

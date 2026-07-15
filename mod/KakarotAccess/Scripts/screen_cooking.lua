@@ -183,6 +183,11 @@ function Cooking.is_active()
     if overlay and overlay ~= overlay_spoken then return true end
     overlay = nil
     if not Core.on_screen(host) then return false end
+    -- Free-roam cross-check (user bug 2026-07-15 evening): at a cook NPC the pooled
+    -- cooking pane stays VISIBLE with its last dish after leaving the menu, so the
+    -- live-detail gate below can't release — the adapter latched "Cocina, <dish>" and
+    -- shadowed the ring pause. The minimap is the game's own "menu closed" signal.
+    if Core.free_roam(tick) then return false end
     pcall(function() shoplist = host.CookMenuList end)
     list = Core.valid(shoplist) and shoplist.WL_Shop_Cmn_List or nil
     if A.list_select_index(list) == nil then return false end

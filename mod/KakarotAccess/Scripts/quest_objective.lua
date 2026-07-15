@@ -62,6 +62,12 @@ end
 
 -- The whole current objective as one string (title + each visible objective line for
 -- both quest groups), or nil when the tracker shows nothing.
+--
+-- IMPORTANT (F10 diagnostic, 2026-07-15): for a single-objective quest the game shows
+-- the objective IN THE TITLE NODE (Txt_Main00 / WL_MainQuestListTitle) and keeps every
+-- M/S row hidden (valid, on_screen=false, empty) — the rows are the sub-task checklist
+-- ("0/3" lines) and only populate for multi-step objectives. So a group must speak
+-- when EITHER the title or the rows carry text; requiring rows muted the whole reader.
 local function objective_text()
     local host = Core.first_on_screen(HOST_CLASS, tick)
     if not host then return nil end
@@ -72,9 +78,10 @@ local function objective_text()
             local l = row_line(host, m)
             if l then lines[#lines + 1] = l end
         end
-        if #lines == 0 then return end
         local title = first_text(host, title_names)
-        parts[#parts + 1] = Core.phrase(title, table.concat(lines, ", "))
+        if not title and #lines == 0 then return end
+        parts[#parts + 1] = Core.phrase(title,
+            #lines > 0 and table.concat(lines, ", ") or nil)
     end
     group(MAIN_TITLE, MAIN_ROWS)
     group(SUB_TITLE, SUB_ROWS)
