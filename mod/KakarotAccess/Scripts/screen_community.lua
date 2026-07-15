@@ -559,8 +559,10 @@ end
 -- but says nothing while moving — the native cursor offsets were mapped on the BOARD
 -- flow and the menu flow may not drive them). One line per raw-value change to
 -- dumps/dump_community.txt: raw slot / col / row / anim fallback / mapped position.
--- Turn OFF once cursor movement is verified spoken.
-local GRID_DEBUG = true
+-- OFF since 2026-07-15 night: movement VERIFIED in-game — the native commuGrid cursor
+-- IS driven in the menu flow (gridcurs: raw/col/row advanced on Start_Commu_Emb_C,
+-- byai mapping correct, n=21). Re-enable only if a new grid flow goes silent.
+local GRID_DEBUG = false
 local grid_dbg_last = nil
 
 local function grid_debug(el, list, byai, raw, idx)

@@ -130,10 +130,10 @@ function Quest.stop()
     _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
 end
 
--- Diagnostic dump (dumps/dump_quest.txt), appended on every F10 press: detection is
--- ON-SCREEN in the directory trace (2026-07-15) yet nothing is spoken, so the dump
--- pins WHICH stage returns nothing — row validity, visibility, or the text reads.
--- User-triggered only (never per tick); remove once the objective reader is verified.
+-- Diagnostic dump (dumps/dump_quest.txt), appended on every F10 press while DUMP is
+-- on. It solved the 2026-07-15 silence (single-objective quests put the text in the
+-- TITLE node, rows hidden); OFF since the reader was verified in-game that night.
+local DUMP = false
 local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
     local dir = src:match("^(.*)[/\\]") or "."
@@ -188,7 +188,7 @@ function Quest.read()
         tick = tick + 1
         Core.begin_scan_tick()
         local text = objective_text()
-        pcall(dump_state, text)
+        if DUMP then pcall(dump_state, text) end
         Speech.say(text or I18n.t("objective_none"), true)
     end)
 end
