@@ -145,7 +145,7 @@ local S = {
         skill_owned = "tienes: %s",
         orb_red = "rojo", orb_blue = "azul", orb_green = "verde",
         orb_purple = "morado", orb_silver = "plateado", orb_gold = "dorado",
-        -- Hold-R2 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
+        -- R3 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
         radar_cat_fishing = "Pesca",

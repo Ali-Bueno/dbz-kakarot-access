@@ -34,13 +34,13 @@
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` — the screen's ACTION prompts ("X: asignar", "Y: árbol de habilidades", "A: usar") read once on entering any menu and again only when the set CHANGES (diff-gated, queued behind the screen's own readout). Hangs off the `ui_registry` dispatcher, so every menu (incl. future ones) is covered; passive/time-critical readers opt out with `keyhelp_auto = false` (13 adapters). Face buttons are finally NAMED: `keyhelp.lua` now falls through to `A.platbtn_token` (the palettes' resolver) when the bar's device-INDEXED textures (Btn00..03) can't name themselves. Nav entries ("mover", "cambiar pestaña") are dropped. Ctrl+F2 toggles it (needs a game RESTART — main.lua); F2 still reads the whole bar. Read LEFT-TO-RIGHT as on screen: the bar is a CanvasPanel the game lays out itself, so the widget number is a slot id, NOT a position — the place comes from the slot's `GetPosition()` (its `LayoutData` offsets reflect back as 0.0), falling back to the render transform / ancestors. COST RULE (learned the hard way: the first cut lagged the item + skill-palette menus to a crawl): inside the poll step it may ONLY use `Core.cached_all` (tick passed — a raw `FindAllOf` per poll stalls the game thread) and it polls the bar's LABELS, resolving the glyphs just once, on the poll where they changed. Verified in-game 2026-07-14 |
 | Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
-| Fishing minigame | done | `screen_fishing.lua`; verified end-to-end (user landed a fish) |
+| Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
 | Soul Emblems grid / Community | done | `screen_community.lua`; verified in-game |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
 | Story / battle results | done | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures) |
 | Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed |
-| Radar categories 2.0 (sites/enemies/collectibles) | wip | Built 2026-07-06; pending in-game verify of the batch |
-| R2 radar target picker (modal) | wip | Built 2026-07-04; needs a game RESTART to verify (new `input_bridge.dll`) |
+| Radar categories 2.0 (sites/enemies/collectibles) | done | Verified in-game 2026-07-15 (user: "funciona perfecto") |
+| R3 radar target picker (modal) | done | Verified in-game 2026-07-15 together with the categories batch (bind is R3 — early docs said "hold R2", stale) |
 | Battle monitor | wip | `battle_monitor.lua` present |
 
 ## Derived facts (so we never re-RE them)
@@ -64,7 +64,12 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**FIRST, verify the 2026-07-15 SCREEN DIRECTORY in game** (FULL RESTART — `ui_directory.lua` is a new
+**FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
+lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
+SEVERAL pooled instances the game alternates between, so never pin one `cached_live` ref; enumerate
+the pool and take the on-screen one).
+
+**Verify the 2026-07-15 SCREEN DIRECTORY in game** (FULL RESTART — `ui_directory.lua` is a new
 module). This is the fix for "submenus take >4s": items / palette / skill tree / characters / save-load /
 status must start reading **immediately** on entry (the pause ring and battle pause were already fast).
 Also: shops, maps, community, dialogs, battle HUD, loading tips, minimap radar (nav) — all now resolve via
@@ -106,8 +111,8 @@ scrambled, the block sort had no positions to work with (`Core.slot_pos`) — du
 anything; and if the GAME turns out to react to the d-pad on that page (it shows only R-stick rotate + X/Y/B,
 so it shouldn't), move the binding to LB/RB rather than blocking the pad. For the keyhelp: open the inventory and the character
 menu and check you hear the choices ("botón X: asignar", "botón Y: árbol de habilidades", "botón A: usar")
-once on entry, and again only when they change. Then the **backlog** below: the quest-objective HUD and the
-radar 2.0 batch are both built but never verified in-game.
+once on entry, and again only when they change. Then the **backlog** below: the quest-objective HUD is built
+but never verified in-game (the radar 2.0 batch + R3 picker were verified 2026-07-15).
 
 ## Backlog
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
@@ -117,8 +122,6 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   game restart (Ctrl+Shift+R does not re-run main.lua, where the keybind is registered); no Lua errors in
   the log and the bind is present, so most likely it was just never restarted. The reactive reader only
   speaks when the objective CHANGES — an objective already on screen staying put is expected silence.
-- **Radar 2.0 batch** — sites/enemies/collectibles categories + the "Caza"/Hunt category: built, never
-  verified in-game. R2 target picker: check the boot log for `hooked=true`.
 - **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
 - Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the
@@ -279,7 +282,7 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
 - F7 discover dump can fatal (0xe06d7363) if the swept UI is dying mid-animation: two caught `brush_of`
   "nullptr instance" errors then a raw C++ throw (2026-07-14). Mitigated with a 3-failure fuse in
   `discover.lua brush_of`; still, avoid F7 during screen transitions/animations.
-- R2 picker: if the boot log shows `hooked=false`, pad blocking is off (read-only) — needs a
+- R3 picker: if the boot log shows `hooked=false`, pad blocking is off (read-only) — needs a
   GetProcAddress/inline-hook fallback.
 - After any game patch, re-verify offsets in `native_offsets.lua` via the F4 probe.
 

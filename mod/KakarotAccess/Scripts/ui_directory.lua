@@ -214,7 +214,11 @@ local MAP = {
     ["Battle_Tips_Tutorial_C"] = { {"fm", "BattleTipsTutorial"} },
     ["AT_UIMgameFishing"]      = { {"fm", "MiniGameFishing"} },
     ["AT_UIMiniGamePop"]       = { {"fm", "MiniGamePop"} },
-    ["AT_UIBattleRushSpeedCore"] = { {"fm", "MiniGameFishing", "UIBattleRushSpeedCore"} },
+    -- AT_UIBattleRushSpeedCore deliberately NOT mapped: AT.hpp declares the pointer on
+    -- the fishing widget (UAT_UIMgameFishing.UIBattleRushSpeedCore, 0x3F0) but live
+    -- sampling (dump_fishing, 2026-07-03) showed the game never sets it — mapping it made
+    -- the resolver assert "does not exist" while fishing, killing the phase-2 reel cue
+    -- (screen_fishing finds the core as its own pooled instance via the scan path).
 
     -- GameInstance-held screens
     ["Xcmn_Win01_C"]           = { {"wm", "GameWindowCore"} },

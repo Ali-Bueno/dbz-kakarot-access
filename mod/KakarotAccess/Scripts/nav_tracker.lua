@@ -91,8 +91,8 @@ local SUB_QUEST_ICONS = {                               -- SUBQUEST_* + DLC stor
 -- Target priority classes (higher wins; ties broken by distance).
 local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 
--- ---- radar target-picker categories (hold-R2 menu, radar_menu.lua) ---------------
--- EMapIcon (AT_enums.hpp) grouped into the player-facing categories the hold-R2 menu
+-- ---- radar target-picker categories (R3 menu, radar_menu.lua) ---------------
+-- EMapIcon (AT_enums.hpp) grouped into the player-facing categories the R3 menu
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
 local GROUP_ORDER = {
@@ -202,7 +202,7 @@ local target = nil             -- { actor, key, pri, label, manual }
 local target_missing = 0       -- consecutive scans where the target wasn't found
 local companion_idx = 0        -- Shift+F5 cycle: 0 = quest mode; 1..n = that companion
 local auto_suppressed = false  -- after reaching / stopping a target the auto-scan stays
-                               -- quiet (no re-acquire) until you re-pick (R2 menu) or F3.
+                               -- quiet (no re-acquire) until you re-pick (R3 menu) or F3.
                                -- Fixes: a reached manual target re-arming when you walk
                                -- away because the auto-scan grabbed it again.
 local arrived = false
@@ -1839,13 +1839,13 @@ function Nav.where()
     end)
 end
 
--- ---- hold-R2 target picker support (radar_menu.lua) --------------------------------
+-- ---- R3 target picker support (radar_menu.lua) --------------------------------------
 -- All world-actor reads for the picker live HERE, behind the same safety gates and
 -- caches as the radar, so radar_menu.lua stays pure input + UI.
 
 -- Free-roam gate for the picker: TRUE only in the RPG overworld. ui_muted (a pausing
 -- menu/dialog owns the screen) OR the world gate closed (minimap hidden = BATTLE,
--- cutscene, loading, full-screen menu) both return false — so the R2 menu can NEVER
+-- cutscene, loading, full-screen menu) both return false — so the R3 menu can NEVER
 -- open in combat or block combat input. Pure-Lua ui_muted is checked first (probing
 -- the world during a menu-covered teardown can abort).
 function Nav.field_ready()
@@ -1860,7 +1860,7 @@ end
 -- quests have no limit. Returns an ordered array of non-empty groups:
 --   { { key=<group>, name=<localized>, items={ {actor,key,label,dist}, ... } }, ... }
 -- Diagnostic: dump every minimap candidate (type/group/dist/range/kept) to
--- dumps/dump_radar.txt each time the R2 menu opens — so "only fishing + quests show"
+-- dumps/dump_radar.txt each time the R3 menu opens — so "only fishing + quests show"
 -- can be diagnosed offline (is a category ABSENT from the minimap, or being FILTERED?).
 local RADAR_DEBUG = false  -- heavy diagnostic: FindAllOf probes + UniqueId/InteractComponent
                           -- reflection. Reads UniqueId on arbitrary actors, which can raise
@@ -2526,7 +2526,7 @@ function Nav.item_phrase(item)
         string.format(I18n.t("nav_meters"), meters(item.dist)))
 end
 
--- Stop tracking the current target on demand (the R2 menu's B button). Silences the
+-- Stop tracking the current target on demand (the R3 menu's B button). Silences the
 -- beacon and drops the target; if a quest is active the auto-scan may re-acquire it
 -- next tick (that's the base radar), but a hand-picked target stays gone until
 -- re-picked. Does NOT turn the whole radar off (F3 does that).

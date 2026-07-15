@@ -1,6 +1,6 @@
 -- Gamepad reader + game-input blocker (thin Lua wrapper over input_bridge.dll).
 --
--- The hold-R2 radar target picker (radar_menu.lua) needs to read the pad WHILE
+-- The R3 radar target picker (radar_menu.lua) needs to read the pad WHILE
 -- keeping the game from reacting to the same buttons. input_bridge.dll IAT-hooks
 -- the game's XInputGetState (XINPUT1_3.dll) so we read the true pad and, while
 -- Input.block(true) is set, the game receives a neutral pad. See input_bridge.c.

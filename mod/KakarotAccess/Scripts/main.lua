@@ -25,7 +25,7 @@ Mem.init()
 -- Same lifecycle as the other bridges: loaded once, survives hot reloads.
 Audio.init()
 -- Native gamepad reader + game-input blocker (input_bridge.dll, XInput IAT hook) for
--- the hold-R2 radar target picker. Installed once (the IAT hook must NOT be reinstalled
+-- the R3 radar target picker. Installed once (the IAT hook must NOT be reinstalled
 -- on a reload), so it lives before the protected snapshot like the other bridges.
 Input.init()
 

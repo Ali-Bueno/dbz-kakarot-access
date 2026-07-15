@@ -38,8 +38,9 @@ Fishing.confirm_ticks = 1
 Fishing.keyhelp_auto = false
 
 -- Re-enable to append tail samples + button internals to dumps/dump_fishing.txt
--- (how the fishing offsets in native_offsets.lua were found). OFF since the full
--- flow was verified end-to-end in-game (user landed a fish, 2026-07-03).
+-- (how the fishing offsets in native_offsets.lua were found, and how the pooled
+-- ring-core alternation was caught). OFF since the full flow was re-verified
+-- end-to-end in-game (user landing fish consistently, 2026-07-15).
 local DEBUG = false
 
 -- ACCESSIBILITY ASSIST (user request): the hook window is brutally short for
@@ -151,18 +152,22 @@ local function diag_sample(f)
         end) end
     end
     -- Phase 2 (the closing ring): the RushSpeedCore's own non-reflected tail
-    -- (class 0x400, last reflected member ends 0x3E0). The fishing widget's pointer
-    -- to it is unset live, so find it as its own widget. Sampled even while HIDDEN
-    -- (with its button token) to learn whether the phase-2 button is configured in
-    -- advance — that would let us announce it early.
+    -- (class 0x400, last reflected member ends 0x3E0). The game pools SEVERAL
+    -- instances and alternates per catch, so sample EVERY one (index + vis + button
+    -- + tail) — that alternation is what the 2026-07-15 dump proved.
     pcall(function()
-        local core = Core.cached_live("AT_UIBattleRushSpeedCore", tick)
-        if Core.valid(core) then
-            parts[#parts + 1] = "CORE vis=" .. tostring(Core.on_screen(core))
-                .. " btn=" .. tostring(A.platbtn_token(core.Xcmn_Btn_Plat))
-            for off = 0x3E0, 0x3FC, 4 do
-                parts[#parts + 1] = string.format("c0x%X=%s/%.3f", off,
-                    tostring(Mem.i32(core, off)), Mem.float(core, off) or 0)
+        local list = Core.cached_all("AT_UIBattleRushSpeedCore", tick)
+        if not list then return end
+        local i = 0
+        for _, core in pairs(list) do
+            if Core.valid(core) then
+                i = i + 1
+                parts[#parts + 1] = string.format("CORE%d vis=%s btn=%s", i,
+                    tostring(Core.on_screen(core)), tostring(A.platbtn_token(core.Xcmn_Btn_Plat)))
+                for off = 0x3E0, 0x3FC, 4 do
+                    parts[#parts + 1] = string.format("c%d_0x%X=%s/%.3f", i, off,
+                        tostring(Mem.i32(core, off)), Mem.float(core, off) or 0)
+                end
             end
         end
     end)
@@ -191,6 +196,21 @@ end
 local function live_on_screen(cls)
     local w = Core.cached_live(cls, tick)
     if Core.on_screen(w) then return w end
+    return nil
+end
+
+-- The ACTIVE phase-2 ring core. The game keeps SEVERAL pooled ring-core widgets and
+-- alternates which one it drives per catch (dump 2026-07-15: half the reels ran with
+-- the previously-cached instance stuck vis=false and its ringSize frozen — no tone,
+-- no letter, the "only caught one fish" report). A single pinned cached_live ref is
+-- therefore wrong half the time: enumerate the pool and take the on-screen instance.
+local function ring_core()
+    local list = Core.cached_all("AT_UIBattleRushSpeedCore", tick)
+    if list then
+        for _, w in pairs(list) do
+            if Core.on_screen(w) then return w end
+        end
+    end
     return nil
 end
 
@@ -250,6 +270,7 @@ end
 local RING_SPAN = 540          -- observed shrink range (start ~730 -> target 190)
 local RING_CUE_BAND = 0.5      -- the core's mid rating tier: hold the press tone here
 local ring_prev, ring_still = nil, 0
+local boosted2 = false         -- one core-discovery boost per phase-2 entry
 
 local function ring_cue(core)
     local size = Mem.float(core, OFF.fishing.ringSize)
@@ -296,29 +317,19 @@ local function fishing_button()
     return tok
 end
 
--- Until any of the three widgets exists (pooled after its first appearance), each
--- lookup is a FULL object-array scan; probing three absent classes per tick costs
--- real frame time. While ALL are absent, retry only every ABSENT_TICKS.
-local ABSENT_TICKS = 20   -- ~2 s at the registry's 100 ms poll
-local absent_until = 0
-
+-- No adapter-level absence backoff (removed 2026-07-15). The old ABSENT_TICKS gate
+-- paused ALL detection here for ~2 s at a time while the minigame widgets didn't
+-- exist — on a hook bar that lasts ~3 s (dump_fishing: phase 1 = 30 ticks), a bite
+-- landing inside that dead window made the cue start near the end or not at all
+-- (the reported inconsistency). It existed to avoid full per-class scans, which is
+-- ui_core's job now: these classes resolve through the screen directory (pointer
+-- reads), and the scan fallback is budget- and backoff-gated centrally.
 function Fishing.is_active()
     tick = tick + 1
-    if tick < absent_until then return false end
     fish = live_on_screen("AT_UIMgameFishing")
     mash = live_on_screen("AT_UIQteMashAlert")
     pop = live_on_screen("AT_UIMiniGamePop")
-    if not (fish or mash or pop) then
-        -- Back off only while the classes have never been seen; once pooled, the
-        -- cached refs make these lookups cheap and instant.
-        if not (Core.cached_live("AT_UIMgameFishing", tick)
-                or Core.cached_live("AT_UIQteMashAlert", tick)
-                or Core.cached_live("AT_UIMiniGamePop", tick)) then
-            absent_until = tick + ABSENT_TICKS
-        end
-        return false
-    end
-    return true
+    return (fish or mash or pop) ~= nil
 end
 
 local last_zone = nil
@@ -326,7 +337,7 @@ local last_zone = nil
 function Fishing.reset()
     said = {}
     last_cursor, still_ticks, last_zone = nil, 0, nil
-    ring_prev, ring_still = nil, 0
+    ring_prev, ring_still, boosted2 = nil, 0, false
     Audio.tone_stop()
 end
 
@@ -362,28 +373,53 @@ function Fishing.update()
         end
         apply_assist()
 
-        -- The phase-2 ring widget (found as its own instance — the fishing widget's
-        -- pointer to it is unset live). Its button is configured IN ADVANCE, so both
-        -- buttons can be announced up front and the tones alone carry the WHEN.
-        local core = Core.cached_live("AT_UIBattleRushSpeedCore", tick)
-        local tok2
-        pcall(function() tok2 = A.platbtn_token(core.Xcmn_Btn_Plat) end)
-
-        -- Bare letters only ("X, luego A") — minimal speech, maximal reaction time.
-        local tok1 = fishing_button()
-        if tok1 then
-            local msg = tok2 and string.format(I18n.t("fish_buttons"), tok1, tok2) or tok1
-            say_once("btn", msg, true)
-        end
-
-        if Core.on_screen(core) then
-            -- Phase 2 running: instant confirmation (+ the letter again) and the
-            -- closing-ring tone. TTS says only the bare token — it's time-critical.
-            say_once("btn2", I18n.t("fish_hooked") .. (tok2 and (" " .. tok2) or ""), true)
-            ring_cue(core)
+        -- Phase from the game's own state machine (fishing.phase, CONFIRMED native
+        -- byte on the fish widget). The reel is SHORT — dump 2026-07-15: the ring
+        -- falls ~420 u/s, well under a second from start to target — so this branch
+        -- is built for ZERO speech latency: the bare letter is the only utterance,
+        -- the tone carries the WHEN. The reel button is random per catch and only
+        -- knowable once the active core is on screen — never pre-announce it.
+        local phase = Mem.i32(fish, OFF.fishing.phase)
+        local core = ring_core()
+        if phase == 2 or core ~= nil then
+            local tok2
+            if core then pcall(function() tok2 = A.platbtn_token(core.Xcmn_Btn_Plat) end) end
+            if tok2 then
+                -- The letter, alone, the instant it's known; re-spoken only if the
+                -- game swaps it mid-reel (say_once diff-gates on the text).
+                say_once("btn2", tok2, true)
+            elseif said.btn2 == nil then
+                -- Hooked but the active core isn't visible yet: confirm the bite;
+                -- the letter will cut this off the moment it resolves.
+                say_once("btn2hooked", I18n.t("fish_hooked"), true)
+            end
+            if core then
+                ring_cue(core)
+            else
+                -- Reel started and no on-screen core in the pool: the game may have
+                -- built a NEW instance — force one pool re-scan + boost, ONCE per
+                -- phase entry (boost_missing opens a whole window generation; calling
+                -- it per tick is the 2026-07-15 pad-boost scan storm).
+                if not boosted2 then
+                    boosted2 = true
+                    Core.refresh_all("AT_UIBattleRushSpeedCore")
+                    Core.boost_missing()
+                end
+                Audio.tone_stop()
+            end
         else
-            said.btn2 = nil
+            said.btn2, said.btn2hooked = nil, nil
+            boosted2 = false
             ring_prev, ring_still = nil, 0
+
+            -- Outside the reel: announce only the PHASE-1 button (random per attempt,
+            -- re-announced via the zone-change reset). The old "X, then Y" pair is
+            -- gone: the second letter isn't decided until the reel starts — the dump
+            -- caught it announcing a STALE core's button ("X luego B", real reel = Y).
+            local tok1 = fishing_button()
+            if tok1 then
+                say_once("btn", tok1, true)
+            end
             timing_cue()
         end
         for _, prop in ipairs({ "UIMgameTips", "UIMgameTips01" }) do
