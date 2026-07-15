@@ -64,6 +64,11 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
+**NEXT SESSION, FIRST: the two 2026-07-15 user-reported bugs in the Backlog** — (1) level-up not
+announced (suspect: `Info_Log_Level_C` directory mapping, the fishing-ring failure pattern) and
+(2) battle results reading a constant "222" for every stat value. Details + diagnosis leads in the
+Backlog bullets below.
+
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
 SEVERAL pooled instances the game alternates between, so never pin one `cached_live` ref; enumerate
@@ -122,7 +127,22 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   game restart (Ctrl+Shift+R does not re-run main.lua, where the keybind is registered); no Lua errors in
   the log and the bind is present, so most likely it was just never restarted. The reactive reader only
   speaks when the objective CHANGES — an objective already on screen staying put is expected silence.
-- **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
+- **BUG (user, 2026-07-15): level-up is not announced.** Nothing is spoken on leveling up in the
+  field. PRIME SUSPECT: `Info_Log_Level_C` is directory-mapped to `{"fm", "InfoLevelUp"}` — if the
+  game never sets that field this is EXACTLY the fishing ring-core failure again (owner reachable +
+  field null = asserted absent, no scan fallback, silently dead reader). Check with Ctrl+F5 right
+  after a level-up (trace the `Info_Log_Level_C` line); if the field shows NULL while the toast is
+  on screen, unmap it. Also re-check whether level-up even goes through `Info_Log_Level_C` or
+  through the generic toast pool (`Info_Log_C`, unmapped) — screen_toasts may just not match it.
+- **BUG (user, 2026-07-15): battle results read a CONSTANT "222" for every stat.** Every fight ends
+  with e.g. "Gohan contra Saibaman x 3: Tiempo de finalización, 222, S" — the 222 repeats across ALL
+  fights and ALL result rows (time, damage, combo, …); the rank letter varies correctly. So the row
+  LABELS and the rank (brush texture) resolve, but the VALUE read is wrong: likely reading a
+  template/placeholder text box (a CDO or a pooled row that never got the live value) instead of the
+  on-screen number — same family as the fishing stale-instance bug (pinned/wrong instance) or the
+  items mainTxt/SubTxt wrapper lesson (two boxes per node, wrong one latched). Start in
+  `screen_battleresult.lua`: dump per-row which widget the number comes from (full name + text)
+  during one real result screen.
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
 - Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the
   A/B press itself is silent until the first cursor move (no signal exists for the press).
