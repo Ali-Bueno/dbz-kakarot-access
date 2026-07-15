@@ -179,16 +179,25 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   must be genuinely live (ESlateVisibility Visible(0) AND RenderOpacity > ~0, both
   pcall-guarded, unreadable = live) — plus `LATCH_DEBUG` (one `[latch]` line per activation
   with vis/opacity/free_roam/ring to `dump_cooking.txt`) so any remaining leak names its state.
-  Pending verify.
+  **VERIFIED (user, same night) on the pause ring and the emblems menu** — the pane_live approach
+  holds; the actual COOKING flow (dish list + cook + exit) still pending one re-test. The rule is
+  now permanent: CLAUDE.md §8 "pooled pane must gate on genuinely live" + memory
+  `feedback-pane-live-gate` — apply to every new menu adapter with a pooled host.
   (General lessons: mapping a POOLED multi-instance class to ONE field silently drops the other
   instances — map every holder or don't map; a pooled pane that never collapses needs the
   free-roam cross-check + spoken-key suppression, not a content gate.)
-- **WIP (2026-07-15 evening): Soul Emblems grid reads on ENTRY but not while MOVING.** Detection
-  fixed (BP name `Start_Commu_Emb_C`); the cursor is now the suspect — the native offsets
-  (`commuGrid` 0x3EC/0x3D0/0x3D4) were mapped on the BOARD flow and the MENU flow may not drive
-  them (and the AnimLoop fallback may not fire there either). `GRID_DEBUG=true` in
-  screen_community logs one line per raw-change to `dumps/dump_community.txt` (raw/col/row/anim
-  fallback/mapped idx) — open the grid, move around, read the dump. Turn OFF once verified.
+- **WIP (2026-07-15 night): Soul Emblems grid — the GHOST BOARD was shadowing it.** Screenshot 98
+  + Ctrl+F5 proved the user was in the menu grid ("EMBLEMAS DE ALMA", cursor on Chiaotzu) while
+  the adapter read the BOARD summary ("24 huecos…"): `Start_Commu_Brd_C` reports on-screen with
+  its frame in that flow, and any rendered-frame mode ≠10 used to claim "board", so grid_update
+  NEVER ran (that's also why no `gridcurs` lines appeared). Fix: `Core.pane_live` (promoted from
+  screen_cooking — VERIFIED there in-game same night) now guards the board AND the grid hosts,
+  plus the board only owns the screen in its LIVE mode-machine values (`BOARD_LIVE_MODES` =
+  7/9/12/13/14/16/17; 5 = closed, other = parked ghost → fall through to the grid). Cursor
+  while MOVING is still unverified: `GRID_DEBUG=true` logs raw/col/row/anim-fallback per change
+  to `dumps/dump_community.txt` — now that grid mode can actually run, one grid session + that
+  dump answers whether the native cursor (commuGrid, mapped on the board flow) is driven in the
+  menu flow or the AnimLoop fallback carries it. Turn DEBUG off once verified.
 - **FEATURE (user, 2026-07-15): d-pad grid navigation for the Community BOARD** (the free-cursor
   socket board). Blind-friendly navigation: a d-pad press should SNAP the cursor to the nearest
   socket in that direction (treat the board as a grid), instead of free analog wandering. All the

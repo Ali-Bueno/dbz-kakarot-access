@@ -184,19 +184,9 @@ end
 
 Cooking.confirm_ticks = 5   -- see the debounce note above
 
--- "Genuinely live" test for the pooled pane (root fix for the lingering-pane family:
--- pause ring, emblems menu, … — every full-screen menu below this adapter got
--- shadowed one by one). Two signals, both pcall-guarded (an unreadable signal counts
--- as live, i.e. today's behavior): the ring lesson — a parked pooled widget keeps
--- on_screen but leaves ESlateVisibility Visible(0) — and the fade-out lesson — an
--- out-animation drives RenderOpacity to ~0 while visibility flags lag behind.
-local function pane_live(h)
-    local ok, v = pcall(function() return h:GetVisibility() end)
-    if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
-    local ok2, op = pcall(function() return h:GetRenderOpacity() end)
-    if ok2 and type(op) == "number" and op < 0.05 then return false end
-    return true
-end
+-- "Genuinely live" test for the pooled pane: Core.pane_live (visibility + opacity —
+-- the root fix for the lingering-pane family; VERIFIED in-game on this screen
+-- 2026-07-15 night, and now the CLAUDE.md §8 rule shared via ui_core).
 
 -- One line per ACTIVATION (first announce after each reset) to dumps/dump_cooking.txt:
 -- if the stale pane still sneaks in somewhere, this names the state that let it
@@ -231,7 +221,7 @@ function Cooking.is_active()
     if overlay and overlay ~= overlay_spoken then return true end
     overlay = nil
     if not Core.on_screen(host) then spoken_key = nil return false end
-    if not pane_live(host) then spoken_key = nil return false end
+    if not Core.pane_live(host) then spoken_key = nil return false end
     -- Free-roam cross-check (user bug 2026-07-15 evening): at a cook NPC the pooled
     -- cooking pane stays VISIBLE with its last dish after leaving the menu, so the
     -- live-detail gate below can't release — the adapter latched "Cocina, <dish>" and

@@ -626,6 +626,18 @@ function Core.free_roam(tick)
     return Core.valid(mm) and Core.on_screen(mm)
 end
 
+-- A pooled pane that is GENUINELY live, not parked (the cooking-latch rule,
+-- CLAUDE.md §8): ESlateVisibility Visible(0) — a parked pooled widget keeps rendering
+-- under another state — AND RenderOpacity > ~0 (close animations fade to 0 while the
+-- visibility flags lag). Both pcall-guarded: an unreadable signal counts as live.
+function Core.pane_live(h)
+    local ok, v = pcall(function() return h:GetVisibility() end)
+    if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
+    local ok2, op = pcall(function() return h:GetRenderOpacity() end)
+    if ok2 and type(op) == "number" and op < 0.05 then return false end
+    return true
+end
+
 -- The overworld pause RING (Start_Top_C), GENUINELY open: rendered AND
 -- ESlateVisibility Visible (0) — the pooled widget lingers on_screen in other
 -- visibility states while closed, so on_screen alone over-triggers (screen_field's

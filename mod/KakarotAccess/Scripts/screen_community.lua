@@ -446,9 +446,23 @@ local grid_slots, grid_byai = nil, nil
 -- which is why the menu flow stayed silent even unmapped. The board flow's instance
 -- keeps the native name; try both.
 local function grid_host()
-    return Core.first_on_screen("AT_UICommunityStart", tick)
+    local g = Core.first_on_screen("AT_UICommunityStart", tick)
         or Core.first_on_screen("Start_Commu_Emb_C", tick)
+    -- A parked ghost grid must not latch this adapter in free roam (the cooking
+    -- pane_live lesson) — only a genuinely live pane counts.
+    if g and not Core.pane_live(g) then return nil end
+    return g
 end
+
+-- Board mode-machine values under which the BOARD genuinely owns input (Ghidra
+-- FUN_1414c7de0): 7 free-cursor browse, 9 detail, 12/13/14/17 tutorial-popup waits,
+-- 16 link-bonus demo. 10 = the grid handoff (handled separately). Anything else
+-- (5 observed on close; a freshly created hidden pane) is a PARKED board — without
+-- this gate the ghost board shadowed the menu-opened EMBLEMAS DE ALMA grid: it read
+-- the board summary on entry and the grid reader never ran (user + screenshot 98 +
+-- Ctrl+F5, 2026-07-15 night).
+local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true, [13] = true,
+                           [14] = true, [16] = true, [17] = true }
 
 function Commu.is_active()
     tick = tick + 1
@@ -466,20 +480,26 @@ function Commu.is_active()
         if board then
             local frame
             pcall(function() frame = board.WL_BrdFrame end)
-            if Core.valid(frame) and Core.on_screen(frame) then
+            if Core.valid(frame) and Core.on_screen(frame) and Core.pane_live(board) then
                 -- Board MODE 10 = the emblem GRID owns the input (confirm on a socket
                 -- opens it; the board stays rendered beneath, which is why board-first
                 -- shadowed it into silence — sockets read, emblems didn't, user
                 -- 2026-07-06). Hand the tick to the grid reader while it has slots;
-                -- every other rendered-frame mode stays with the board.
-                if Mem.i32(board, BOARD.mode) == 10 then
+                -- the other LIVE modes stay with the board; a parked mode (see
+                -- BOARD_LIVE_MODES) means a ghost pane — fall through to the grid.
+                local mode_v = Mem.i32(board, BOARD.mode)
+                if mode_v == 10 then
                     grid = grid_host()
                     if grid then
                         grid_slots, grid_byai = slots()
                         if #grid_slots > 0 then m = "grid" end
                     end
+                    if not m then m = "board" end
+                elseif BOARD_LIVE_MODES[mode_v or -1] then
+                    m = "board"
+                else
+                    board = nil   -- parked/ghost pane: not this adapter's screen
                 end
-                if not m then m = "board" end
             else
                 board = nil   -- host up but frame not rendered (or wrong base class)
             end
