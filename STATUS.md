@@ -64,13 +64,14 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — six bugs + one feature,
-each bullet carries its diagnosis lead: (1) level-up not announced (suspect: `Info_Log_Level_C`
-directory mapping, the fishing-ring failure pattern); (2) battle results reading a constant "222"
-for every stat value; (3) radar re-tracks the story objective after combat instead of the user's
-pick; (4) subtitles read even with the game's subtitles option off; (5) episode title cards not
-read; (6) Soul Emblems grid still silent (screenshot 95 identified it); (+) d-pad snap navigation
-for the Community board.
+**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — seven bugs + one
+feature, each bullet carries its diagnosis lead: (1) level-up not announced (suspect:
+`Info_Log_Level_C` directory mapping, the fishing-ring failure pattern); (2) battle results reading
+a constant "222" for every stat value; (3) radar re-tracks the story objective after combat instead
+of the user's pick; (4) subtitles read even with the game's subtitles option off; (5) episode title
+cards not read; (6) Soul Emblems grid still silent (screenshot 95 identified it); (7) the cooking
+ENTRY menu ("Preparar un platillo"/"Salir", screenshot 96) silent — the dish list after it reads;
+(+) d-pad snap navigation for the Community board.
 
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
@@ -179,6 +180,14 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   today) or whether steering the game's own cursor input is safer; once snapped, the game's hovered
   cache (`host+0x5D8`) should announce the socket by itself. Register the d-pad stepper on
   `pad_poll.lua` (never a new 20 ms loop).
+- **BUG (user, 2026-07-15): the cooking ENTRY menu ("Preparar un platillo" / "Salir") is not read** —
+  screenshot "Captura de pantalla (96).png": a small two-option vertical menu at the campfire
+  (selected row = bright yellow fill, other = brown; helper text "Selecciona un platillo para
+  preparar."; keyhelp ←Seleccionar A=Confirmar B=Atrás). The DISH LIST that follows reads fine
+  (`Shop_Cook_C` via the directory) — only this pre-menu is silent, so it is some OTHER widget class:
+  neither screen_choice/choicelist nor any registered adapter matches it. Open it, Ctrl+F5 (census
+  names the on-screen text's owner widget), then map/register it — probably a reusable two-option
+  campfire/confirm archetype (rest/cook/save tents likely share it).
 - **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
 - Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the
