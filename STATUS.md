@@ -161,12 +161,19 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   DIRECTORY mapping (`fm.ShopTop` only) hid it from `cached_all`. Second chain added:
   `{"fm","CookingMenu","WL_CookingTop"}`. VERIFIED reading (user, same evening) — but it exposed
   a LATCH: at the cook NPC the pooled cooking pane stays VISIBLE with its last dish after
-  leaving, so `screen_cooking` stayed active ("Cocina, asado con hueso" forever) and shadowed
-  the ring pause. Fix: `Core.free_roam(tick)` (minimap on-screen = the game's own "menu closed"
-  signal, the screen_map lesson) now gates screen_cooking AND screen_shoplist. Pending verify.
+  leaving, so `screen_cooking` stayed active ("Cocina, asado con hueso") and shadowed the ring
+  pause. THREE-layer fix (round 2 — the free_roam gate alone was NOT enough, because "Salir"
+  returns to the NPC DIALOGUE where the minimap is still hidden, and every registry flip
+  between the dialogue and cooking re-announced the stale dish): (1) `Core.free_roam(tick)`
+  gate (minimap = the game's "menu closed" signal) on screen_cooking AND screen_shoplist;
+  (2) flip-flop suppression — `spoken_key` survives reset() (same selection never re-announces
+  within a visit; cleared on genuine close / entry-menu / free-roam; F1 → `reannounce()`
+  overrides); (3) `Cooking.confirm_ticks = 5` (~0.5 s) so the exit-animation blip never
+  commits, plus cooking yields while `WL_CookingTop` shows rows (`A.shoptop_rows`, the shared
+  helper screen_shoplist now uses too). Pending verify.
   (General lessons: mapping a POOLED multi-instance class to ONE field silently drops the other
-  instances — map every holder or don't map; and a pooled pane that never collapses needs the
-  free-roam cross-check, not a content gate.)
+  instances — map every holder or don't map; a pooled pane that never collapses needs the
+  free-roam cross-check + spoken-key suppression, not a content gate.)
 - **WIP (2026-07-15 evening): Soul Emblems grid reads on ENTRY but not while MOVING.** Detection
   fixed (BP name `Start_Commu_Emb_C`); the cursor is now the suspect — the native offsets
   (`commuGrid` 0x3EC/0x3D0/0x3D4) were mapped on the BOARD flow and the MENU flow may not drive

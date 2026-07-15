@@ -414,4 +414,30 @@ function A.is_overflow_button(low, maxIdx, byIdx)
     return A.row_name(above) == A.row_name(low.row)
 end
 
+-- Visible rows of a UAT_UIShopTop mode/action list ("Buy / Sell", the cook entry
+-- "Prepare a dish / Leave"): the native ListBarCtn TArray first, else the blueprint's
+-- direct Xlist_Bar01_00..03 members — the cook-NPC instance shows rows only through
+-- the latter (user 2026-07-06). Shared by screen_shoplist (reads them) and
+-- screen_cooking (yields while the entry menu is up).
+local SHOPTOP_BAR_COUNT = 4   -- Xlist_Bar01_00..03 (UShop_Top_C, Shop_Top.hpp)
+function A.shoptop_rows(h)
+    local out = {}
+    if not Core.valid(h) then return out end
+    local arr, n = Core.array_of(h, "ListBarCtn")
+    if arr then pcall(function()
+        for i = 1, n do
+            local r = arr[i]
+            if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
+        end
+    end) end
+    if #out == 0 then
+        for i = 0, SHOPTOP_BAR_COUNT - 1 do
+            local r
+            pcall(function() r = h["Xlist_Bar01_" .. string.format("%02d", i)] end)
+            if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
+        end
+    end
+    return out
+end
+
 return A

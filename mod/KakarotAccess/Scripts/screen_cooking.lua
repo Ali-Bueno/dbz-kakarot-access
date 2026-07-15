@@ -38,9 +38,19 @@ local Cooking = {}
 -- once the user confirms cursor moves are spoken.
 local DEBUG = false
 
+-- Entry-confirm debounce (ui_registry): at a cook NPC the pooled pane stays visible
+-- through the EXIT animation, so cooking briefly becomes the sweep winner right after
+-- "Salir" — 5 consecutive polls (~0.5 s) must confirm it before it may speak, which a
+-- transient exit blip never survives (the dialogue takes over first).
 local ann = Core.make_announcer()
 local host, shoplist, list, overlay = nil, nil, nil, nil
 local last_overlay, last_sig = nil, nil
+local spoken_key = nil   -- last spoken selection key. NOT cleared by reset(): while
+                         -- the pane lingers at a cook NPC the registry flip-flops
+                         -- between the dialogue and this adapter, and every flip used
+                         -- to re-announce "Cocina, <last dish>" (user 2026-07-15
+                         -- evening). Cleared on genuine close (host gone / free-roam /
+                         -- the entry menu up) so a real re-entry announces fresh.
 local overlay_spoken = nil   -- notice-RELEASE (see screen_dialog): NOT cleared by
                              -- reset(). A pooled complete/result banner lingering
                              -- after leaving the campfire must not hold this adapter
@@ -172,22 +182,34 @@ local function dump_sample(sig, row)
     f:close()
 end
 
+Cooking.confirm_ticks = 5   -- see the debounce note above
+
 function Cooking.is_active()
     tick = tick + 1
     host = Core.cached_live("Shop_Cook_C", tick)   -- pooled: cheap cached ref per tick
-    if not Core.valid(host) then overlay = nil return false end
+    if not Core.valid(host) then overlay = nil spoken_key = nil return false end
     -- The complete/result overlays can be up while the menu body is hidden (the cook
     -- demo collapses it), so they keep the adapter active on their own — but only
     -- until spoken once (overlay_spoken): a stale banner must not hold the screen.
     overlay = overlay_text()
     if overlay and overlay ~= overlay_spoken then return true end
     overlay = nil
-    if not Core.on_screen(host) then return false end
+    if not Core.on_screen(host) then spoken_key = nil return false end
     -- Free-roam cross-check (user bug 2026-07-15 evening): at a cook NPC the pooled
     -- cooking pane stays VISIBLE with its last dish after leaving the menu, so the
     -- live-detail gate below can't release — the adapter latched "Cocina, <dish>" and
     -- shadowed the ring pause. The minimap is the game's own "menu closed" signal.
-    if Core.free_roam(tick) then return false end
+    if Core.free_roam(tick) then spoken_key = nil return false end
+    -- The embedded ENTRY menu ("Preparar un platillo"/"Salir") owns the screen while
+    -- its Shop_Top rows are visible — screen_shoplist (registered above) reads them;
+    -- the dish pane behind it is backdrop. Also the moment to forget the spoken key,
+    -- so coming back INTO the dish list announces fresh.
+    local top
+    pcall(function() top = host.WL_CookingTop end)
+    if Core.valid(top) and #A.shoptop_rows(top) > 0 then
+        spoken_key = nil
+        return false
+    end
     pcall(function() shoplist = host.CookMenuList end)
     list = Core.valid(shoplist) and shoplist.WL_Shop_Cmn_List or nil
     if A.list_select_index(list) == nil then return false end
@@ -201,6 +223,16 @@ end
 function Cooking.reset()
     ann:reset()
     last_overlay, last_sig = nil, nil
+    -- spoken_key deliberately NOT cleared here: reset() fires on every registry
+    -- adapter switch, which is exactly the flip-flop being suppressed.
+end
+
+-- F1 (Registry.repeat_current): an explicit repeat overrides the flip-flop
+-- suppression — forget the spoken key and let update() re-announce everything.
+function Cooking.reannounce()
+    spoken_key = nil
+    last_sig = nil
+    ann:reset()
 end
 
 function Cooking.update()
@@ -221,6 +253,10 @@ function Cooking.update()
     -- Selection moved but the spoken name key didn't (stale name source) → force the
     -- announcer to re-speak name + value + detail anyway.
     local sig = selection_sig()
+    -- Flip-flop suppression: exactly this selection (incl. the owned count) was
+    -- already spoken this visit — a registry switch away and back must stay silent.
+    local key = sig .. "|" .. tostring(row and row.num or "")
+    if key == spoken_key then return end
     if sig ~= last_sig then
         if last_sig ~= nil then ann:invalidate() end
         last_sig = sig
@@ -229,6 +265,7 @@ function Cooking.update()
     -- "Cooking" on entry; genre as the tab; recipe name; its count as the value (so a
     -- post-cook count change speaks just the number); full detail as the tooltip.
     ann:focus(I18n.header(13), genre(), name, row and clean(row.num) or nil, detail)
+    spoken_key = key
 end
 
 return Cooking
