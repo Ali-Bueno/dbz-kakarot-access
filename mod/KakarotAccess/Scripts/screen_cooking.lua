@@ -184,6 +184,42 @@ end
 
 Cooking.confirm_ticks = 5   -- see the debounce note above
 
+-- "Genuinely live" test for the pooled pane (root fix for the lingering-pane family:
+-- pause ring, emblems menu, … — every full-screen menu below this adapter got
+-- shadowed one by one). Two signals, both pcall-guarded (an unreadable signal counts
+-- as live, i.e. today's behavior): the ring lesson — a parked pooled widget keeps
+-- on_screen but leaves ESlateVisibility Visible(0) — and the fade-out lesson — an
+-- out-animation drives RenderOpacity to ~0 while visibility flags lag behind.
+local function pane_live(h)
+    local ok, v = pcall(function() return h:GetVisibility() end)
+    if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
+    local ok2, op = pcall(function() return h:GetRenderOpacity() end)
+    if ok2 and type(op) == "number" and op < 0.05 then return false end
+    return true
+end
+
+-- One line per ACTIVATION (first announce after each reset) to dumps/dump_cooking.txt:
+-- if the stale pane still sneaks in somewhere, this names the state that let it
+-- through (visibility / opacity / where). Turn OFF with the latch verified dead.
+local LATCH_DEBUG = true
+local latch_logged = false
+
+local function latch_log(name)
+    if latch_logged then return end
+    latch_logged = true
+    local vis, op = "?", "?"
+    pcall(function() vis = tostring(host:GetVisibility()) end)
+    pcall(function() op = tostring(host:GetRenderOpacity()) end)
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\dump_cooking.txt", "a")
+    if not f then return end
+    f:write(string.format("[latch %s] spoke=%s vis=%s opacity=%s free_roam=%s ring=%s\n",
+        os.date("%H:%M:%S"), tostring(name), vis, op,
+        tostring(Core.free_roam(tick)), tostring(Core.ring_open(tick) ~= nil)))
+    f:close()
+end
+
 function Cooking.is_active()
     tick = tick + 1
     host = Core.cached_live("Shop_Cook_C", tick)   -- pooled: cheap cached ref per tick
@@ -195,6 +231,7 @@ function Cooking.is_active()
     if overlay and overlay ~= overlay_spoken then return true end
     overlay = nil
     if not Core.on_screen(host) then spoken_key = nil return false end
+    if not pane_live(host) then spoken_key = nil return false end
     -- Free-roam cross-check (user bug 2026-07-15 evening): at a cook NPC the pooled
     -- cooking pane stays VISIBLE with its last dish after leaving the menu, so the
     -- live-detail gate below can't release — the adapter latched "Cocina, <dish>" and
@@ -232,6 +269,7 @@ end
 function Cooking.reset()
     ann:reset()
     last_overlay, last_sig = nil, nil
+    latch_logged = false
     -- spoken_key deliberately NOT cleared here: reset() fires on every registry
     -- adapter switch, which is exactly the flip-flop being suppressed.
 end
@@ -273,6 +311,7 @@ function Cooking.update()
     end
     -- "Cooking" on entry; genre as the tab; recipe name; its count as the value (so a
     -- post-cook count change speaks just the number); full detail as the tooltip.
+    if LATCH_DEBUG then pcall(latch_log, name) end
     ann:focus(I18n.header(13), genre(), name, row and clean(row.num) or nil, detail)
     spoken_key = key
 end
