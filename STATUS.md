@@ -35,7 +35,7 @@
 | Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
 | Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
-| Soul Emblems grid / Community | done | `screen_community.lua`; verified in-game |
+| Soul Emblems grid / Community | wip | `screen_community.lua`; was verified in-game, but the Soul Emblems GRID ("EMBLEMAS DE ALMA", `AT_UICommunityStart`) is reported silent again 2026-07-15 — see Backlog (screenshot 95 + directory trace plan) |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
 | Story / battle results | done | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures) |
 | Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed |
@@ -64,10 +64,13 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**NEXT SESSION, FIRST: the two 2026-07-15 user-reported bugs in the Backlog** — (1) level-up not
-announced (suspect: `Info_Log_Level_C` directory mapping, the fishing-ring failure pattern) and
-(2) battle results reading a constant "222" for every stat value. Details + diagnosis leads in the
-Backlog bullets below.
+**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — six bugs + one feature,
+each bullet carries its diagnosis lead: (1) level-up not announced (suspect: `Info_Log_Level_C`
+directory mapping, the fishing-ring failure pattern); (2) battle results reading a constant "222"
+for every stat value; (3) radar re-tracks the story objective after combat instead of the user's
+pick; (4) subtitles read even with the game's subtitles option off; (5) episode title cards not
+read; (6) Soul Emblems grid still silent (screenshot 95 identified it); (+) d-pad snap navigation
+for the Community board.
 
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
@@ -143,6 +146,40 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   items mainTxt/SubTxt wrapper lesson (two boxes per node, wrong one latched). Start in
   `screen_battleresult.lua`: dump per-row which widget the number comes from (full name + text)
   during one real result screen.
+- **BUG (user, 2026-07-15): after a combat, the radar re-tracks the STORY objective, discarding what
+  the user was tracking.** Not wrong as a default, but if the user had picked another target (R3 menu)
+  and a fight interrupts the trip, combat end must restore THAT target, not the story marker. Fix in
+  `nav_tracker.lua`: persist the last user-picked target (category + id) across the battle transition
+  and re-acquire it on combat end; fall back to the quest auto-track only when the user never picked
+  anything (or explicitly cleared with B).
+- **BUG (user, 2026-07-15): NPC subtitles are read even when the game's subtitles option is OFF.**
+  `screen_dialogue.lua` must gate on the game's own subtitles setting (derive it from the game's
+  options data at runtime — find where the option lives: the options save / GameUserSettings family /
+  whatever `Start_Option_C` writes; NO hardcoded defaults). If the option is off, speak nothing.
+- **BUG (user, 2026-07-15): episode TITLE CARDS are not read** (e.g. "Goku contra Nappa y Vegeta" at
+  an episode start). Likely a telop-family widget not covered by `screen_telop`
+  (`Quest_Main_Telop_C`). Lead: grep AT.hpp / the object dump for episode/chapter/telop widget class
+  names, then capture one live (F7/census) when a card shows.
+- **BUG (user, 2026-07-15): the Soul Emblems GRID is still silent** — screenshot "Captura de pantalla
+  (95).png" identifies it: header "EMBLEMAS DE ALMA", 3×7 grid of emblem portraits, page 1/7 (LB/RB),
+  keyhelp X=Ordenar Y=Detalles A=Conjunto B=Atrás, cursor = golden border on the hovered emblem. This
+  is the known `AT_UICommunityStart` thread (directory rounds 1-3: re-mapped to `cm.UIEmbListIns`
+  after the find_hud fix, but the user confirms it STILL doesn't read). Next: open the grid, Ctrl+F5,
+  read the `AT_UICommunityStart` trace — owner ok + field NULL means unmap (the fishing-ring
+  pattern); owner ok + field ok means the ADAPTER is the problem (cursor = golden-border pattern →
+  try the skill-palette plate-border archetype; check `screen_community.lua` actually targets this
+  class).
+- **FEATURE (user, 2026-07-15): d-pad grid navigation for the Community BOARD** (the free-cursor
+  socket board). Blind-friendly navigation: a d-pad press should SNAP the cursor to the nearest
+  socket in that direction (treat the board as a grid), instead of free analog wandering. All the
+  data exists (native_offsets.commuBoard + `code/decompiled/manual_1414f2ab0.c`): socket positions =
+  `panel.PointerCenterOffset` (reflected) + hidden board pos (`panel+0x550/0x554`), cursor pos =
+  `WL_PanelCursor.RenderTransform.Translation` (raw read at +0x90/+0x94 — reflection aborts on it).
+  Moving the cursor needs a WRITE: check whether mem_bridge has a poke API (F4 memdiff is read-only
+  today) or whether steering the game's own cursor input is safer; once snapped, the game's hovered
+  cache (`host+0x5D8`) should announce the socket by itself. Register the d-pad stepper on
+  `pad_poll.lua` (never a new 20 ms loop).
+- **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
 - Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the
   A/B press itself is silent until the first cursor move (no signal exists for the press).
