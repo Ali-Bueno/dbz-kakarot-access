@@ -229,6 +229,16 @@ local function chainable(grp) return grp ~= nil and grp ~= "quests" end
 local chain_wait = nil         -- { actor, key, grp, stateful } while at the reached item
 local chain_seen = {}          -- keys already visited in this sweep (never re-targeted)
 
+-- Battle interruption resume (user bug 2026-07-15): the world gate / a map switch
+-- DROPS a hand-picked target (the actor dies with the gate), and the auto-scan then
+-- re-acquired the STORY marker instead of the user's pick. Remember the pick as plain
+-- Lua data (no object refs — safe across teardown) and re-acquire it by key through
+-- the picker's own enumeration once the world is back; the quest auto-scan stays
+-- quiet while a resume is pending. Companion targets (grp == nil) are not resumable
+-- through the picker and keep the old behavior.
+local resume_pick = nil        -- { key, label, grp, stateful, tries }
+local RESUME_TRIES = 10        -- attempts (one per SCAN_EVERY*3 ticks, ~3 s) before giving up
+
 local last_enemy_key = nil     -- enemy proximity alert: edge-gate per enemy actor
 local last_enemy_d = 0
 local last_enemy_ms = -ENEMY_CUE_MS
@@ -851,6 +861,16 @@ local function drop_target()
     last_elev_zone = nil
 end
 
+-- Stash the current hand-picked target right before a FORCED drop (world gate closed,
+-- map switch) so the post-battle tick can re-acquire it. Deliberate drops (arrival,
+-- B, F3 off, a new pick) must NOT call this — those clear resume_pick instead.
+local function remember_pick()
+    if target and target.manual and target.grp then
+        resume_pick = { key = target.key, label = target.label, grp = target.grp,
+                        stateful = target.stateful, tries = 0 }
+    end
+end
+
 -- WORLD GATE — safety-critical. The minimap is the game's own "the world is alive
 -- and I'm free-roaming" signal; while it is missing/hidden (loading, LEVEL TEARDOWN,
 -- battle, cutscene, full-screen UI) the tracker must not touch ANY world actor:
@@ -866,6 +886,7 @@ end
 -- navi icon list all lived in the dead level — nil them before any tick could probe
 -- a freed object. Pure Lua + native audio stop only.
 Transition.on_begin("nav_tracker", function()
+    remember_pick()   -- resume_pick is plain Lua data: it survives the map switch
     drop_target()
     mm_cache, navi_icons = nil, nil
     mm_retry, navi_next = 0, 0
@@ -1255,7 +1276,10 @@ local function step()
         end
         route, route_idx = nil, 0
         world_gone = world_gone + 1
-        if world_gone >= WORLD_DROP_TICKS and target then drop_target() end
+        if world_gone >= WORLD_DROP_TICKS and target then
+            remember_pick()   -- a battle stole it; re-acquire when the world is back
+            drop_target()
+        end
         return
     end
     world_gone = 0
@@ -1292,12 +1316,39 @@ local function step()
         enemy_probe(px, py, pz)
     end
 
+    -- Re-acquire a hand-picked target stolen by a battle/level change: search the
+    -- picker's own enumeration for the remembered category+key (every 3rd scan —
+    -- list_targets is the full picker sweep, too heavy for every scan tick). While a
+    -- resume is pending the quest auto-scan below stays quiet, so the story marker
+    -- can't replace the user's pick during the window; if the pick is gone for good
+    -- (RESUME_TRIES misses) the auto-scan resumes as before.
+    if resume_pick and not target and tick % (SCAN_EVERY * 3) == 0 then
+        resume_pick.tries = resume_pick.tries + 1
+        local found = nil
+        for _, c in ipairs(Nav.list_targets()) do
+            if c.key == resume_pick.grp then
+                for _, it in ipairs(c.items) do
+                    if it.key == resume_pick.key then found = it break end
+                end
+                break
+            end
+        end
+        if found then
+            resume_pick = nil
+            Nav.set_manual_target(found.actor, found.key, Nav.item_label(found),
+                found.grp, found.stateful, true)   -- keep_sweep: resume, not a fresh pick
+        elseif resume_pick.tries >= RESUME_TRIES then
+            resume_pick = nil
+        end
+    end
+
     -- Re-scan the game's guidance markers ~1/s (even when idle — scanning every
     -- tick would hammer reflection): picks up a fresh quest marker automatically
     -- (auto-track on accept), retargets when the current step is done, and drops
     -- the target when the game stops guiding. A MANUAL target (companion tracking,
-    -- Shift+F5) is never overridden by the auto-scan.
-    if tick % SCAN_EVERY == 0 and not auto_suppressed and not (target and target.manual) then
+    -- Shift+F5) is never overridden by the auto-scan — nor is a pending resume.
+    if tick % SCAN_EVERY == 0 and not resume_pick and not auto_suppressed
+        and not (target and target.manual) then
         local best = best_candidate(px, py, pz)
         if best then
             if not target or target.key ~= best.key then
@@ -1711,6 +1762,7 @@ function Nav.toggle()
         Audio.stop()
         drop_target()
         chain_wait, chain_seen = nil, {}
+        resume_pick = nil
         companion_idx = 0
         Speech.say(I18n.t("nav_off"), true)
     else
@@ -2531,9 +2583,10 @@ end
 -- next tick (that's the base radar), but a hand-picked target stays gone until
 -- re-picked. Does NOT turn the whole radar off (F3 does that).
 function Nav.stop_tracking()
-    local had = target ~= nil or chain_wait ~= nil
+    local had = target ~= nil or chain_wait ~= nil or resume_pick ~= nil
     drop_target()
     chain_wait, chain_seen = nil, {}   -- also ends a pending sweep
+    resume_pick = nil        -- an explicit stop also forgets the battle-interrupted pick
     auto_suppressed = true   -- stay quiet until re-pick / F3 (don't auto-grab a quest)
     Audio.stop()
     if had then Speech.say(I18n.t("nav_stopped"), true) end
@@ -2549,6 +2602,7 @@ function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
     if not Core.valid(actor) then return false end
     on = true
     auto_suppressed = false   -- an explicit pick resumes normal tracking
+    resume_pick = nil         -- and replaces any battle-interrupted pick
     gated_prev = false
     companion_idx = 0
     chain_wait = nil          -- an explicit pick replaces any pending sweep wait

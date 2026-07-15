@@ -21,7 +21,7 @@
 | Overworld main menu (native selection) | done | `screen_field.lua`, reads via `UAT_UIStartTop` offsets |
 | Battle-pause menu (native selection) | done | `screen_pause.lua`, `UAT_UIXCmnPause +0x43C` |
 | Dialog / message / confirm popups | done | `screen_dialog.lua` (incl. reward/emblem content pools, gift picker) |
-| NPC subtitles / dialogue | done | `screen_dialogue.lua` |
+| NPC subtitles / dialogue | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` now gated on the game's OWN subtitles option — `ATSaveSystem.Option.EnableSubtitle` (reflected property read, FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. Pending re-verify with the option off |
 | Difficulty / choice lists | done | `screen_choicelist.lua`, `screen_choice.lua` |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua` |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
@@ -32,13 +32,14 @@
 | Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
 | Skill Tree / learn super attacks | done | **2026-07-14: the lock is read NATIVELY** from the game's own per-node state byte (offsets in *Derived facts*), so "bloqueada"/"adquirida" is correct on EVERY node whatever the browsing path — the old KNOWN LIMIT (noted below) is GONE. The name-propagation heuristic survives only as the fallback if the native read fails its bounds/FName self-check. Entry was slow (~30 s) until the feed's storm guard was fixed (see *Known issues*). Verified in-game 2026-07-14. — `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). LOCKED nodes: the ONLY marker the game exposes is the tree cursor's padlock (`UISkillTree.Skilltree_Cursor.WL_ImgIconMicon` visible), and only on a skill's ENTRY (lv-1) node when the skill is unowned — 6 capture rounds proved there is nothing else: no readable panel index/pointer/position (cursor grid coords do live at tree+0x15F8/+0x15FC as grid×95), key-help bar identical on every node, no cover/lock widget on screen; the char-level gate ("need level 10") exists ONLY in the post-confirm message window (dialog reader speaks it). So the lock is PROPAGATED by skill name within a screen visit (`locked_skills`, cleared in reset): once the entry node reads locked, every level of that skill announces "bloqueada". KNOWN LIMIT (accepted): reaching a level-2/3 node WITHOUT passing its level-1 node first announces no lock — unfixable by reflection. Round-7 panel sweep closed the last door: all 108 `WL_Ins_Panel_Cover` are visible always (a frame, not a padlock) and every skill icon is an anonymous `MaterialInstanceDynamic`, so panels can't be matched to skills. The real data (`USkillManager`/`USkillTree`) exposes ZERO reflected functions and owned levels live in private save memory (`USkillSave`) — a full fix needs native RE (Ghidra), deferred. Verified in-game 2026-07-14 |
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` — the screen's ACTION prompts ("X: asignar", "Y: árbol de habilidades", "A: usar") read once on entering any menu and again only when the set CHANGES (diff-gated, queued behind the screen's own readout). Hangs off the `ui_registry` dispatcher, so every menu (incl. future ones) is covered; passive/time-critical readers opt out with `keyhelp_auto = false` (13 adapters). Face buttons are finally NAMED: `keyhelp.lua` now falls through to `A.platbtn_token` (the palettes' resolver) when the bar's device-INDEXED textures (Btn00..03) can't name themselves. Nav entries ("mover", "cambiar pestaña") are dropped. Ctrl+F2 toggles it (needs a game RESTART — main.lua); F2 still reads the whole bar. Read LEFT-TO-RIGHT as on screen: the bar is a CanvasPanel the game lays out itself, so the widget number is a slot id, NOT a position — the place comes from the slot's `GetPosition()` (its `LayoutData` offsets reflect back as 0.0), falling back to the render transform / ancestors. COST RULE (learned the hard way: the first cut lagged the item + skill-palette menus to a crawl): inside the poll step it may ONLY use `Core.cached_all` (tick passed — a raw `FindAllOf` per poll stalls the game thread) and it polls the bar's LABELS, resolving the glyphs just once, on the poll where they changed. Verified in-game 2026-07-14 |
-| Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. F10 needs a game RESTART (main.lua); reactive works on Ctrl+Shift+R. Pending verify |
+| Quest objective HUD (text) | wip | `quest_objective.lua` — `Quest_Navi_C` rows `Txt_List_00`; announces on change + F10 on demand. 2026-07-15 fix: `Quest_Navi_C` was on the SCAN path and starved → now directory-mapped `{"fm","QuestNavigation"}` (field 0x568 confirmed in AT.hpp; Quest_Navi.hpp = the BP). Pending in-game verify |
+| Episode title cards | wip | `screen_questcard.lua` (NEW 2026-07-15) — `AT_UIQuestMainStart.TitleText` (0x3E0) via `{"fm","QuestMainStart"}` (0x558); telop pattern (once per appearance, queued), registered below telop. `fm.QuestMainLogo` is image-only (ChapterTitleImage) — unread, by design. Pending in-game verify |
 | Cooking menu | wip | `screen_cooking.lua` revised; pending re-verify (detail-pane read, markup strip) |
 | Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
-| Soul Emblems grid / Community | wip | `screen_community.lua`; was verified in-game, but the Soul Emblems GRID ("EMBLEMAS DE ALMA", `AT_UICommunityStart`) is reported silent again 2026-07-15 — see Backlog (screenshot 95 + directory trace plan) |
+| Soul Emblems grid / Community | wip | `screen_community.lua`. 2026-07-15 fix: `AT_UICommunityStart` UNMAPPED from the directory (third strike) — the manager has TWO flows (`cm.UIEmbListIns` board flow vs `cm.MenuSoulEmListIns` menu flow) and the menu flow's owner (`USoulEmblemMenu`/`UMenuObjectBase`) reflects NO widget field, so the mapping asserted "absent" on the menu-opened grid. Back on scan+pad-boost. Bonus fact: each grid slot (`UAT_UIXCmnEmb_Cursor`) reflects `UnlockState` u8 @0x408. Pending in-game verify |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
-| Story / battle results | done | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures) |
-| Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed |
+| Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). 2026-07-15: constant-"222" value bug — detail rows have NO reflected numeric members (value likely in the 0x3C0..0x418 unreflected tail; digit images may share one atlas texture) — `DEBUG=true` in screen_results dumps per-digit brush textures to `dumps/dump_results.txt` on the next real results screen; fix follows the dump |
+| Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed. 2026-07-15: battle-interruption resume — a world-gate/transition drop of a MANUAL pick stashes `resume_pick` (plain data) and re-acquires it by category+key when the world returns (10 tries, ~3 s apart); the quest auto-scan stays quiet while pending; cleared by B / F3 off / a new pick. Pending in-game verify |
 | Radar categories 2.0 (sites/enemies/collectibles) | done | Verified in-game 2026-07-15 (user: "funciona perfecto") |
 | R3 radar target picker (modal) | done | Verified in-game 2026-07-15 together with the categories batch (bind is R3 — early docs said "hold R2", stale) |
 | Battle monitor | wip | `battle_monitor.lua` present |
@@ -56,6 +57,10 @@
 | Skill-tree "requires level N" | `SkillTreeDataTable = USkillManager+0x108`; row via `RowMap` TSet at `DataTable+0x30` (hash = `FName.ComparisonIndex + Number`); `CharacterLevel` = `i32[row+0x58]`. Lock reason codes in `FUN_14144efc0` (2 = level too low) | Ghidra `FUN_14145e360` (row lookup), `skill_rowmap.java`. **`+0x30` is DERIVED, not read from an instruction — sanity-check `RowMap.Num` at runtime before trusting** |
 | Face-button glyph index (`EATPlatBtnId`) | **0=B, 1=A, 2=X, 3=Y** — the enum is a PS one and orders the faces right/bottom/left/top (○✕□△), so A/B are the MIRROR of the naive Xbox order (X/Y already match). Shared by the keyhelp bar, the QTE/fishing prompts and the item quick-slot palette | `AT_enums.hpp` + live `dump_keyhelp` 2026-07-14 ("Usar"=idx 1, "Atrás"=idx 0); `ui_archetypes.FACE_TOKEN`, [reference](reference/dbz-kakarot/input-icons-and-keyconfig.md) |
 | Fishing phase/cursor/zone | `Mgame_Fishing_C +0x50C` phase, `+0x518` cursor, `[0x520,0x524]` zone | live verify; `native_offsets.fishing` |
+| Subtitles ON/OFF option | `ATSaveSystem.Option.EnableSubtitle` (int32, 0=off) — both reflected UPROPERTYs (`UATSaveSystem.Option` = `FATSaveSystemOption` @0xB0, `EnableSubtitle` @0x1C inside); find the instance with FindAllOf("ATSaveSystem") skipping `Default__` | ATExt.hpp:815/4670 |
+| Quest HUD / episode-card fields | `UIFieldManager.QuestNavigation` 0x568 (`Quest_Navi_C`), `.QuestMainStart` 0x558 (`TitleText` 0x3E0), `.QuestMainLogo` 0x700 (image-only) | AT.hpp (2026-07-15 sweep) |
+| Soul-emblem grid slot lock | `UAT_UIXCmnEmb_Cursor.UnlockState` u8 @0x408 (reflected), name text `Txt_Commu` @0x3B0; grid = `AT_UICommunityStart.EmbList.EmbAry`; the MENU-flow owner (`cm.MenuSoulEmListIns` = `USoulEmblemMenu`) reflects NO widget field → class must stay UNMAPPED | AT.hpp:37780/31730-31790 |
+| Battle-result detail values | `UAT_UIQuestMainClearDetail` reflects NO numeric members — digits only as `Image_PercentageList` textures; real values presumably in unreflected tail 0x3C0..0x418 | AT.hpp:35209 |
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
@@ -64,15 +69,23 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — eight bugs + one
-feature, each bullet carries its diagnosis lead: (0) quest objective HUD confirmed NOT reading
-(screenshot 97; map `fm.QuestNavigation`); (1) level-up not announced (suspect: `Info_Log_Level_C`
-directory mapping, the fishing-ring failure pattern); (2) battle results reading a constant "222"
-for every stat value; (3) radar re-tracks the story objective after combat instead of the user's
-pick; (4) subtitles read even with the game's subtitles option off; (5) episode title cards not read
-(leads: `fm.QuestMainStart` / `fm.QuestMainLogo`); (6) Soul Emblems grid still silent (screenshot 95
-identified it); (7) the cooking ENTRY menu ("Preparar un platillo"/"Salir", screenshot 96) silent —
-the dish list after it reads; (+) d-pad snap navigation for the Community board.
+**NEXT SESSION, FIRST: verify the 2026-07-15 batch FIXES in game** (all coded + luac-validated
+2026-07-15; needs a FULL RESTART — new file `screen_questcard.lua` + directory/adapter changes).
+Per bug: (0) quest objective HUD — should announce on change and on F10 (now directory-mapped);
+(1) level-up — level up once, the toast should speak (unmapped, scan path; may miss the very
+FIRST toast of a session by up to ~4 s backoff — the pool stays alive after); (2) battle results —
+still expected to say "222": play ONE battle to the results screen, then send
+`Scripts/dumps/dump_results.txt` (DEBUG dump of the digit textures; the fix follows it); (3) radar —
+pick a NON-quest target from the R3 menu, get into a fight mid-trip, finish it: the radar must
+re-announce YOUR target, not the story marker (and B / F3-off must still stick); (4) turn the game's
+subtitles option OFF: voice-line subtitles must go silent (NPC dialogue boxes keep reading), ON =
+back to normal; (5) start an episode: the title card should read once; (6) open Soul Emblems from
+the menu: the grid should read again (unmapped, scan+boost — if STILL silent, Ctrl+F5 census with
+the grid open); (7) cooking ENTRY menu is NOT fixed (no widget class found in the dumps — the only
+two-button candidate, `UAT_UICommunityDetailPresentButton`, is the Community gift widget): open the
+campfire menu and press Ctrl+F5, the census names the owner widget, then it gets an adapter;
+(+) the Community-board d-pad snap feature is still pending (needs a mem_bridge write API — design
+session of its own).
 
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
@@ -128,57 +141,26 @@ quest-objective HUD verify FAILED — see the batch above, item 0).
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
 feature was derived lives in PROGRESS.md and in the git log; this list is only what is still OPEN.
 
-- **BUG CONFIRMED (user, 2026-07-15): the quest objective HUD is NOT read** (`quest_objective.lua`) —
-  full restarts happened today and it stayed mute. Screenshot "Captura de pantalla (97).png" pins the
-  element: the flag-icon panel above the minimap, single line "¡Lleva a Vegeta a un lugar remoto!".
-  Leads, in order: (a) `UIFieldManager` holds the widget by pointer — `QuestNavigation`
-  (`UAT_UIQuestNavigation*`, AT.hpp UIFieldManager body, 0x568): verify `Quest_Navi_C` is its BP
-  subclass and MAP it in `ui_directory` (`{"fm", "QuestNavigation"}`) so detection stops depending on
-  scans; (b) quest_objective runs OUTSIDE the registry loop — it must call `Core.begin_scan_tick()`
-  at its step top or its scans starve (the battle_monitor rule); (c) check the boot log that the F10
-  bind registered and no Lua error fired; (d) remember the reactive reader only speaks on CHANGE —
-  after the fix it should also read the objective once when it first appears.
-- **BUG (user, 2026-07-15): level-up is not announced.** Nothing is spoken on leveling up in the
-  field. PRIME SUSPECT: `Info_Log_Level_C` is directory-mapped to `{"fm", "InfoLevelUp"}` — if the
-  game never sets that field this is EXACTLY the fishing ring-core failure again (owner reachable +
-  field null = asserted absent, no scan fallback, silently dead reader). Check with Ctrl+F5 right
-  after a level-up (trace the `Info_Log_Level_C` line); if the field shows NULL while the toast is
-  on screen, unmap it. Also re-check whether level-up even goes through `Info_Log_Level_C` or
-  through the generic toast pool (`Info_Log_C`, unmapped) — screen_toasts may just not match it.
-- **BUG (user, 2026-07-15): battle results read a CONSTANT "222" for every stat.** Every fight ends
-  with e.g. "Gohan contra Saibaman x 3: Tiempo de finalización, 222, S" — the 222 repeats across ALL
-  fights and ALL result rows (time, damage, combo, …); the rank letter varies correctly. So the row
-  LABELS and the rank (brush texture) resolve, but the VALUE read is wrong: likely reading a
-  template/placeholder text box (a CDO or a pooled row that never got the live value) instead of the
-  on-screen number — same family as the fishing stale-instance bug (pinned/wrong instance) or the
-  items mainTxt/SubTxt wrapper lesson (two boxes per node, wrong one latched). Start in
-  `screen_battleresult.lua`: dump per-row which widget the number comes from (full name + text)
-  during one real result screen.
-- **BUG (user, 2026-07-15): after a combat, the radar re-tracks the STORY objective, discarding what
-  the user was tracking.** Not wrong as a default, but if the user had picked another target (R3 menu)
-  and a fight interrupts the trip, combat end must restore THAT target, not the story marker. Fix in
-  `nav_tracker.lua`: persist the last user-picked target (category + id) across the battle transition
-  and re-acquire it on combat end; fall back to the quest auto-track only when the user never picked
-  anything (or explicitly cleared with B).
-- **BUG (user, 2026-07-15): NPC subtitles are read even when the game's subtitles option is OFF.**
-  `screen_dialogue.lua` must gate on the game's own subtitles setting (derive it from the game's
-  options data at runtime — find where the option lives: the options save / GameUserSettings family /
-  whatever `Start_Option_C` writes; NO hardcoded defaults). If the option is off, speak nothing.
-- **BUG (user, 2026-07-15): episode TITLE CARDS are not read** (e.g. "Goku contra Nappa y Vegeta" at
-  an episode start). STRONG LEADS (AT.hpp, UIFieldManager body): the manager holds
-  `QuestMainStart` (`UAT_UIQuestMainStart*`, 0x558) and `QuestMainLogo` (`UAT_UIQuestMainLogo*`,
-  0x700) by pointer — one of those is almost certainly the episode card; check their classes' text
-  members in the dump, then map + register a reader (both are directory-mappable off `fm`).
-  Fallback: F7/census while a card is up.
-- **BUG (user, 2026-07-15): the Soul Emblems GRID is still silent** — screenshot "Captura de pantalla
-  (95).png" identifies it: header "EMBLEMAS DE ALMA", 3×7 grid of emblem portraits, page 1/7 (LB/RB),
-  keyhelp X=Ordenar Y=Detalles A=Conjunto B=Atrás, cursor = golden border on the hovered emblem. This
-  is the known `AT_UICommunityStart` thread (directory rounds 1-3: re-mapped to `cm.UIEmbListIns`
-  after the find_hud fix, but the user confirms it STILL doesn't read). Next: open the grid, Ctrl+F5,
-  read the `AT_UICommunityStart` trace — owner ok + field NULL means unmap (the fishing-ring
-  pattern); owner ok + field ok means the ADAPTER is the problem (cursor = golden-border pattern →
-  try the skill-palette plate-border archetype; check `screen_community.lua` actually targets this
-  class).
+- **2026-07-15 batch: 6 of 8 bugs CODED, pending in-game verify** (the per-bug verify script is in
+  *Next step*): quest HUD directory-mapped, level-up toast unmapped, radar resume_pick, subtitles
+  option gate (`ATSaveSystem.Option.EnableSubtitle`), episode-card reader (`screen_questcard.lua`),
+  Soul Emblems grid unmapped (two-flow owner problem — see the section table). Still OPEN below:
+  battle-results "222" (instrumented, needs one dump) and the cooking entry menu (needs census).
+- **BUG OPEN (user, 2026-07-15): battle results read a CONSTANT "222" for every stat.** Labels and
+  rank letters resolve; the VALUE is wrong across all rows/fights. RE (2026-07-15): the detail row
+  class reflects NO numeric members — the number exists only as `Image_PercentageList` digit images,
+  and a shared atlas texture whose name ends in a digit would produce exactly a constant digit
+  (`(%d)$` parse). Real values presumably in the row's unreflected tail (0x3C0..0x418).
+  `screen_results.lua` has `DEBUG=true`: the next real results screen appends per-digit brush
+  texture names to `Scripts/dumps/dump_results.txt` — read it, then either fix the token parse (if
+  digits are distinct textures after all) or pin the native value via F4/Ghidra and turn DEBUG off.
+- **BUG OPEN (user, 2026-07-15): the cooking ENTRY menu ("Preparar un platillo" / "Salir") is not
+  read** — screenshot 96. NOT identified in the dumps (2026-07-15 sweep: no camp/bonfire widget
+  class; `EPlayerControlMode::CookingSelectMenu` confirms a distinct control mode; the only
+  two-button+cursor widget, `UAT_UICommunityDetailPresentButton`, is the Community gift dialog).
+  Next: open the campfire menu in game + Ctrl+F5 — the census names the on-screen text's owner
+  widget; then map/register it (probably a reusable two-option campfire archetype shared by
+  rest/cook/save tents).
 - **FEATURE (user, 2026-07-15): d-pad grid navigation for the Community BOARD** (the free-cursor
   socket board). Blind-friendly navigation: a d-pad press should SNAP the cursor to the nearest
   socket in that direction (treat the board as a grid), instead of free analog wandering. All the
@@ -189,14 +171,6 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   today) or whether steering the game's own cursor input is safer; once snapped, the game's hovered
   cache (`host+0x5D8`) should announce the socket by itself. Register the d-pad stepper on
   `pad_poll.lua` (never a new 20 ms loop).
-- **BUG (user, 2026-07-15): the cooking ENTRY menu ("Preparar un platillo" / "Salir") is not read** —
-  screenshot "Captura de pantalla (96).png": a small two-option vertical menu at the campfire
-  (selected row = bright yellow fill, other = brown; helper text "Selecciona un platillo para
-  preparar."; keyhelp ←Seleccionar A=Confirmar B=Atrás). The DISH LIST that follows reads fine
-  (`Shop_Cook_C` via the directory) — only this pre-menu is silent, so it is some OTHER widget class:
-  neither screen_choice/choicelist nor any registered adapter matches it. Open it, Ctrl+F5 (census
-  names the on-screen text's owner widget), then map/register it — probably a reusable two-option
-  campfire/confirm archetype (rest/cook/save tents likely share it).
 - **Cooking menu** (`screen_cooking.lua`) — revised, pending re-verify (detail-pane read, markup strip).
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on return.
 - Niceties: skill-palette plates 4/7 (structural, cursor never lands there so far); in assign mode the

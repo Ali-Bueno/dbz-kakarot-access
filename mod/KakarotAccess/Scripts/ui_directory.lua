@@ -185,10 +185,15 @@ local MAP = {
     -- HUD-held screens
     ["Xcmn_Pause_C"]           = { {"hud", "UIPause"} },
     ["Start_Commu_Brd_C"]      = { {"hud", "UICommBoardIns"}, {"cm", "UICommBrdIns"} },
-    -- (Re-mapped 2026-07-15: its round-1 "resolved but silent" was really the broken
-    -- hud root — FindAllOf's first PlayerController was the mount controller — so the
-    -- cm chain never actually resolved. The field itself was never at fault.)
-    ["AT_UICommunityStart"]    = { {"cm", "UIEmbListIns"} },
+    -- AT_UICommunityStart (Soul Emblems grid) deliberately NOT mapped — third strike
+    -- 2026-07-15: even after the find_hud fix the user reports the MENU-opened grid
+    -- ("EMBLEMAS DE ALMA") silent. The manager has TWO flows: cm.UIEmbListIns (board
+    -- flow) and cm.MenuSoulEmListIns (menu flow) — but the latter is a USoulEmblemMenu
+    -- CONTROLLER whose only reflected member is GameHUD, and UMenuObjectBase (the
+    -- UCommunityMenu's m_xStart_Community) reflects NOTHING (AT.hpp:41863), so no
+    -- trustworthy owner field exists for the menu flow. Mapped, a null UIEmbListIns
+    -- asserts "absent" and kills the scan fallback — exactly the reported silence.
+    -- Scan path + pad-press boost serve it instead.
     ["Start_Commu_Detail_C"]   = { {"fm", "CommunityDetail"} },
     ["Battle_Hud_P_Main_C"]    = { {"bm", "BattleHudPlayer"} },
     ["Battle_Hud_E_Main_C"]    = { {"bm", "BattleHudEnemy"} },
@@ -207,10 +212,21 @@ local MAP = {
     ["Field_Memory_C"]         = { {"fm", "FieldMemory"} },
     ["Quest_Main_Clear_C"]     = { {"fm", "QuestMainClear"} },
     ["Quest_Sub_C"]            = { {"fm", "QuestSub"} },
+    -- The quest-objective HUD (flag panel above the minimap). fm.QuestNavigation
+    -- (AT.hpp UIFieldManager 0x568); Quest_Navi_C is its BP subclass (Quest_Navi.hpp).
+    -- quest_objective.lua polled this via the scan path and starved (user bug 2026-07-15).
+    ["Quest_Navi_C"]           = { {"fm", "QuestNavigation"} },
+    -- The episode/quest title card ("Goku vs. Nappa and Vegeta") shown at an episode
+    -- start: fm.QuestMainStart (0x558), TitleText is the card's text (AT.hpp 0x3E0).
+    -- (QuestMainLogo 0x700 is image-only — ChapterTitleImage — nothing to read.)
+    ["AT_UIQuestMainStart"]    = { {"fm", "QuestMainStart"} },
     -- Info_Log_C deliberately NOT mapped: fm.InfoLog is one instance, but overflow
     -- toasts spawn EXTRA pooled Info_Log_C hosts that screen_toasts enumerates via
     -- cached_all — a single-pointer mapping would silently drop those lines.
-    ["Info_Log_Level_C"]       = { {"fm", "InfoLevelUp"} },
+    -- Info_Log_Level_C deliberately NOT mapped (was {"fm","InfoLevelUp"}): level-ups
+    -- were never announced with the mapping on (user bug 2026-07-15) — the fishing
+    -- ring-core pattern (owner reachable + field never set = asserted absent, reader
+    -- silently dead). The toast is pooled/short-lived; the scan path reads it.
     ["Battle_Tips_Tutorial_C"] = { {"fm", "BattleTipsTutorial"} },
     ["AT_UIMgameFishing"]      = { {"fm", "MiniGameFishing"} },
     ["AT_UIMiniGamePop"]       = { {"fm", "MiniGamePop"} },

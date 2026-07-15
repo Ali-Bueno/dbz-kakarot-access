@@ -51,6 +51,9 @@ Registry.register(require("screen_dialogue"))
 -- Telop banners sit BELOW dialogue: a subtitle wins the tick and the banner (still
 -- pending while on screen) speaks right after it, queued.
 Registry.register(require("screen_telop"))
+-- Episode title cards (fm.QuestMainStart) — same banner family as the telop: below
+-- dialogue, speaks once per appearance, queued.
+Registry.register(require("screen_questcard"))
 Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
 local Tutorial = require("screen_tutorial")

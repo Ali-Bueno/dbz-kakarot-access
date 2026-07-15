@@ -33,6 +33,45 @@ local ann = Core.make_announcer()
 local tick = 0
 local cached = nil   -- current "Speaker: line" computed in is_active, reused by update
 
+-- The game's OWN subtitles option gates the subtitle surface (user bug 2026-07-15:
+-- voice-line subtitles were spoken with the option off). The value lives in the system
+-- save object: ATSaveSystem.Option.EnableSubtitle (int32; FATSaveSystemOption 0x1C,
+-- held at UATSaveSystem+0xB0 — ATExt.hpp:815/4670; both are reflected UPROPERTYs, so
+-- this is a plain property read, no raw offsets). The save object is found once
+-- (FindAllOf, budget-gated, CDO skipped) and cached — it lives as long as the game.
+-- FAIL-OPEN: while it can't be found/read, lines keep speaking — a lookup failure must
+-- never silence the story for a blind player. Only Xcmn_Subtitles_C is gated: the NPC
+-- talk window (Field_Talk_Win_C) is a dialogue box every player sees regardless.
+local savesys = nil
+local savesys_next = 0   -- next tick allowed to retry the lookup (~10 s backoff)
+
+local function subtitles_on()
+    if not Core.valid(savesys) then
+        savesys = nil
+        if tick < savesys_next then return true end
+        savesys_next = tick + 100
+        if not Core.take_scan_slot() then return true end
+        local all
+        if pcall(function() all = FindAllOf("ATSaveSystem") end) and all then
+            for _, o in pairs(all) do
+                if Core.valid(o) then
+                    local ok, fn = pcall(function() return o:GetFullName() end)
+                    if ok and type(fn) == "string" and not fn:find("Default__", 1, true) then
+                        savesys = o
+                        break
+                    end
+                end
+            end
+        end
+        if not Core.valid(savesys) then return true end
+    end
+    local v
+    if not pcall(function() v = savesys.Option.EnableSubtitle end) then return true end
+    local n = tonumber(v)
+    if n == nil then return true end
+    return n ~= 0
+end
+
 -- Speakable text of an Xcmn_MultiLineText_C node, with fallbacks: the plain mainTxt
 -- first (the common case), then the wrapper's own reflected FText (GetText — set even
 -- when a rich/tagged line leaves mainTxt empty), then the rich renderer's markup
@@ -91,7 +130,7 @@ function Dialogue.is_active()
     local hdr = Core.cached_live("Xcmn_Header_C", tick)
     if Core.on_screen(hdr) then cached = nil return false end
 
-    cached = line_from_any("Xcmn_Subtitles_C", "Txt_Name", "Txt_Selif")
+    cached = (subtitles_on() and line_from_any("Xcmn_Subtitles_C", "Txt_Name", "Txt_Selif") or nil)
         or line_from_any("Field_Talk_Win_C", "Txt_Speaker", "Txt_Msg")
     return cached ~= nil
 end

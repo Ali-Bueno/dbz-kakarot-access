@@ -32,6 +32,49 @@ local tick = 0
 local spoken = {}    -- line KEY -> true. Cleared when the screen closes, NOT on reset().
 local queue = {}     -- { {key=, text=}, ... } computed in is_active
 
+-- DIAGNOSIS (user bug 2026-07-15): every detail row reads a CONSTANT "222" for its
+-- value while labels and ranks are right — the digit images likely all share ONE
+-- atlas texture whose name ends in a digit (texture-name parsing can't work then; the
+-- real value would live in the row's unreflected tail, AT.hpp: Detail 0x3C0..0x418).
+-- While ON, each detail row's Image_PercentageList is dumped once (visibility + brush
+-- texture full name + widget path) to dumps/dump_results.txt during a real results
+-- screen. Turn OFF once the value source is fixed and re-verified.
+local DEBUG = true
+local dumped = {}    -- detail KEY -> true (reset with `spoken` when the screen closes)
+
+local function dump_path()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    return dir .. "\\dumps\\dump_results.txt"
+end
+
+local function debug_dump_detail(d, key, label)
+    if dumped[key] then return end
+    dumped[key] = true
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    f:write(string.format("== %s label=%s\n", key, tostring(label)))
+    local arr, n = Core.array_of(d, "Image_PercentageList")
+    if arr then
+        pcall(function()
+            for i = 1, n do
+                local img = arr[i]
+                local vis, full, tex = "?", "?", "(none)"
+                pcall(function() vis = tostring(Core.is_visible(img)) end)
+                pcall(function() full = img:GetFullName() end)
+                pcall(function()
+                    local ro = img.Brush.ResourceObject
+                    if ro and ro:IsValid() then tex = ro:GetFullName() end
+                end)
+                f:write(string.format("  [%d] vis=%s tex=%s\n      widget=%s\n", i, vis, tex, full))
+            end
+        end)
+    else
+        f:write("  (Image_PercentageList unreadable)\n")
+    end
+    f:close()
+end
+
 local DETAIL_COUNT = 6   -- Quest_Main_Clear_Detail00..05 (Quest_Main_Clear_Bar.hpp)
 
 -- Valid rank letters (validates the texture-name suffix so an unrelated image never
@@ -99,10 +142,12 @@ local function lines()
                         local dn = Core.read_text(d.TextBox_Detail)
                         local dr = rank_letter(d.Image_Rank)
                         if dn and dr then
+                            local key = string.format("d%d.%d", i, j)
+                            if DEBUG then debug_dump_detail(d, key, dn) end
                             local text = Core.phrase(dn,
                                 image_number(d, "Image_PercentageList"), dr)
                             if j == 0 and name then text = name .. ": " .. text end
-                            out[#out + 1] = { key = string.format("d%d.%d", i, j), text = text }
+                            out[#out + 1] = { key = key, text = text }
                         end
                     end
                 end
@@ -125,6 +170,7 @@ function Results.is_active()
     if not host then
         spoken = {}
         queue = {}
+        dumped = {}
         return false
     end
     queue = lines()
