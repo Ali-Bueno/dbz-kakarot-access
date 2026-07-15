@@ -170,7 +170,11 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   within a visit; cleared on genuine close / entry-menu / free-roam; F1 → `reannounce()`
   overrides); (3) `Cooking.confirm_ticks = 5` (~0.5 s) so the exit-animation blip never
   commits, plus cooking yields while `WL_CookingTop` shows rows (`A.shoptop_rows`, the shared
-  helper screen_shoplist now uses too). Pending verify.
+  helper screen_shoplist now uses too); (4) round 3 (user: PAUSING after a cook visit spoke the
+  stale dish — the ring family is registered BELOW cooking and the minimap gate is moot inside
+  menus): cooking/shoplist yield when the ring is GENUINELY open via `Core.ring_open` (the
+  live_ring test — on_screen AND GetVisibility()==0; bare on_screen over-triggers on the pooled
+  closed ring; screen_field now shares the helper). Pending verify.
   (General lessons: mapping a POOLED multi-instance class to ONE field silently drops the other
   instances — map every holder or don't map; a pooled pane that never collapses needs the
   free-roam cross-check + spoken-key suppression, not a content gate.)
