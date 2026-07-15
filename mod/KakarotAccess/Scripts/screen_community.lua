@@ -440,6 +440,16 @@ Transition.on_begin("screen_community", clear_state)
 -- into silence, which is exactly what happened live on the placement screen).
 local grid_slots, grid_byai = nil, nil
 
+-- The Soul Emblems grid host. The MENU-opened grid ("EMBLEMAS DE ALMA") is the
+-- BLUEPRINT class Start_Commu_Emb_C (census 2026-07-15) — FindAllOf on the native
+-- AT_UICommunityStart returns nothing for it (the board's Start_Commu_Brd_C lesson),
+-- which is why the menu flow stayed silent even unmapped. The board flow's instance
+-- keeps the native name; try both.
+local function grid_host()
+    return Core.first_on_screen("AT_UICommunityStart", tick)
+        or Core.first_on_screen("Start_Commu_Emb_C", tick)
+end
+
 function Commu.is_active()
     tick = tick + 1
     grid_slots, grid_byai = nil, nil
@@ -463,7 +473,7 @@ function Commu.is_active()
                 -- 2026-07-06). Hand the tick to the grid reader while it has slots;
                 -- every other rendered-frame mode stays with the board.
                 if Mem.i32(board, BOARD.mode) == 10 then
-                    grid = Core.first_on_screen("AT_UICommunityStart", tick)
+                    grid = grid_host()
                     if grid then
                         grid_slots, grid_byai = slots()
                         if #grid_slots > 0 then m = "grid" end
@@ -476,7 +486,7 @@ function Commu.is_active()
         end
     end
     if not m then
-        grid = Core.first_on_screen("AT_UICommunityStart", tick)
+        grid = grid_host()
         if grid then
             grid_slots, grid_byai = slots()
             if #grid_slots > 0 then m = "grid" end

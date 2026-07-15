@@ -44,6 +44,13 @@ local cached = nil   -- current "Speaker: line" computed in is_active, reused by
 -- talk window (Field_Talk_Win_C) is a dialogue box every player sees regardless.
 local savesys = nil
 local savesys_next = 0   -- next tick allowed to retry the lookup (~10 s backoff)
+local sub_logged = nil   -- last logged option value / "miss" (log on CHANGE, never per tick)
+
+local function sub_log(what)
+    if sub_logged == what then return end
+    sub_logged = what
+    print("[KakarotAccess] subtitles option: " .. what .. "\n")
+end
 
 local function subtitles_on()
     if not Core.valid(savesys) then
@@ -63,12 +70,22 @@ local function subtitles_on()
                 end
             end
         end
-        if not Core.valid(savesys) then return true end
+        if not Core.valid(savesys) then
+            sub_log("ATSaveSystem not found (fail-open, subtitles keep reading)")
+            return true
+        end
     end
     local v
-    if not pcall(function() v = savesys.Option.EnableSubtitle end) then return true end
+    if not pcall(function() v = savesys.Option.EnableSubtitle end) then
+        sub_log("EnableSubtitle unreadable (fail-open)")
+        return true
+    end
     local n = tonumber(v)
-    if n == nil then return true end
+    if n == nil then
+        sub_log("EnableSubtitle non-numeric (fail-open)")
+        return true
+    end
+    sub_log("EnableSubtitle = " .. n)
     return n ~= 0
 end
 

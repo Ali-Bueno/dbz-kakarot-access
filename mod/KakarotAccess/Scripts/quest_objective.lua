@@ -123,6 +123,56 @@ function Quest.stop()
     _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
 end
 
+-- Diagnostic dump (dumps/dump_quest.txt), appended on every F10 press: detection is
+-- ON-SCREEN in the directory trace (2026-07-15) yet nothing is spoken, so the dump
+-- pins WHICH stage returns nothing — row validity, visibility, or the text reads.
+-- User-triggered only (never per tick); remove once the objective reader is verified.
+local function dump_path()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    return dir .. "\\dumps\\dump_quest.txt"
+end
+
+local function dump_state(text)
+    local f = io.open(dump_path(), "a")
+    if not f then return end
+    f:write(string.format("== F10 @ %s text=%s\n", os.date("%H:%M:%S"), tostring(text)))
+    f:write(string.format("  active_adapter=%s transition=%s\n",
+        tostring(Registry.active_adapter()), tostring(Transition.active())))
+    local host = Core.first_on_screen(HOST_CLASS, tick)
+    if not host then
+        f:write("  host: first_on_screen = nil\n")
+        f:close()
+        return
+    end
+    local fn = "?"
+    pcall(function() fn = host:GetFullName() end)
+    f:write("  host = " .. fn .. "\n")
+    for _, rows in ipairs({ MAIN_ROWS, SUB_ROWS }) do
+        for _, m in ipairs(rows) do
+            local row
+            local okr = pcall(function() row = host[m] end)
+            local valid = okr and Core.valid(row) or false
+            local on = valid and Core.on_screen(row) or false
+            local t0, t1
+            if valid then
+                pcall(function() t0 = Core.read_text(row.Txt_List_00) end)
+                pcall(function() t1 = Core.read_text(row.Txt_List_01) end)
+            end
+            f:write(string.format("  %s valid=%s on_screen=%s txt0=%s txt1=%s\n",
+                m, tostring(valid), tostring(on), tostring(t0), tostring(t1)))
+        end
+    end
+    for _, nm in ipairs({ "Txt_Main00", "Txt_Sub00", "Txt_Title", "Txt_Navi_Detail",
+                          "WL_MainQuestListTitle", "WL_SubQuestListTitle" }) do
+        local node, t
+        pcall(function() node = host[nm] end)
+        if Core.valid(node) then pcall(function() t = Core.read_text(node) end) end
+        f:write(string.format("  title %s = %s\n", nm, tostring(t)))
+    end
+    f:close()
+end
+
 -- F10: speak the current objective on demand (interrupts). Runs on the game thread
 -- (touches live UObjects) and stays inert during a level transition.
 function Quest.read()
@@ -131,6 +181,7 @@ function Quest.read()
         tick = tick + 1
         Core.begin_scan_tick()
         local text = objective_text()
+        pcall(dump_state, text)
         Speech.say(text or I18n.t("objective_none"), true)
     end)
 end

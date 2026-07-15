@@ -201,7 +201,13 @@ local MAP = {
     ["AT_UIQteMashAlert"]      = { {"bm", "QteMash", "WL_Alert"} },
 
     -- Field manager screens (shops, maps, quest/info, minigames)
-    ["Shop_Top_C"]             = { {"fm", "ShopTop"} },
+    -- Shop_Top_C lives in TWO places: the regular shop top (fm.ShopTop) and the
+    -- cook-NPC's embedded mode list ("Preparar un platillo"/"Salir") at
+    -- CookingMenu.WL_CookingTop (AT.hpp:32237). Mapping only fm.ShopTop silenced the
+    -- cook menu (user bug 2026-07-15) — screen_shoplist enumerates candidates and
+    -- picks the one with visible rows, so both chains must be here.
+    ["Shop_Top_C"]             = { {"fm", "ShopTop"},
+                                   {"fm", "CookingMenu", "WL_CookingTop"} },
     ["Shop_Cmn_C"]             = { {"fm", "ShopCommon"} },
     ["Shop_Cook_C"]            = { {"fm", "CookingMenu"} },
     ["Shop_Info_C"]            = { {"fm", "ShopInfo"} },
