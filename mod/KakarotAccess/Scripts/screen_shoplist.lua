@@ -91,6 +91,8 @@ function ShopList.is_active()
     -- Free-roam cross-check (same as screen_cooking): the cook-NPC's embedded
     -- Shop_Top_C can keep its rows visible after the flow closes; minimap up = closed.
     if Core.free_roam(tick) then state = nil return false end
+    -- And yield to the pause RING family (all registered below — see screen_cooking).
+    if Core.ring_open(tick) then state = nil return false end
     host = acquire()
     if not host then state = nil return false end
     local rows = rows_of(host)

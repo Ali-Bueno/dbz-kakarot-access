@@ -150,13 +150,9 @@ end
 -- could still return the stale enum-3 one — so pick the instance that is genuinely
 -- open (its own visibility is Visible(0)) among all on-screen ones.
 local function live_ring()
-    for _, o in ipairs(Core.cached_all("Start_Top_C", tick)) do
-        if Core.on_screen(o) then
-            local ok, v = pcall(function() return o:GetVisibility() end)
-            if ok and tonumber(v) == 0 then return o end
-        end
-    end
-    return nil
+    -- Shared with the cooking/shoplist yield gates (Core.ring_open): rendered AND
+    -- ESlateVisibility Visible — the pooled ring lingers on_screen while closed.
+    return Core.ring_open(tick)
 end
 
 function Field.is_active()

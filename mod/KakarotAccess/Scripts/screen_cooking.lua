@@ -200,6 +200,15 @@ function Cooking.is_active()
     -- live-detail gate below can't release — the adapter latched "Cocina, <dish>" and
     -- shadowed the ring pause. The minimap is the game's own "menu closed" signal.
     if Core.free_roam(tick) then spoken_key = nil return false end
+    -- The overworld RING (Start_Top_C) and its whole submenu family (items, skill
+    -- tree, community, save/load, …) are registered BELOW this adapter, and the cook
+    -- pane lingers VISIBLE after a visit — pausing after cooking re-announced the
+    -- stale dish and shadowed the ring (user 2026-07-15 night). Ring genuinely open
+    -- (Core.ring_open, the live_ring visibility test) = a real menu owns the screen.
+    if Core.ring_open(tick) then
+        spoken_key = nil
+        return false
+    end
     -- The embedded ENTRY menu ("Preparar un platillo"/"Salir") owns the screen while
     -- its Shop_Top rows are visible — screen_shoplist (registered above) reads them;
     -- the dish pane behind it is backdrop. Also the moment to forget the spoken key,

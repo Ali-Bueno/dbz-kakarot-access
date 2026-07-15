@@ -626,6 +626,22 @@ function Core.free_roam(tick)
     return Core.valid(mm) and Core.on_screen(mm)
 end
 
+-- The overworld pause RING (Start_Top_C), GENUINELY open: rendered AND
+-- ESlateVisibility Visible (0) — the pooled widget lingers on_screen in other
+-- visibility states while closed, so on_screen alone over-triggers (screen_field's
+-- live_ring test). Returns the open instance or nil. Adapters whose pooled panes
+-- linger visible (screen_cooking/screen_shoplist) yield on this: ring open = a real
+-- menu owns the screen.
+function Core.ring_open(tick)
+    for _, o in ipairs(Core.cached_all("Start_Top_C", tick)) do
+        if Core.on_screen(o) then
+            local ok, v = pcall(function() return o:GetVisibility() end)
+            if ok and tonumber(v) == 0 then return o end
+        end
+    end
+    return nil
+end
+
 function Core.first_on_screen(cls_name, tick)
     local list = Core.cached_all(cls_name, tick)
     local saw_valid = false
