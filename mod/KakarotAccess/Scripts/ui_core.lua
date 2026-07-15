@@ -60,8 +60,27 @@ local function is_userwidget(o)
     return ok and r == true
 end
 
+-- Per-tick memo for on_screen: adapters and first_on_screen probe the same
+-- headers/containers many times per step, and each probe is an ancestor walk of up
+-- to MAX_ANCESTORS × 2 pcalls. Keyed by the UObject address (two RemoteObjects may
+-- wrap the same object), cleared in begin_scan_tick — never carried across ticks.
+local os_memo = {}
+local function memo_key(o)
+    local ok, a = pcall(function() return o:GetAddress() end)
+    if ok and type(a) == "number" then return a end
+    return nil
+end
+
 function Core.on_screen(o)
     if not Core.is_visible(o) then return false end
+    local key = memo_key(o)
+    if key and os_memo[key] ~= nil then return os_memo[key] end
+    local r = Core.on_screen_uncached(o)
+    if key then os_memo[key] = r end
+    return r
+end
+
+function Core.on_screen_uncached(o)
     local cur, depth = o, 0
     while depth < MAX_ANCESTORS do
         local okp, p = pcall(function() return cur:GetParent() end)
@@ -126,6 +145,20 @@ function Core.array_of(owner, name)
     return arr, n
 end
 
+-- FindAllOf, timed: every full-object scan is accounted in _G.__KakarotScanStats so the
+-- Ctrl+F5 dump can attribute step cost to scans vs widget walks with data, not guesses.
+local function timed_findall(cls_name)
+    local t0 = os.clock()
+    local r = FindAllOf(cls_name) or {}
+    local dt = (os.clock() - t0) * 1000
+    local s = _G.__KakarotScanStats
+    if not s then s = { n = 0, ms = 0, max = 0 } _G.__KakarotScanStats = s end
+    s.n = s.n + 1
+    s.ms = s.ms + dt
+    if dt > s.max then s.max = dt end
+    return r
+end
+
 -- First live (runtime, not archetype/CDO) instance of a class. PREFERS the shared
 -- top-level widget — a DIRECT child of the GameInstance (…BP_ATGameInstance_C_0.<Name>) —
 -- over a nested/pooled copy inside another screen's WidgetTree. This matters for classes
@@ -133,7 +166,7 @@ end
 -- and as a collapsed copy under a quest screen): the adapters want the top-level one, and
 -- caching the nested copy would make the screen never detect as on-screen.
 function Core.first_live(cls_name)
-    local all = FindAllOf(cls_name) or {}
+    local all = timed_findall(cls_name)
     local fallback
     for _, o in pairs(all) do
         if Core.valid(o) then
@@ -157,9 +190,13 @@ end
 -- when the cached ref is gone, and when a class isn't present yet we back off (a screen
 -- that hasn't appeared shouldn't cost a full scan every tick).
 local live_cache, live_backoff = {}, {}
-local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-present class
-                            -- (raised from 20: the periodic absent-class FindAllOf scans
-                            -- were the main source of gameplay lag spikes, 2026-07-03)
+local ABSENT_BACKOFF = 40   -- ticks (~4s) between scans for a NEVER-seen class. Was 80
+                            -- while ~25 absent classes scanned (30% of the game thread);
+                            -- with the screen directory serving most classes by pointer,
+                            -- the absent scan set is small and the safety net can be
+                            -- fast again. Menu-driven appearances don't wait for this —
+                            -- the boost windows (registry commits + pad presses) cover
+                            -- them; this cadence is only the no-event fallback.
 
 -- Per-tick FindAllOf budget — the fix for the periodic menu-navigation lag SPIKE
 -- (2026-07-04). Each absent class backs off for ABSENT_BACKOFF ticks, but ~20 adapters
@@ -170,9 +207,22 @@ local ABSENT_BACKOFF = 40   -- ticks (~4s at 100ms) between scans for a not-yet-
 -- steady state — once served, each class's fresh back-off expires on a different tick.
 -- Reset once per poll tick by Core.loop (before the step runs).
 local scan_budget = 0
-local SCANS_PER_TICK = 3
+local SCANS_PER_TICK = 2   -- was 3: three FindAllOf in one tick was the measured 153ms
+                           -- game-thread spike (Ctrl+F5, 2026-07-14). NOT 1 and NOT
+                           -- time-gated: a first cut added a 10ms elapsed-time gate here
+                           -- and the late-registry adapters (items/saveload/characters/
+                           -- skill tree — they poll at the tail of the sweep, after the
+                           -- walk cost) got their scans systematically denied → those
+                           -- menus went SILENT (2026-07-15). Budget only; deferred
+                           -- classes retry next tick.
+-- NOTE: the registry loop is NOT the only caller — battle_monitor and quest_objective run
+-- their own loops and call this at their step tops (they must, or they'd inherit a spent
+-- budget). All callers are serialized on the game thread, so the shared per-tick state
+-- (budget + os_memo) being reset by any of them is harmless — but don't assume "per tick"
+-- means "per registry tick" here.
 function Core.begin_scan_tick()
     scan_budget = SCANS_PER_TICK
+    os_memo = {}
     -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
     -- thread). It is the reference the remaining NotifyOnNewObject — the transition gate — checks
     -- itself against, so we can never again ASSUME a callback is on the right thread.
@@ -184,14 +234,222 @@ local function scan_allowed()
     return true
 end
 
+-- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from
+-- the same per-tick budget as FindAllOf — one shared cap on scan work per tick.
+function Core.take_scan_slot() return scan_allowed() end
+
+-- ---- screen directory (ui_directory.lua): the game's own screen registry -----
+-- Mapped classes resolve to their live instance through 2-3 guarded pointer reads on the
+-- game's HUD/menu managers — no FindAllOf, no backoff, a just-opened submenu is seen the
+-- same tick. Lazily required (ui_directory requires ui_core back, so a top-level require
+-- here would cycle). Returns nil for unmapped classes — those keep the scan path.
+local Dir = nil
+local function directory_list(cls_name)
+    if Dir == nil then
+        local ok, m = pcall(require, "ui_directory")
+        Dir = (ok and m) or false
+        if Dir == false then
+            print("[KakarotAccess] ui_directory unavailable, scan-only mode\n")
+        end
+    end
+    if not Dir then return nil end
+    return Dir.resolve(cls_name)
+end
+
+-- Real-time tick clock (100ms units). Backoffs used to run on each ADAPTER's private tick
+-- counter, which only advances when that adapter is polled — with the sticky registry
+-- (ui_registry) idle adapters are polled less often, so their counters would stretch every
+-- backoff. os.clock is wall time under MSVC, the same source the step telemetry uses.
+local function now()
+    return math.floor(os.clock() * (1000 / Core.POLL_MS))
+end
+
+-- Event-driven scan boost: for a short window after a REGISTRY EVENT (a screen was
+-- committed or closed — i.e. the exact moments a new screen may be appearing), classes
+-- whose pool holds nothing live are due immediately instead of waiting out their backoff.
+-- Measured on this game a FindAllOf costs ~65ms (Ctrl+F5 scan stats, 2026-07-15), so the
+-- steady-state cadence must stay SLOW — the boost concentrates the scans at user-driven
+-- navigation instants, where a submenu must read at once. This can never become the
+-- 2026-07-14 per-tick forcing: the window is short, the per-tick budget still applies,
+-- and the trigger is a discrete user action, not a poll.
+local boost_until = 0
+local boost_gen = 0       -- each window is a generation: a class gets ONE boosted scan per
+                          -- window (without this, every missing pool re-scanned every tick
+                          -- of the window — a 65ms×2 per-tick storm for 1.5s per event)
+local boosted_gen = {}    -- cls -> last generation this class was boost-scanned in
+local BOOST_TICKS = 15   -- ~1.5s window
+function Core.boost_missing(ticks)
+    local t = now() + (ticks or BOOST_TICKS)
+    if t > boost_until then boost_until = t end
+    boost_gen = boost_gen + 1
+end
+
+-- Stable per-class jitter (0..15 ticks) added to scan backoffs so classes that went absent
+-- together don't all expire on the same tick (the old clustered-expiry spike).
+local jitter_cache = {}
+local function jitter(cls_name)
+    local j = jitter_cache[cls_name]
+    if j then return j end
+    local h = 0
+    for i = 1, #cls_name do h = (h * 31 + cls_name:byte(i)) % 997 end
+    j = h % 16
+    jitter_cache[cls_name] = j
+    return j
+end
+
+-- ---- resurrect probe: re-find a recreated screen WITHOUT FindAllOf -----------------
+-- A destroyed screen used to wait out DEAD_BACKOFF (~4s) for a full-object scan before it
+-- read again — the "~2s to start reading the pause/items/palette" latency. But this game
+-- names its top-level menu widgets deterministically under the persistent GameInstance
+-- (…GameEngine_0:BP_ATGameInstance_C_0.Start_Top_C_0, per the Ctrl+F5 dump), and a
+-- recreated instance just increments the trailing _N. StaticFindObject by full path is a
+-- hash lookup (O(1), microseconds) — so for every class we RECORD the path of a live
+-- instance once seen, and while the class is dead we probe path_N..path_N+4 every few
+-- ticks. A hit resurrects the cache in ~300ms; a miss costs nothing and the FindAllOf
+-- backoff remains the safety net (so this is purely additive — worst case = old behavior).
+-- Paths are DERIVED from observed instances at runtime, never hardcoded.
+local probe_info = {}   -- cls -> { base = ".../BP_ATGameInstance_C_0.Start_Top_C_", idx = 0 }
+local probe_next = {}   -- cls -> earliest tick for the next probe attempt
+local PROBE_EVERY = 3       -- ticks between probe attempts per dead class (~300ms)
+local PROBE_MAX_GAP = 20    -- misses back off exponentially up to this (~2s): a class that
+                            -- stays closed must not keep hammering the object tables
+local PROBE_RANGE = 4       -- how many name suffixes past the last known one to try
+local POST_PROBE_SCAN = 10  -- ticks until a real scan completes the pool after a probe hit
+local probe_gap = {}        -- cls -> current miss backoff (nil = PROBE_EVERY)
+
+-- The probe ONLY runs for classes seen alive this session (recorded path). A first cut
+-- also probed NEVER-seen classes via constructed GameInstance paths — that hung the game
+-- at the logo screen on boot (2026-07-15): every class was unseen, so ~30 classes probed
+-- StaticFindObject every 300ms THROUGH the whole initial async load, contending the
+-- engine's object tables against the loader until the load never finished. The log
+-- showed probes "resurrecting" boot windows seconds into the logo — do not bring
+-- constructed-path probing back; never-seen classes wait for the budgeted FindAllOf.
+
+local function remember_path(cls_name, o)
+    local ok, fn = pcall(function() return o:GetFullName() end)
+    if not ok or type(fn) ~= "string" then return end
+    local path = fn:match("%s(/.+)$") or fn
+    local base, idx = path:match("^(.-_)(%d+)$")
+    if not base then return end
+    probe_info[cls_name] = { base = base, idx = tonumber(idx) }
+    probe_gap[cls_name] = nil   -- seen alive again: next death starts probing fast
+end
+
+-- Record the best (GameInstance-child preferred) live instance of a freshly scanned list.
+local function remember_from_list(cls_name, list)
+    local fallback
+    for _, o in ipairs(list) do
+        if Core.valid(o) then
+            local ok, fn = pcall(function() return o:GetFullName() end)
+            if ok and type(fn) == "string" and fn:match("BP_ATGameInstance_C_%d+%.[%w_]+$") then
+                remember_path(cls_name, o)
+                return
+            end
+            fallback = fallback or o
+        end
+    end
+    if fallback then remember_path(cls_name, fallback) end
+end
+
+-- PROBE DISABLED (2026-07-15). The boot-gating above was not enough: free-roam streams
+-- sublevels asynchronously too, so there is NO window in which StaticFindObject is provably
+-- safe on this game — the second freeze (mid-session, no crash, log just stops) matches a
+-- game-thread deadlock against the async loader just like the boot hang. Do NOT re-enable by
+-- flipping this flag alone; a safe version needs a native-side "is the loader idle" check
+-- (mem_bridge) or must move the lookup itself into a native bridge. Menu re-detection falls
+-- back to the budgeted FindAllOf at DEAD_BACKOFF (~4s) — yesterday's proven behavior.
+local PROBE_ENABLED = false
+local probes_armed = false   -- stays false through the whole boot/logo phase: set by the
+                             -- first transition (first GameMode). Before that the engine
+                             -- is mid-initial-load and probing is off the table entirely.
+local function probe_class(cls_name)
+    if not PROBE_ENABLED then return nil end
+    if not probes_armed then return nil end
+    local pi = probe_info[cls_name]
+    if not pi then return nil end                 -- never seen alive: no path to probe
+    if Transition.active() then return nil end    -- never touch object tables mid-load
+    local tries = {}
+    for i = pi.idx, pi.idx + PROBE_RANGE do tries[#tries + 1] = pi.base .. i end
+    for _, p in ipairs(tries) do
+        local o
+        pcall(function() o = StaticFindObject(p) end)
+        if Core.valid(o) then
+            local okc, cn = pcall(function() return o:GetClass():GetFName():ToString() end)
+            if okc and cn == cls_name then
+                remember_path(cls_name, o)
+                print("[KakarotAccess] probe resurrected " .. cls_name .. "\n")
+                return o
+            end
+        end
+    end
+    return nil
+end
+
+-- Probe with its own cadence: PROBE_EVERY between attempts, doubling to PROBE_MAX_GAP on
+-- consecutive misses (reset whenever the class is seen alive). The single throttle both
+-- cache paths share.
+local function try_probe(cls_name, tick)
+    if (probe_next[cls_name] or 0) > tick then return nil end
+    local o = probe_class(cls_name)
+    if o then
+        probe_next[cls_name] = tick + PROBE_EVERY
+        return o
+    end
+    local g = math.min((probe_gap[cls_name] or PROBE_EVERY) * 2, PROBE_MAX_GAP)
+    probe_gap[cls_name] = g
+    probe_next[cls_name] = tick + g
+    return nil
+end
+
+-- NOTE (2026-07-14): the `tick` parameter is kept for the ~30 adapter call sites but is no
+-- longer the clock — backoffs run on the shared real-time tick (now()), so an adapter that
+-- is polled less often (sticky registry) doesn't stretch its own re-detection cadence.
 function Core.cached_live(cls_name, tick)
+    -- Directory fast path: pointer reads, no scans, no backoffs. Prefer the on-screen
+    -- candidate — a class can have several live copies (field tips vs pause tips) and
+    -- returning a collapsed one would silence the adapter.
+    local d = directory_list(cls_name)
+    if d then
+        for i = 1, #d do
+            if Core.on_screen(d[i]) then return d[i] end
+        end
+        return d[1]
+    end
     local c = live_cache[cls_name]
     if Core.valid(c) then return c end
-    if tick and live_backoff[cls_name] and tick < live_backoff[cls_name] then return nil end
-    if not scan_allowed() then return nil end   -- budget spent: defer, retry next tick (no back-off)
+    tick = now()
+    -- Cheap resurrect probe, ONLY when the cached ref died IN PLACE (c is an invalidated
+    -- object). A nil slot means "never seen" or "cleared by a transition" — in both cases
+    -- probing would run while the engine may still be loading (the boot-hang lesson), so
+    -- those wait for the budgeted FindAllOf like before.
+    if c ~= nil then
+        c = try_probe(cls_name, tick)
+        if c then
+            live_cache[cls_name] = c
+            return c
+        end
+    end
+    local boosted = false
+    if live_backoff[cls_name] and tick < live_backoff[cls_name] then
+        -- Boost window: ONE bypass scan per window generation, same rule as cached_all.
+        -- (The first cut bypassed the backoff EVERY tick of the window — with the pad
+        -- boost refreshing the window on every press, menu navigation became a
+        -- permanent 65ms-scan storm: 57k scans, 1s step spikes, 2026-07-15 dump.)
+        if not (tick < boost_until and boosted_gen[cls_name] ~= boost_gen) then
+            return nil
+        end
+        boosted = true
+    end
+    if not scan_allowed() then return nil end   -- budget spent: defer, retry next tick
+                                                -- (boost credit NOT consumed yet)
+    if boosted then boosted_gen[cls_name] = boost_gen end
     c = Core.first_live(cls_name)
     live_cache[cls_name] = c
-    if not c and tick then live_backoff[cls_name] = tick + ABSENT_BACKOFF end
+    if c then
+        if PROBE_ENABLED then remember_path(cls_name, c) end
+    else
+        live_backoff[cls_name] = tick + ABSENT_BACKOFF + jitter(cls_name)
+    end
     return c
 end
 
@@ -225,19 +483,86 @@ local function any_valid(list)
     return false
 end
 
+-- A pool is DEAD when its cached list holds entries but none is valid anymore — the
+-- screen was destroyed and its reopen will build a new instance. first_on_screen spots
+-- this for free during its normal walk and marks it here, which (a) arms the resurrect
+-- probe and (b) pulls the next FindAllOf forward to the DEAD_BACKOFF cadence in case the
+-- list was sitting on the slow 30s refresh. An EMPTY list is NOT dead — that's the normal
+-- idle state of nearly every menu (the 2026-07-14 lesson) — but it does get the cheap
+-- probe, since a constructed-path lookup costs microseconds, not a scan.
+local pool_dead = {}
+local function mark_pool_dead(cls_name)
+    if pool_dead[cls_name] then return end
+    pool_dead[cls_name] = true
+    local t = now() + DEAD_BACKOFF + jitter(cls_name)
+    if not all_next[cls_name] or all_next[cls_name] > t then all_next[cls_name] = t end
+end
+
+-- Mark a cached pool due for a re-scan NOW (budget-gated, so it lands within a tick or
+-- two). For ALWAYS-ALIVE pools (CFUIMultiLineTextBox: thousands of instances) that idle
+-- on the ~30s refresh: a screen that is REBUILT on open (the Items menu — the game NULLs
+-- its manager field on close) brings new text boxes the stale pool doesn't have, and an
+-- adapter that subtree-scans the pool for them goes active-but-MUTE (2026-07-15). Call
+-- on the entry event of such a screen; useless for dead/absent pools (they already
+-- re-scan on their own backoff).
+function Core.refresh_all(cls_name)
+    all_next[cls_name] = 0
+end
+
 function Core.cached_all(cls_name, tick)
+    -- Directory fast path (see cached_live): the returned list holds every valid live
+    -- candidate; an empty list means the game's own manager field is null — the screen
+    -- does not exist, and no scan can say otherwise.
+    local d = directory_list(cls_name)
+    if d then return d end
+    tick = now()
     local c = all_cache[cls_name]
-    if not c or (tick and (not all_next[cls_name] or tick >= all_next[cls_name])) then
+    local due = not c or not all_next[cls_name] or tick >= all_next[cls_name]
+    -- Boost window: a missing pool (empty or all-invalid) skips its backoff ONCE per
+    -- window generation (credit consumed only when the scan actually runs, so a budget
+    -- denial retries next tick). any_valid exits at the first live entry, so alive pools
+    -- pay one IsValid here at most.
+    local boost_due = not due and tick < boost_until
+        and boosted_gen[cls_name] ~= boost_gen and not any_valid(c)
+    if due or boost_due then
         -- Honour the per-tick scan budget (see Core.cached_live): if it's spent, reuse
         -- the stale list (or {} on first sight) and try the refresh on a later tick.
         -- Callers already validity/visibility-check every entry, so stale is harmless.
-        if not scan_allowed() then return c or {} end
-        c = FindAllOf(cls_name) or {}
+        if scan_allowed() then
+            if boost_due then boosted_gen[cls_name] = boost_gen end
+            c = timed_findall(cls_name)
+            all_cache[cls_name] = c
+            -- Alive pool → slow idle refresh. Nothing live: a DESTROYED pool (has entries,
+            -- all invalid) re-detects on the fast ~4s cadence; a NEVER-seen class (empty)
+            -- on the slow ~8s one — its appearance is normally caught by the boost window,
+            -- and its steady scans are the main free-roam cost (65ms each). Jitter keeps
+            -- simultaneous expiries from clustering. No per-tick forcing anywhere.
+            local alive = any_valid(c)
+            pool_dead[cls_name] = not alive and #c > 0 or nil
+            -- remember_from_list walks the whole list calling GetFullName (it can be a
+            -- hundreds-strong pool like CFUIMultiLineTextBox) — only pay it if the probe
+            -- that consumes the recorded paths is actually on.
+            if alive and PROBE_ENABLED then remember_from_list(cls_name, c) end
+            all_next[cls_name] = tick + (alive and REFRESH_EVERY
+                or ((#c > 0 and DEAD_BACKOFF or ABSENT_BACKOFF) + jitter(cls_name)))
+            return c
+        end
+        c = c or {}
         all_cache[cls_name] = c
-        -- Alive pool → slow idle refresh; nothing live (absent or destroyed) → the ~4s
-        -- re-detection cadence. One fixed cadence for both: no per-tick forcing anywhere,
-        -- so a session full of closed screens can never saturate the scan budget.
-        if tick then all_next[cls_name] = tick + (any_valid(c) and REFRESH_EVERY or DEAD_BACKOFF) end
+    end
+    -- Probe ONLY a pool marked dead — i.e. its instances were watched on-screen and went
+    -- invalid IN PLACE while the world was alive (a destroyed menu, the user's reopen
+    -- case). An EMPTY list is never probed: that's "never seen" or "cleared by a
+    -- transition", both states where the engine may still be async-loading and probing
+    -- the object tables is what hung the boot (2026-07-15). Transitions clear pool_dead.
+    if pool_dead[cls_name] then
+        local o = try_probe(cls_name, tick)
+        if o then
+            c = { o }
+            all_cache[cls_name] = c
+            pool_dead[cls_name] = nil
+            all_next[cls_name] = tick + POST_PROBE_SCAN
+        end
     end
     return c
 end
@@ -272,6 +597,11 @@ end
 Transition.on_begin("ui_core", function()
     live_cache, live_backoff = {}, {}
     all_cache, all_next = {}, {}
+    pool_dead, probe_next = {}, {}
+    probes_armed = true   -- a map load happened: from here on, in-place deaths may probe
+    -- probe_info / gi_prefix survive on purpose: GameInstance-child menus persist across
+    -- maps, so their recorded paths let the probe rebuild the caches without scans right
+    -- after a load. Per-level classes just miss and re-record on their next sighting.
 end)
 
 -- First currently on-screen instance of a class, or nil. Use this instead of cached_live
@@ -287,9 +617,17 @@ end)
 -- list) and that per-tick forcing, multiplied across every screen closed during a play session,
 -- saturated the scan budget and made the whole reader slow (2026-07-14).
 function Core.first_on_screen(cls_name, tick)
-    for _, o in ipairs(Core.cached_all(cls_name, tick)) do
-        if Core.valid(o) and Core.on_screen(o) then return o end
+    local list = Core.cached_all(cls_name, tick)
+    local saw_valid = false
+    for _, o in ipairs(list) do
+        if Core.valid(o) then
+            saw_valid = true
+            if Core.on_screen(o) then return o end
+        end
     end
+    -- Nonempty list with nothing valid = the screen was destroyed: arm the resurrect
+    -- probe and the DEAD_BACKOFF scan (no extra reflection — the walk above already paid).
+    if not saw_valid and #list > 0 then mark_pool_dead(cls_name) end
     return nil
 end
 

@@ -30,6 +30,7 @@ local Speech = require("speech")
 local Input = require("input")
 local Registry = require("ui_registry")
 local Transition = require("transition")
+local PadPoll = require("pad_poll")
 
 local Status = {}
 
@@ -212,7 +213,6 @@ end
 -- open OVER this page, which stays on_screen underneath, so the host check alone would keep
 -- the d-pad talking while the player is really in one of those.
 
-local PAD_TICK_MS = 20
 local pad_running = false
 local pad_prev = 0        -- button mask last seen, for edge detection
 
@@ -237,30 +237,14 @@ function Status.start()
         return
     end
     pad_running = true
-    _G.__KakarotStatusPadGen = (_G.__KakarotStatusPadGen or 0) + 1
-    local myGen = _G.__KakarotStatusPadGen
-    local busy = false
-    LoopAsync(PAD_TICK_MS, function()
-        if _G.__KakarotStatusPadGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                -- busy cleared on ENTRY (radar_menu/screen_map lesson): an uncatchable C++
-                -- abort in here must not leave the guard stuck and the d-pad dead all session.
-                busy = false
-                local ok, err = pcall(pad_step)
-                if not ok then
-                    print("[KakarotAccess] screen_status pad step error: " .. tostring(err) .. "\n")
-                end
-            end)
-        end
-        return false
-    end)
+    -- Shared 20ms scheduler (pad_poll.lua): pad_step early-outs unless the status page is
+    -- the active adapter, so all-session cost is one gate check in the shared dispatch.
+    PadPoll.register("status_pad", pad_step)
 end
 
 function Status.stop()
     pad_running = false
-    _G.__KakarotStatusPadGen = (_G.__KakarotStatusPadGen or 0) + 1
+    PadPoll.unregister("status_pad")
 end
 
 return Status

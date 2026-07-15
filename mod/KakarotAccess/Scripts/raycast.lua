@@ -35,23 +35,25 @@ end
 -- Returns: blocked(boolean), distance(number|nil), or nil when the trace API is
 -- unavailable / the call didn't behave (so the caller can disable the feature).
 --   ctx = a world-context UObject (the player pawn).
--- UE4SS returns the OutHit out-param as a second return value AFTER the bool; we pass
--- every non-out arg in order (OutHit skipped) and read the bool, then best-effort the
--- hit distance.
+-- UE4SS wants EVERY UFunction parameter passed, out-params included — skipping OutHit
+-- raised "expected 13 parameters, received 11" (UE4SS.log 2026-07-14). An out-param is
+-- passed as a Lua table the call fills in (signature per Engine.hpp:11636 in the CXX
+-- dump: ..., FHitResult& OutHit, bIgnoreSelf, TraceColor, TraceHitColor, DrawTime).
 function Ray.probe(ctx, sx, sy, sz, ex, ey, ez, objtypes)
     local k = ksl()
     if not k or not Core.valid(ctx) then return nil end
     local a = { X = sx, Y = sy, Z = sz }
     local b = { X = ex, Y = ey, Z = ez }
     local types = objtypes or Ray.OBJECT_TYPES
-    local hit, out
+    local out = {}
+    local hit
     local ok = pcall(function()
-        hit, out = k:LineTraceSingleForObjects(ctx, a, b, types, false, {}, 0,
-            true, NO_COLOR, NO_COLOR, 0.0)
+        hit = k:LineTraceSingleForObjects(ctx, a, b, types, false, {}, 0,
+            out, true, NO_COLOR, NO_COLOR, 0.0)
     end)
     if not ok or type(hit) ~= "boolean" then return nil end
     local dist
-    if hit and out then pcall(function() dist = tonumber(out.Distance) end) end
+    if hit then pcall(function() dist = tonumber(out.Distance) end) end
     return hit, dist
 end
 
@@ -75,14 +77,15 @@ function Ray.probe_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
     if not k or not Core.valid(ctx) then return nil end
     local a = { X = sx, Y = sy, Z = sz }
     local b = { X = ex, Y = ey, Z = ez }
-    local hit, out
+    local out = {}
+    local hit
     local ok = pcall(function()
-        hit, out = k:LineTraceSingle(ctx, a, b, channel or 0, false, {}, 0,
-            true, NO_COLOR, NO_COLOR, 0.0)
+        hit = k:LineTraceSingle(ctx, a, b, channel or 0, false, {}, 0,
+            out, true, NO_COLOR, NO_COLOR, 0.0)
     end)
     if not ok or type(hit) ~= "boolean" then return nil end
     local dist
-    if hit and out then pcall(function() dist = tonumber(out.Distance) end) end
+    if hit then pcall(function() dist = tonumber(out.Distance) end) end
     return hit, dist
 end
 

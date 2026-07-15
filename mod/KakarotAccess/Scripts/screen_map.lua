@@ -24,6 +24,7 @@ local Mem = require("mem")
 local OFF = require("native_offsets")
 local Nav = require("nav_tracker")
 local Registry = require("ui_registry")
+local PadPoll = require("pad_poll")
 
 local Map = {}
 
@@ -469,7 +470,6 @@ end
 -- other dialog) is on top, the registry stops polling Map.is_active, `state` goes stale,
 -- and without the ownership guard the d-pad would keep retargeting under the dialog.
 
-local TRAVEL_TICK_MS = 20
 local travel_running = false
 
 local function ft_step()
@@ -490,30 +490,14 @@ function Map.start()
         return
     end
     travel_running = true
-    _G.__KakarotMapTravelGen = (_G.__KakarotMapTravelGen or 0) + 1
-    local myGen = _G.__KakarotMapTravelGen
-    local busy = false
-    LoopAsync(TRAVEL_TICK_MS, function()
-        if _G.__KakarotMapTravelGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                -- busy cleared on ENTRY, like radar_menu: an uncatchable C++ abort in the
-                -- callback must not leave the guard stuck and the d-pad dead for the session.
-                busy = false
-                local ok, err = pcall(ft_step)
-                if not ok then
-                    print("[KakarotAccess] screen_map travel step error: " .. tostring(err) .. "\n")
-                end
-            end)
-        end
-        return false
-    end)
+    -- Shared 20ms scheduler (pad_poll.lua): ft_step early-outs off-map, so the idle cost
+    -- is one gate check inside the shared dispatch instead of a whole loop of our own.
+    PadPoll.register("map_travel", ft_step)
 end
 
 function Map.stop()
     travel_running = false
-    _G.__KakarotMapTravelGen = (_G.__KakarotMapTravelGen or 0) + 1
+    PadPoll.unregister("map_travel")
 end
 
 return Map

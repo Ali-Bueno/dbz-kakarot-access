@@ -83,9 +83,9 @@ local function plates(w)
     if not Core.valid(w) then return nil end
     local parts = {}
     for _, pool in ipairs(POOLS) do
-        pcall(function()
-            local arr = w[pool.arr]
-            for i = 1, #arr do
+        local arr, n = Core.array_of(w, pool.arr)
+        if arr then pcall(function()
+            for i = 1, n do
                 local row = arr[i]
                 if Core.valid(row) and Core.on_screen(row) then
                     local p = {}
@@ -94,15 +94,15 @@ local function plates(w)
                     end
                     -- fixed-size text array (per-community level numbers on emblem rows)
                     if pool.fixed then
-                        pcall(function()
-                            local fx = row[pool.fixed]
-                            for j = 1, #fx do p[#p + 1] = node_rt(fx[j]) end
-                        end)
+                        local fx, fn = Core.array_of(row, pool.fixed)
+                        if fx then pcall(function()
+                            for j = 1, fn do p[#p + 1] = node_rt(fx[j]) end
+                        end) end
                     end
                     if #p > 0 then parts[#parts + 1] = table.concat(p, ", ") end
                 end
             end
-        end)
+        end) end
     end
     pcall(function()
         local dr = w.WL_DetailReward
@@ -140,9 +140,9 @@ local function choices()
     --     a bit more / Return home") = UAT_UISystemWindowChoice: ChoiceTxt label, and
     --     the selected row shows its BasePlate (the yellow bar).
     for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
-        pcall(function()
-            local arr = win[pool]
-            for i = 1, #arr do
+        local arr, n = Core.array_of(win, pool)
+        if arr then pcall(function()
+            for i = 1, n do
                 local ch = arr[i]
                 if Core.valid(ch) and Core.on_screen(ch) then
                     local label
@@ -160,7 +160,7 @@ local function choices()
                     end
                 end
             end
-        end)
+        end) end
     end
     -- SELECTABLE ITEM lists (the community GIFT picker, and any other window whose
     -- WL_ItemPlateCtn rows carry the cursor): each UAT_UIGameWindowChoice row is
@@ -168,11 +168,11 @@ local function choices()
     -- no underscores). Only engage when SOME row is highlighted — reward/notice
     -- windows show the same rows with NO cursor, and those must keep the read-once
     -- notice behavior (plates() reads them as content).
-    pcall(function()
-        local arr = win.WL_ItemPlateCtn
+    local iarr, icount = Core.array_of(win, "WL_ItemPlateCtn")
+    if iarr then pcall(function()
         local ilabels, isel = {}, nil
-        for i = 1, #arr do
-            local row = arr[i]
+        for i = 1, icount do
+            local row = iarr[i]
             if Core.valid(row) and Core.on_screen(row) then
                 local label = Core.phrase(
                     A.markup_to_speech(Core.read_text(row.ItemName)),
@@ -193,7 +193,7 @@ local function choices()
             sel = isel
             items = true
         end
-    end)
+    end) end
     return labels, sel, items
 end
 
@@ -219,13 +219,13 @@ local function window_has_choices(w)
     if not Core.valid(w) then return false end
     for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
         local found = false
-        pcall(function()
-            local arr = w[pool]
-            for i = 1, #arr do
+        local arr, n = Core.array_of(w, pool)
+        if arr then pcall(function()
+            for i = 1, n do
                 local ch = arr[i]
                 if Core.valid(ch) and Core.on_screen(ch) then found = true return end
             end
-        end)
+        end) end
         if found then return true end
     end
     return false
@@ -272,9 +272,9 @@ local function dump_window(msg)
     pcall(function() wname = win:GetFullName():match("^%S+ (%S+)") or "?" end)
     f:write(string.format("[%d] win=%s msg=%s\n", os.time(), wname, tostring(msg)))
     for _, pool in ipairs(DUMP_POOLS) do
-        pcall(function()
-            local arr = win[pool]
-            for i = 1, #arr do
+        local arr, n = Core.array_of(win, pool)
+        if arr then pcall(function()
+            for i = 1, n do
                 local row = arr[i]
                 if Core.valid(row) and Core.on_screen(row) then
                     local cls = row:GetFullName():match("^(%S+)") or "?"
@@ -294,7 +294,7 @@ local function dump_window(msg)
                         table.concat(texts, " "), hi))
                 end
             end
-        end)
+        end) end
     end
     f:close()
 end

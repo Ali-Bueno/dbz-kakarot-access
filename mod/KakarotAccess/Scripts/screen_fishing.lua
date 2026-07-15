@@ -104,18 +104,24 @@ local function diag_once(f)
     f:write("plat on_screen=" .. tostring(Core.on_screen(plat)) .. "\n")
     pcall(function()
         f:write("plat CurrentActionID=" .. plat.CurrentActionID:ToString() .. "\n")
-        local arr = plat.CurrentDynamicAssignInputControllerId
-        for i = 1, #arr do f:write("plat ctrlId[" .. i .. "]=" .. arr[i]:ToString() .. "\n") end
-        local ids = plat.CurrentKeyIds
-        for i = 1, #ids do f:write("plat keyId[" .. i .. "]=" .. tostring(ids[i]) .. "\n") end
+        local arr, na = Core.array_of(plat, "CurrentDynamicAssignInputControllerId")
+        if arr then
+            for i = 1, na do f:write("plat ctrlId[" .. i .. "]=" .. arr[i]:ToString() .. "\n") end
+        end
+        local ids, ni = Core.array_of(plat, "CurrentKeyIds")
+        if ids then
+            for i = 1, ni do f:write("plat keyId[" .. i .. "]=" .. tostring(ids[i]) .. "\n") end
+        end
     end)
     for n = 0, 3 do
         pcall(function()
             local ab = fish["ActionBtn0" .. n]
             f:write(string.format("ActionBtn0%d KeyConfigActionId=%s Dyn=%s", n,
                 ab.KeyConfigActionId:ToString(), ab.DynamicAssignInputId:ToString()))
-            local ids = ab.KeyIdsForPad
-            for i = 1, #ids do f:write(" pad[" .. i .. "]=" .. tostring(ids[i])) end
+            local ids, ni = Core.array_of(ab, "KeyIdsForPad")
+            if ids then
+                for i = 1, ni do f:write(" pad[" .. i .. "]=" .. tostring(ids[i])) end
+            end
             f:write("\n")
         end)
     end
@@ -129,17 +135,21 @@ local function diag_sample(f)
         parts[#parts + 1] = string.format("0x%X=%s/%.3f", off,
             tostring(Mem.i32(fish, off)), Mem.float(fish, off) or 0)
     end
-    pcall(function()
-        local imgs = fish.Xcmn_Btn_Plat_00.Image_List
-        for i = 1, #imgs do
-            if Core.is_visible(imgs[i]) then
-                local ro = imgs[i].Brush.ResourceObject
-                if ro and ro:IsValid() then
-                    parts[#parts + 1] = "glyph=" .. (ro:GetFullName():match("([%w_]+)%.[%w_]+$") or "?")
+    do
+        local plat
+        pcall(function() plat = fish.Xcmn_Btn_Plat_00 end)
+        local imgs, ni = Core.array_of(plat, "Image_List")
+        if imgs then pcall(function()
+            for i = 1, ni do
+                if Core.is_visible(imgs[i]) then
+                    local ro = imgs[i].Brush.ResourceObject
+                    if ro and ro:IsValid() then
+                        parts[#parts + 1] = "glyph=" .. (ro:GetFullName():match("([%w_]+)%.[%w_]+$") or "?")
+                    end
                 end
             end
-        end
-    end)
+        end) end
+    end
     -- Phase 2 (the closing ring): the RushSpeedCore's own non-reflected tail
     -- (class 0x400, last reflected member ends 0x3E0). The fishing widget's pointer
     -- to it is unset live, so find it as its own widget. Sampled even while HIDDEN
@@ -274,13 +284,15 @@ end
 local function fishing_button()
     local tok = A.platbtn_token(fish.Xcmn_Btn_Plat_00)
     if tok then return tok end
-    pcall(function()
-        local ids = fish.ActionBtn00.KeyIdsForPad
-        for i = 1, #ids do
+    local ab
+    pcall(function() ab = fish.ActionBtn00 end)
+    local ids, ni = Core.array_of(ab, "KeyIdsForPad")
+    if ids then pcall(function()
+        for i = 1, ni do
             local t = A.platbtn_id_token(tonumber(ids[i]))
             if t then tok = t return end
         end
-    end)
+    end) end
     return tok
 end
 

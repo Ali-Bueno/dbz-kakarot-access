@@ -130,9 +130,12 @@ local CHAR_TOKENS = {
 -- character icon (…/Charicon_Ev/Ev_Gok00_00_00 → token "Gok" → "Goku").
 local function face_char(emb)
     local tok
+    local ro
+    pcall(function() ro = emb.ImageFace.Brush.ResourceObject end)
+    local tp, n = Core.array_of(ro, "TextureParameterValues")
+    if not tp then return nil end
     pcall(function()
-        local tp = emb.ImageFace.Brush.ResourceObject.TextureParameterValues
-        for j = 1, #tp do
+        for j = 1, n do
             local tex = tp[j].ParameterValue
             if tex and tex:IsValid() then
                 tok = tex:GetFullName():match("/Charicon_%w+/%a-_(%a+)")
@@ -151,9 +154,12 @@ end
 -- (GRID.cursorIndex) indexes the raw array.
 local function slots()
     local out, byai = {}, {}
+    local emblist
+    pcall(function() emblist = grid.EmbList end)
+    local arr, n = Core.array_of(emblist, "EmbAry")
+    if not arr then return out, byai end
     pcall(function()
-        local arr = grid.EmbList.EmbAry
-        for i = 1, #arr do
+        for i = 1, n do
             local s = arr[i]
             if Core.valid(s) and Core.is_visible(s) then
                 out[#out + 1] = s
@@ -198,14 +204,14 @@ end
 local function board_panels(frame, key)
     if panel_cache and panel_cache.key == key then return panel_cache end
     local c = { key = key, list = {} }
-    pcall(function()
-        local arr = frame.WL_PanelTbl
-        for i = 1, #arr do
+    local arr, n = Core.array_of(frame, "WL_PanelTbl")
+    if arr then pcall(function()
+        for i = 1, n do
             local p = arr[i]
             if not Core.valid(p) then break end   -- keep positions aligned: stop, don't skip
             c.list[i] = p
         end
-    end)
+    end) end
     panel_cache = c
     return c
 end

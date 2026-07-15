@@ -53,9 +53,10 @@ end
 -- texture name ends in its digit. Included only when EVERY visible digit parses.
 local function exp_number()
     local digits, ok = {}, true
+    local arr, n = Core.array_of(host, "CounterCtn")
+    if not arr then return nil end
     pcall(function()
-        local arr = host.CounterCtn
-        for i = 1, #arr do
+        for i = 1, n do
             local img = arr[i]
             if Core.valid(img) and Core.is_visible(img) then
                 local tok = texture_token(img)

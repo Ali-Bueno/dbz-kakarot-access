@@ -104,12 +104,12 @@ local function bar_text(bar)
     return nil
 end
 
--- The visible bar-window list, or nil.
+-- The visible bar-window list, or nil. Core.array_of is mandatory here: a raw `#list`
+-- on a reflected TArray is the uncatchable C++ throw when the host is dying (pcall
+-- cannot catch it — the validity checks BEFORE the length read are the only defence).
 local function bar_list()
-    local list
-    if not pcall(function() list = host.UISaveLoadBar_List end) or list == nil then return nil end
-    local n
-    if not pcall(function() n = #list end) or type(n) ~= "number" or n < 1 then return nil end
+    local list, n = Core.array_of(host, "UISaveLoadBar_List")
+    if not list or n < 1 then return nil end
     return list, n
 end
 
@@ -147,7 +147,12 @@ end
 
 function SaveLoad.is_active()
     tick = tick + 1
+    -- Two names for the same screen: in game the directory serves the native-class
+    -- instance (pause → System); the TITLE menu's copy is the BLUEPRINT subclass
+    -- Start_Save_Load_C (census 2026-07-15) which only the _C-name scan can find
+    -- (FindAllOf on the native name returns nothing for it — the 2026-07-06 gotcha).
     host = Core.first_on_screen("AT_UIStartSaveLoad", tick)
+        or Core.first_on_screen("Start_Save_Load_C", tick)
     if DEBUG and host == nil then
         -- Distinguish the two entry-blindness causes: a FRESH FindAllOf (bypassing the
         -- cached-list) vs how many pass on_screen. raw>0 while host nil => the cached class

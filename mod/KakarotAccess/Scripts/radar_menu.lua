@@ -29,14 +29,15 @@ local Speech = require("speech")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
 local Transition = require("transition")
+local PadPoll = require("pad_poll")
 
 local Menu = {}
 
-local TICK_MS = 20        -- fast poll: catches the R3 press within ~1 frame so the game
-                          -- barely sees it before we block (the opening click could
-                          -- otherwise leak a frame to R3's field action)
+-- Runs on the shared 20ms pad scheduler (pad_poll.lua): catches the R3 press within ~1
+-- frame so the game barely sees it before we block (the opening click could otherwise
+-- leak a frame to R3's field action).
 local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
-local DOUBLE_TAP_TICKS = 14   -- ~280 ms at TICK_MS: window to catch a 2nd R3 tap (= explore toggle)
+local DOUBLE_TAP_TICKS = 14   -- ~280 ms at the 20ms pad tick: window for a 2nd R3 tap (= explore toggle)
 
 local running = false
 local open = false        -- menu currently open (and pad blocked)
@@ -209,34 +210,17 @@ function Menu.start()
         return
     end
     running = true
-    _G.__KakarotRadarMenuGen = (_G.__KakarotRadarMenuGen or 0) + 1
-    local myGen = _G.__KakarotRadarMenuGen
-    local busy = false
-    LoopAsync(TICK_MS, function()
-        if _G.__KakarotRadarMenuGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                -- busy cleared on ENTRY: an uncatchable C++ error killing this callback
-                -- must not leave the guard stuck and R3 dead for the session — exactly
-                -- what happened live 2026-07-04 (see ui_core.loop for the rationale).
-                busy = false
-                local ok, err = pcall(step)
-                if not ok then
-                    -- never strand the pad in a blocked state on an error
-                    if blocked then Input.block(false) end
-                    blocked, open, draining = false, false, false
-                    print("[KakarotAccess] radar_menu step error: " .. tostring(err) .. "\n")
-                end
-            end)
-        end
-        return false
+    -- Shared 20ms scheduler (pad_poll.lua) — one dispatch serves every pad stepper.
+    PadPoll.register("radar_menu", step, function()
+        -- never strand the pad in a blocked state on an error
+        if blocked then Input.block(false) end
+        blocked, open, draining = false, false, false
     end)
 end
 
 function Menu.stop()
     running = false
-    _G.__KakarotRadarMenuGen = (_G.__KakarotRadarMenuGen or 0) + 1
+    PadPoll.unregister("radar_menu")
     if blocked then Input.block(false) end
     blocked, open, draining = false, false, false
     cats = {}

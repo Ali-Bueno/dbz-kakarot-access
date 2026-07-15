@@ -221,11 +221,13 @@ end
 -- Raw token form, for time-critical prompts that speak the bare letter.
 A.platbtn_id_token = platbtn_id_token
 
--- Tokens from an EATPlatBtnId TArray; first resolvable wins.
-local function ids_token(arr)
+-- Tokens from an EATPlatBtnId TArray member; first resolvable wins.
+local function ids_token(owner, name)
+    local arr, n = Core.array_of(owner, name)
+    if not arr then return nil end
     local tok
     pcall(function()
-        for i = 1, #arr do
+        for i = 1, n do
             local t = platbtn_id_token(tonumber(arr[i]))
             if t then tok = t return end
         end
@@ -239,14 +241,16 @@ end
 function A.platbtn_token(plat)
     if not Core.valid(plat) then return nil end
     local tok
-    pcall(function()
-        local arr = plat.CurrentDynamicAssignInputControllerId
-        for i = 1, #arr do
-            local s = arr[i]:ToString()
-            local t = s and s:match("Btn_(.+)$")
-            if t then tok = t return end
-        end
-    end)
+    local arr, n = Core.array_of(plat, "CurrentDynamicAssignInputControllerId")
+    if arr then
+        pcall(function()
+            for i = 1, n do
+                local s = arr[i]:ToString()
+                local t = s and s:match("Btn_(.+)$")
+                if t then tok = t return end
+            end
+        end)
+    end
     if tok then return tok end
     pcall(function()
         local act = plat.CurrentActionID:ToString()
@@ -258,27 +262,29 @@ function A.platbtn_token(plat)
     if tok then return tok end
     -- The pad id lists (KeyIdsForPad is the controller set; CurrentKeyIds may hold the
     -- keyboard set when playing with KB) — indexed face buttons resolve via the asset.
-    pcall(function() tok = ids_token(plat.KeyIdsForPad) end)
+    tok = ids_token(plat, "KeyIdsForPad")
     if tok then return tok end
-    pcall(function() tok = ids_token(plat.CurrentKeyIds) end)
+    tok = ids_token(plat, "CurrentKeyIds")
     if tok then return tok end
     -- Last resort: the glyph texture actually displayed (indexed too -> same resolver).
-    pcall(function()
-        local imgs = plat.Image_List
-        for i = 1, #imgs do
-            local img = imgs[i]
-            if Core.is_visible(img) then
-                local ro = img.Brush.ResourceObject
-                if ro and ro:IsValid() then
-                    local idx = ro:GetFullName():match("Btn_?(%d+)%.[%w_]+$")
-                    if idx then
-                        local t = platbtn_id_token(tonumber(idx))
-                        if t then tok = t return end
+    local imgs, ni = Core.array_of(plat, "Image_List")
+    if imgs then
+        pcall(function()
+            for i = 1, ni do
+                local img = imgs[i]
+                if Core.is_visible(img) then
+                    local ro = img.Brush.ResourceObject
+                    if ro and ro:IsValid() then
+                        local idx = ro:GetFullName():match("Btn_?(%d+)%.[%w_]+$")
+                        if idx then
+                            local t = platbtn_id_token(tonumber(idx))
+                            if t then tok = t return end
+                        end
                     end
                 end
             end
-        end
-    end)
+        end)
+    end
     return tok
 end
 

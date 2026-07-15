@@ -102,6 +102,10 @@ end
 local function step()
     tick = tick + 1
     if Transition.active() then sides = {} return end
+    -- Own scan budget/time window (like quest_objective): this loop runs outside the
+    -- registry step, and without this the shared budget gate would see the registry's
+    -- stale step start time and starve the battle-HUD FindAllOf forever.
+    Core.begin_scan_tick()
     local p = Core.first_on_screen("Battle_Hud_P_Main_C", tick)
     if not p then
         -- No battle HUD: out of combat. Drop all baselines for the next fight.

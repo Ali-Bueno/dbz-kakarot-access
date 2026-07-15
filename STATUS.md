@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-15
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -64,28 +64,38 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**FIRST, verify the crash + slowness fixes** (2026-07-14, needs a RESTART — `mem_bridge.dll` is new):
-play a normal session — menus, a map load, and several minutes of free-roam WITH a quest tracked (route
-radar on) crossing streaming boundaries (that is what reproduced the crash). Expect: (a) NO crash, in
-menus OR gameplay; (b) no `UObject instance is nullptr` in the log; (c) the reader does NOT get sluggish
-the longer you play; (d) re-entry into the item menu / skill palette / skill tree starts reading within a
-few seconds. Do NOT bring the notify feed back whatever happens (see Known issues).
+**FIRST, verify the 2026-07-15 SCREEN DIRECTORY in game** (FULL RESTART — `ui_directory.lua` is a new
+module). This is the fix for "submenus take >4s": items / palette / skill tree / characters / save-load /
+status must start reading **immediately** on entry (the pause ring and battle pause were already fast).
+Also: shops, maps, community, dialogs, battle HUD, loading tips, minimap radar (nav) — all now resolve via
+the directory; if any of those went SILENT, a field name in `ui_directory.MAP` is wrong for that screen
+(mapped classes never fall back to scans — check the map against AT.hpp, don't add scans back). Ctrl+F5
+after some play: `findall scans` n should be near-zero in steady state and `ui step ms` single digits.
 
-**OPEN — residual gameplay slowness (next session's #1).** The crashes are fixed but free-roam still feels
-sluggish. It is NOT the removed feed and NOT the scan-net saturation (that was fixed — one fixed 4 s cadence,
-no per-tick forcing). Profile before touching: **Ctrl+F5's nav dump prints per-tick step timing**
-(`_G.__KakarotStepStats`: max/avg game-thread ms of one registry step) — read that first to see if the
-registry poll is even the cost. Concrete candidates, cheapest to check first:
-- **Too many concurrent loops.** Free-roam runs, all at once: registry poll (100 ms), nav_tracker (100 ms,
-  heavy world reflection every tick), radar_menu (20 ms), battle_monitor (250 ms), quest_objective (300 ms),
-  the map travel loop (20 ms — inert off-map but still ticks), and the NEW status pad loop (20 ms). Three
-  separate 20 ms `ExecuteInGameThread` loops is a lot of game-thread queueing. The status pad loop is the
-  newest suspect: it runs 50×/s ALL session just to catch a d-pad press on ONE menu — consider folding pad
-  handling into the registry step (100 ms) or only starting it while the status page is active.
-- **`nav_tracker` per-100 ms cost.** It does a lot of reflection every tick (player pawn, minimap scan,
-  aim watch, route repath). Time it in isolation.
-- **`FindAllOf` is O(all UObjects).** Budget is 3/tick but each scan is expensive; if many classes sit in
-  the ~4 s `DEAD_BACKOFF` and their timers align, a tick can still run 3 full scans. Check the dump's max ms.
+Then the remains of the 2026-07-14 EVENING batch (same restart covers it). It has two halves:
+
+1. **Crash migration COMPLETED.** The `Core.array_of` migration was only half-done (audit found raw TArray
+   reads in 10 more files, two of them hot on every session: `ui_archetypes.platbtn_token` — used by the
+   keyhelp bar on EVERY screen — and `screen_dialog`). All migrated + luac-validated. Verify: play normally
+   (dialogues, results, community board, cooking, shops, fishing prompts); expect NO 0xe06d7363, no
+   `UObject instance is nullptr` in the log.
+2. **Performance restructure** (against the MEASURED 40 ms avg / 153 ms max registry step — Ctrl+F5
+   2026-07-14, `adapter_index=33`): sticky-active registry (full 33-adapter sweep only every 3rd tick while
+   a menu is active), per-tick `on_screen` memo, `SCANS_PER_TICK` 3→1 + a 10 ms step time gate + jittered
+   backoffs, the **resurrect probe** (`StaticFindObject` by recorded path — O(1) — re-finds destroyed
+   screens in ~300 ms instead of the ~4 s `DEAD_BACKOFF`; log line `probe resurrected <cls>`), ONE shared
+   20 ms pad scheduler (`pad_poll.lua`) replacing the radar/map/status loops (150→50 game-thread
+   dispatches/s), `aim_watch` every 3rd tick, and `battle_monitor` now owns a scan-budget window.
+   Verify, in this order: (a) free-roam feels smooth and cinematics no longer stutter audio; (b) pause /
+   items / palette start reading in well under a second (watch for `probe resurrected` in the log — if that
+   line never appears the probe missed and re-detection is on the 4 s fallback); (c) menus still all read
+   (the sticky registry must not silence anything — overlays like dialogs may take ~0.5 s max); (d) battle
+   HUD announcements still work (battle_monitor); (e) R3 radar picker, map-travel d-pad and status-page
+   d-pad all still respond (they share `pad_poll` now); (f) press **Ctrl+F5** after some play and read the
+   dump: `ui step ms` should be single-digit avg (was 39.84) and the new `findall scans` line attributes
+   scan cost. If avg is still high, the dump now has the data to say why.
+   The raycast arity error in the log was ONLY the Ctrl+F5 dump's probe stage (not gameplay); fixed by
+   passing the `OutHit` out-param as a table (signature from `Engine.hpp:11636`).
 
 Then: **verify the character STATUS page + the contextual-action reader in game** (one RESTART covers both
 — F11/Shift+F11 and Ctrl+F2 are new keybinds in main.lua). On the status page: entering a character should
@@ -115,6 +125,107 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   A/B press itself is silent until the first cursor move (no signal exists for the press).
 
 ## Known issues / open questions
+- **2026-07-14 evening — the `Core.array_of` migration is now COMPLETE** (it was half-done: an adversarial
+  sweep found raw reflected-TArray reads in 10 more files — `ui_archetypes` `platbtn_token`/`ids_token`,
+  `screen_dialog`, `screen_community`, `screen_battleresult`, `screen_results`, `screen_cooking`,
+  `screen_shoplist`, `screen_fishing` (one LIVE read in the phase-1 prompt path), `nav_tracker` dump lines,
+  `discover.lua`). Every remaining `#x` in Scripts operates on plain Lua tables. Rule stands: **every**
+  reflected TArray read goes through `Core.array_of` — new code included.
+- **2026-07-15 — the resurrect probe is DISABLED (`PROBE_ENABLED=false` in ui_core.lua). Do NOT re-enable
+  by flipping the flag.** It caused TWO freezes, adversarially confirmed: (1) boot hang at the Bandai logo
+  (probes during the initial async load); (2) after gating boot/transitions, a MID-SESSION freeze — free-roam
+  streams sublevels asynchronously too, so there is NO provably-safe window for `StaticFindObject` from the
+  game thread on this game (deadlock/livelock against the loader over the engine object tables; log just
+  stops, no crash). A safe version needs a native-side "loader idle" check (mem_bridge) or the lookup moved
+  into a native bridge. Menu re-detection is back on the budgeted FindAllOf (DEAD_BACKOFF ~4s) — proven.
+  RULE: **no speculative object lookups (StaticFindObject / FindAllOf bursts) at ANY time the engine might
+  be async-loading — which on this game is any time.**
+- **2026-07-15 — silent submenus (saveload/items/characters/tree/palette) — CONFIRMED cause: the 10ms
+  elapsed-time scan gate (removed).** Those adapters sit at indices ~24-31 of the 33-adapter sweep; the
+  walk cost alone exceeded 10ms, so the time gate denied their FindAllOf EVERY tick — a time gate starves
+  by sweep position, permanently; a count budget drains fairly (served classes back off ~4s and leave the
+  queue). `scan_allowed` is pure budget again, `SCANS_PER_TICK=2`. Steady demand ≈0.7 scans/tick < 2.
+  Known minor: while a menu is HELD open, sweep ticks are 1-in-3 so effective scan throughput ≈0.67/tick —
+  an overlay opened over a long-held menu can detect a few seconds late; self-heals in free-roam.
+- **2026-07-15 (round 2) — MEASURED: one FindAllOf = ~65ms on this game (max 272ms), and the absent-class
+  re-scan cycle burned 102s of game thread in 5.5min (30%) — `findall scans: n=1576 total_ms=102214`.**
+  The per-class FindAllOf polling design is bankrupt here: it is BOTH the free-roam slowness AND the menu
+  latency (scans this costly keep the budget contended, so a just-opened menu waits multi-second backoffs).
+  Interim shipped: **event-driven scan boost** (`Core.boost_missing`, fired by the registry on every screen
+  commit/close — missing pools skip their backoff for ~1.5s) + backoff split (destroyed pools 4s, never-seen
+  8s). The boost CANNOT cover ring→submenu (the ring stays active underneath — no commit event), which is
+  exactly the flow the user reported still >4s. REAL fix shipped 2026-07-15: **the screen directory** (next
+  bullet).
+- **2026-07-15 — THE SCREEN DIRECTORY (`ui_directory.lua`): screen detection is now pointer reads, not
+  scans.** The game tracks every top-level screen in named pointer fields on persistent managers:
+  `PlayerController.MyHUD` → `AAT_GameHUD` (`UIFieldManager` AT.hpp:32792 = field/shop/map/quest screens;
+  `UIBattleManager` = battle HUD/results/QTE; `UICommManager`; `UIPause`), the GameMode component
+  **`UMenuManager`** (AT.hpp:41837) whose `UBaseMenu` controllers hold every pause SUBMENU widget
+  (`m_xItemInventoryMenu.ItemMenu/ItemPalette`, `m_xStartSkillTreeMenu.SkillTreeMenu`,
+  `m_xStartSkillCustomize.SkillCustomize`, `m_xCharacterMenu/StatusMenu.MenuUI`,
+  `m_xSaveMenu/m_xLoadMenu.m_UIStartSaveLoad`, options/tips/party/root), and the GameInstance
+  (`WindowManager` dialogs, `LoadingScreen`). ~40 adapter classes are mapped in `ui_directory.MAP`
+  (every field name verified letter-for-letter against AT.hpp — while an OWNER is reachable, a mapped class
+  never falls back to scans, so a wrong name = a silently dead reader). `Core.cached_all`/`cached_live`
+  consult it first; unmapped classes (pooled rows, keyhelp, headers, title) keep the budgeted-FindAllOf
+  path. Roots are found once (FindAllOf skipping `Default__` CDOs — FindFirstOf can return the CDO with
+  null fields), cached, cleared on transition, budget-gated and backed off while absent. First in-game round
+  (2026-07-15): everything reads instantly EXCEPT three screens, fixed same day — (1)+(2) TITLE-menu
+  load-game/options: no field GameMode at the title → no `UMenuManager`, and "owner unreachable" wrongly
+  asserted "absent"; the resolver now returns nil there (fall back to the scan path) and only asserts
+  absence after actually reading a reachable owner's null field. (3) Soul-emblem list
+  (`AT_UICommunityStart`): its only reflected owner (`UICommManager.UIEmbListIns`) resolved but the screen
+  stayed silent — UNMAPPED (scan path) until a trustworthy owner exists. Toasts `Info_Log_C` also unmapped
+  (multi-instance overflow pool — opus review). SECOND round (options fixed; title-load/emblems still
+  silent, items regressed): all consistent with LAZY UMenuManager controllers (null until first open →
+  directory falls back) + the scan path being too slow for ring→submenu (the ring stays active underneath →
+  no commit → no boost → full ABSENT_BACKOFF wait). Fixes: (a) **pad-press boost** in ui_registry — an
+  A/B/X/Y/Start press EDGE while an adapter is active fires `Core.boost_missing()` (the missing event for
+  ring→submenu; gated off in combat/free-roam where no adapter is active); (b) `ABSENT_BACKOFF` 80→40 (the
+  absent scan set is small now); (c) **Ctrl+F5 dumps a screen-directory trace** (every mapped class, hop by
+  hop — open the silent screen first, then dump: the broken link names itself). If a trace shows an owner
+  VALID but its field null while the screen is open, unmap that class (the field isn't trustworthy); never
+  re-add scans for working mapped classes.
+  THIRD round (dump-driven, 2026-07-15): the traces found the real bugs. (1) **The whole hud branch never
+  worked**: `FindAllOf("PlayerController")`'s first instance is the MOUNT controller (TwinFootController,
+  MyHUD null) in the field and ATTitleController (plain HUD) at the title — `find_hud` now probes every PC
+  for the one whose MyHUD has `UIFieldManager`. This was also the REAL cause of round-1's silent soul
+  emblems (re-mapped: `cm.UIEmbListIns`). (2) **The pad boost caused a scan storm** (57k scans, 1s spikes:
+  every A press during list navigation opened a fresh window, and cached_live's bypass had no
+  once-per-generation cap) — fixed: cooldown 1s between pad windows + one bypass scan per gen in
+  cached_live. (3) Items CONFIRMED working via directory in the dump (`ItemMenu(ok) ON-SCREEN`, adapter 23
+  active; the game NULLs `ItemMenu` on close — ideal open/closed semantics). (4) Title "cargar partida"
+  still unidentified: the census v1 anchor saw NOTHING at the title (wrong text class) — census v2 uses 4
+  anchors with per-anchor totals; needs one more Ctrl+F5 with that screen open.
+  FOURTH round (2026-07-15): **Items was active-but-MUTE** — `screen_list` speaks through the detail pane,
+  whose text boxes it finds by subtree-filtering the cached `CFUIMultiLineTextBox` pool; the game REBUILDS
+  the items screen on every open (manager field NULLs on close), so the new boxes weren't in the ~30s-old
+  pool cache, and a miss set `boxes = {}` which NEVER retried (mute for the whole visit — the "worked once,
+  never replicable" report). Fix: `Core.refresh_all(cls)` (pool re-scan due now, budget-gated) fired on the
+  host's entry event + `collect_boxes` leaves `boxes = nil` on a miss so it retries next tick. RULE for any
+  adapter that subtree-scans an always-alive pool for a REBUILT screen's children: request a pool refresh
+  on entry, and never cache an empty collection as final. Census v3 keys owners by the full-name path up to
+  `.WidgetTree.` (GetParent walks only slate panels and never crosses UserWidget boundaries — v2 printed
+  "(no owner)" for everything). Title-load: pending one Ctrl+F5 with the screen open (census v3 names it).
+  FIFTH round (2026-07-15, census v3 + dump_items capture — both conclusive): (1) title load screen =
+  **`Start_Save_Load_C`** (BP subclass, GameInstance child; the native-name scan can't see it) →
+  screen_saveload scans both names AND the directory now has a **`tt` root** (`ATTitleLevelScriptActor`,
+  AT.hpp:14119: `TitleLoadMenuComponent.m_xLoadMenu.m_UIStartSaveLoad` 0x390/0x100/0x180,
+  `TitleOptionMenuComponent.m_xOptionMenu.m_UIStartOption`) — title load/options by pointer. (2) items
+  intermittent mute = wrapper nodes hold TWO boxes (`Txt_Title00.mainTxt` + empty `SubTxt`) and pool
+  iteration order decided which one `collect_boxes` latched → `is_maintxt` preference (mainTxt always
+  wins). (3) the 3-4s residue on title-load = pad-boost cooldown (1s) swallowed the second of two quick A
+  presses while the first press's boosted scan had already consumed the class credit before the screen
+  existed → cooldown 300ms. DEBUG in screen_list back OFF.
+- **2026-07-14 evening — performance architecture** (see *Next step* for the verify list): sticky-active
+  registry (`ui_registry.SWEEP_EVERY=3`), per-tick `on_screen` memo, 1-scan/tick + 10 ms time gate +
+  per-class jitter, resurrect probe (paths derived at runtime from `GetFullName`, never hardcoded; probe
+  misses are harmless — `FindAllOf` backoff is the safety net), shared `pad_poll.lua` (any future fast pad
+  stepper registers there — do NOT add new 20 ms `LoopAsync` loops). Backoffs now run on wall-clock ticks
+  (`os.clock`), not per-adapter counters. Loops that run OUTSIDE the registry step and scan
+  (`battle_monitor`, `quest_objective`) must call `Core.begin_scan_tick()` at their step top or the time
+  gate starves them. Accepted trade-offs from the review: higher-priority overlay detection ≤ ~500 ms;
+  never-seen non-GameInstance classes burn a few futile O(1) probes while absent (sub-ms, bounded).
 - **SOLVED 2026-07-14 (round 2) — the mid-GAMEPLAY crash was `nav_tracker` reading a TArray length on a
   dying world object.** Separate bug from the feed (this one survived the feed removal). Signature: the same
   uncatchable `0xe06d7363` throw, no Lua error logged, mid free-roam after a while. Root cause: `Transition.active()`

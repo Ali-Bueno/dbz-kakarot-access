@@ -8,6 +8,7 @@
 local Core = require("ui_core")
 local Transition = require("transition")
 local KeyhelpWatch = require("keyhelp_watch")
+local Input = require("input")
 
 local Registry = {}
 
@@ -22,8 +23,56 @@ local enabled = false
 local CONFIRM_TICKS = 2
 local pending, pending_n = nil, 0
 
+-- Sticky-active sweep cadence. Polling all ~33 adapters' is_active() every tick was the
+-- measured 40ms-avg game-thread step (Ctrl+F5, 2026-07-14): most of a sweep re-probes
+-- screens that cannot have changed. While an adapter is active we poll ONLY it, and run
+-- the full priority sweep every SWEEP_EVERY ticks — enough to catch a higher-priority
+-- overlay (a dialog popping over a menu) within ~300ms. The sweep runs EVERY tick when
+-- nothing is active (free-roam: menu-open detection stays at one tick) and while a
+-- pending switch is being confirmed (so CONFIRM_TICKS still counts consecutive polls).
+local SWEEP_EVERY = 3
+local tick_n = 0
+
+-- Menu-open boost from the PAD. The registry's commit boost cannot see ring→submenu:
+-- the ring/pause stays visible (and active) under the submenu, so no screen change ever
+-- commits and a scan-path submenu waits out its full backoff (the "items/emblems take
+-- forever" flow, 2026-07-15). A confirm/back/start PRESS is the missing event — it is
+-- the exact moment a submenu may be appearing. Read at the registry's own 100ms cadence
+-- (a real menu press holds longer than one tick, so the edge is caught), and gated on
+-- "some adapter is active": in combat/free-roam (no active adapter) button mashing must
+-- never trigger scan work.
+local BOOST_BTNS = Input.BTN.A | Input.BTN.B | Input.BTN.X | Input.BTN.Y | Input.BTN.START
+local BOOST_COOLDOWN = 3    -- registry ticks between pad-triggered boost windows. Not 1:
+                            -- an uncooled boost per press turned list navigation into a
+                            -- permanent scan storm (57k scans / 1s spikes, 2026-07-15).
+                            -- Not 10 either: a menu is often opened by the SECOND of two
+                            -- quick A presses (submenu pick → confirm), and a 1s cooldown
+                            -- swallowed that press's window while the first press's scan
+                            -- had already consumed the class credit BEFORE the screen
+                            -- existed — the "3-4s to read" residue. 300ms lets the
+                            -- opening press always start a fresh window.
+local prev_btn = 0
+local boost_cool = 0
+local function pad_boost()
+    local snap = Input.read()
+    if not snap then return end
+    local fresh = snap.buttons & ~prev_btn
+    prev_btn = snap.buttons
+    if active ~= nil and (fresh & BOOST_BTNS) ~= 0 and tick_n >= boost_cool then
+        boost_cool = tick_n + BOOST_COOLDOWN
+        Core.boost_missing()
+    end
+end
+
 function Registry.register(adapter)
     adapters[#adapters + 1] = adapter
+end
+
+local function sweep()
+    for _, a in ipairs(adapters) do
+        if a.is_active() then return a end
+    end
+    return nil
 end
 
 local function step()
@@ -37,9 +86,15 @@ local function step()
         return
     end
 
-    local cur = nil
-    for _, a in ipairs(adapters) do
-        if a.is_active() then cur = a break end
+    tick_n = tick_n + 1
+    pad_boost()
+    local cur
+    if active and pending == nil and tick_n % SWEEP_EVERY ~= 0 then
+        -- Sticky fast path: the active screen is still up → keep it, poll nobody else.
+        -- The moment it stops being active, fall through to a full sweep THIS tick.
+        cur = active.is_active() and active or sweep()
+    else
+        cur = sweep()
     end
 
     if cur ~= active then
@@ -60,6 +115,10 @@ local function step()
         -- New context: the screen's actions ("X: assign", "Y: skill tree") are read once,
         -- queued behind its own announcement (keyhelp_watch.lua).
         KeyhelpWatch.screen_changed(cur)
+        -- A screen just opened or closed — the one moment a not-yet-cached submenu may be
+        -- appearing (ring → items, items → detail, close → reopen). Let missing pools skip
+        -- their backoff for a short window so the new screen reads at once (ui_core).
+        Core.boost_missing()
     else
         pending, pending_n = nil, 0
     end

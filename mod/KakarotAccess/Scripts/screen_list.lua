@@ -63,7 +63,10 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
     -- Diagnosed 2026-07-11: reflected index + detail-pane name read fine for populated
     -- categories; empty categories are told by the detail pane staying nil (nil_streak) since
     -- the list is a fixed pool. Keep OFF; flip on only for a short capture to dump_items.txt.
-    local DEBUG = false
+    local DEBUG = false   -- 2026-07-15 capture DIAGNOSED the mute items menu: name_box
+                          -- sometimes latched Txt_Title00's empty SubTxt instead of
+                          -- mainTxt (pool iteration order) — fixed by the is_maintxt
+                          -- preference in collect_boxes.
     local last_dbg = nil
     local function dbg(s)
         if not DEBUG then return end
@@ -80,24 +83,59 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
 
     local name_box = nil   -- the name_node text box (lazy collect, with boxes)
 
+    -- A node name matches either as a PATH SEGMENT (".Txt_Title00." — the usual wrapper
+    -- widget whose inner mainTxt is the box) or as the SUFFIX (the node IS the text box:
+    -- its full name simply ends with ".Txt_Title00", no closing dot).
+    local function match_node(fn, nm)
+        return fn:find("." .. nm .. ".", 1, true) ~= nil
+            or fn:sub(-(#nm + 1)) == ("." .. nm)
+    end
+
+    -- A wrapper node (Txt_Title00) holds TWO text boxes: mainTxt (the real content, the
+    -- one Core.text_of reads) and SubTxt (empty). The pool iterates in scan order, so
+    -- without a preference the LAST match won — sometimes SubTxt — and liveName came
+    -- back nil with the item name on screen: the intermittent mute items menu
+    -- (dump_items capture, 2026-07-15). mainTxt always wins; anything else only fills
+    -- an empty slot.
+    local function is_maintxt(fn) return fn:sub(-8) == ".mainTxt" end
+
+    local collect_info = "never-ran"   -- what the last collection saw (DEBUG dump)
+
     local function collect_boxes()
         boxes = {}
         name_box = nil
         if not ((detail_nodes or name_node) and Core.valid(host)) then return end
         local prefix = host:GetFullName():match("%s(.+)$") or host:GetFullName()
+        local found = false
+        local under, sample = 0, {}
         for _, o in pairs(Core.cached_all("CFUIMultiLineTextBox", tick)) do
             if Core.valid(o) then
                 local fn = o:GetFullName()
                 if fn:find(prefix, 1, true) then
+                    under = under + 1
+                    if #sample < 3 then sample[#sample + 1] = fn:sub(#prefix + 2, #prefix + 80) end
                     for i, nm in ipairs(detail_nodes or {}) do
-                        if fn:find("." .. nm .. ".", 1, true) then boxes[i] = o end
+                        if match_node(fn, nm) and (boxes[i] == nil or is_maintxt(fn)) then
+                            boxes[i] = o
+                            found = true
+                        end
                     end
-                    if name_node and fn:find("." .. name_node .. ".", 1, true) then
+                    if name_node and match_node(fn, name_node)
+                        and (name_box == nil or is_maintxt(fn)) then
                         name_box = o
+                        found = true
                     end
                 end
             end
         end
+        collect_info = string.format("under=%d name_box=%s eg: %s",
+            under, tostring(name_box ~= nil), table.concat(sample, " | "))
+        -- Nothing of THIS host's subtree in the cached pool: the screen was just REBUILT
+        -- and the pool is stale (its refresh was requested on entry — see is_active).
+        -- Leave boxes nil so we re-collect next tick; a `{}` here would never retry and
+        -- the menu would stay active-but-MUTE for the whole visit (the Items menu,
+        -- 2026-07-15 — "worked once, never again").
+        if not found then boxes = nil end
     end
 
     -- The live selection name from the detail-pane title (see name_node above).
@@ -122,20 +160,30 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         return #parts > 0 and table.concat(parts, ", ") or nil
     end
 
+    local had_host = false
     function S.is_active()
         tick = tick + 1
         host = Core.first_on_screen(class, tick)   -- picks the live pooled instance each tick
-        if not host then boxes = nil return false end
+        if not host then boxes = nil had_host = false return false end
+        -- Entry event (host newly detected): this screen is rebuilt by the game on every
+        -- open, so its detail-pane text boxes are NEW objects the always-alive
+        -- CFUIMultiLineTextBox pool cache (30s refresh) doesn't hold yet. Ask for one
+        -- re-scan now; collect_boxes retries until the fresh pool lands.
+        if not had_host and (detail_nodes or name_node) then
+            Core.refresh_all("CFUIMultiLineTextBox")
+        end
+        had_host = true
         list = host[list_member]
         local idx = A.list_select_index(list)
         if (detail_nodes or name_node) and not boxes then collect_boxes() end
         if DEBUG then
             local row = idx and A.list_selected_row(list)
-            dbg(string.format("idx=%s empty=%s f620=%s f624=%s rowName=%s liveName=%s",
+            dbg(string.format("idx=%s empty=%s f620=%s f624=%s rowName=%s liveName=%s boxes=%s [%s]",
                 tostring(idx), tostring(category_empty()),
                 tostring(Mem.is_loaded() and Mem.i32(host, 0x620)),
                 tostring(Mem.is_loaded() and Mem.i32(host, 0x624)),
-                tostring(row and row.name), tostring(name_node and live_name())))
+                tostring(row and row.name), tostring(name_node and live_name()),
+                tostring(boxes ~= nil), collect_info))
         end
         -- name_node screens (Items): stay active whenever the menu is up, so update() runs every
         -- tick — it reads the selected item, or (when the native flag says so) announces the

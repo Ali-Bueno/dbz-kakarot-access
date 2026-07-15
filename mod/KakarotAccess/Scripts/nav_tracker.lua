@@ -279,7 +279,9 @@ local function minimap()
     if ui_muted() then return nil end
     if tick < mm_retry then return nil end
     mm_retry = tick + MM_RETRY_TICKS
-    mm_cache = Core.first_live("AT_UIMiniMapRadar")
+    -- cached_live resolves this through the screen directory (UIFieldManager.MapMng
+    -- .MinimapIns — a pointer read), so acquisition costs no object scan at all.
+    mm_cache = Core.cached_live("AT_UIMiniMapRadar")
     return mm_cache
 end
 
@@ -1276,9 +1278,10 @@ local function step()
         _G.__KakarotRouteNative = "ok"
     end
 
-    -- Field aim announcer: per tick (one guarded property chain — cheap), so the
-    -- "aiming at X" cue lands the instant the game locks a target.
-    aim_watch(pawn, px, py, pz)
+    -- Field aim announcer: every 3rd tick (~300ms). It reads a reflected actor array each
+    -- run, and "aiming at X" landing 0.3s after lock is imperceptible — running it per
+    -- tick was free-roam reflection load for nothing (perf audit 2026-07-14).
+    if tick % 3 == 0 then aim_watch(pawn, px, py, pz) end
 
     -- Chained pickup sweep: waiting for the reached collectible to be taken, then
     -- retarget the next one (see chain_step). Enemy proximity warning on the same
@@ -2581,13 +2584,16 @@ function Nav.dump()
     ExecuteInGameThread(function()
         local src = debug.getinfo(1, "S").source:sub(2)
         local dir = src:match("^(.*)[/\\]") or "."
-        local f = io.open(dir .. "\\dumps\\dump_nav_targets.txt", "w")
+        -- APPEND (was "w"): the user often takes one dump per broken screen in a session,
+        -- and overwrite mode lost all but the last (2026-07-15, the items dump). The
+        -- timestamped header separates runs.
+        local f = io.open(dir .. "\\dumps\\dump_nav_targets.txt", "a")
         if not f then Speech.say("nav dump: cannot open file", true) return end
         -- UNBUFFERED: an uncatchable abort mid-dump otherwise loses EVERYTHING written
         -- so far (a 0-byte file, seen 2026-07-06 in the Raditz-road area) — with no
         -- buffer the file shows exactly how far the dump got before dying.
         pcall(function() f:setvbuf("no") end)
-        f:write("== nav target dump ==\n")
+        f:write(string.format("\n== nav target dump @ %s ==\n", os.date("%H:%M:%S")))
         -- Full radar state, so a silent radar can be diagnosed from this file alone.
         -- ui_muted is checked FIRST and short-circuits: with a menu up we must not
         -- probe the minimap at all (level teardown hides behind menus).
@@ -2607,6 +2613,76 @@ function Nav.dump()
             f:write(string.format("ui step ms: max=%.1f avg=%.2f over %d ticks\n",
                 st.max, st.sum / st.n, st.n))
             _G.__KakarotStepStats = nil
+        end
+        -- FindAllOf cost telemetry (ui_core.timed_findall) — attributes step cost to
+        -- full-object scans vs widget walks. Resets with each dump, like the step stats.
+        local sc = _G.__KakarotScanStats
+        if sc and sc.n > 0 then
+            f:write(string.format("findall scans: n=%d total_ms=%.0f max_ms=%.1f avg_ms=%.1f\n",
+                sc.n, sc.ms, sc.max, sc.ms / sc.n))
+            _G.__KakarotScanStats = nil
+        end
+        -- Screen-directory trace (ui_directory): every mapped class, hop by hop. For a
+        -- silent screen, open it FIRST and dump — the broken link names itself. Gated
+        -- like the widget probes below: never during a transition.
+        if not trans then
+            pcall(function()
+                f:write("screen directory:\n")
+                for _, line in ipairs(require("ui_directory").debug_lines()) do
+                    f:write(line .. "\n")
+                end
+            end)
+            -- Visible-screen CENSUS: every currently ON-SCREEN text box, grouped by the
+            -- blueprint/native widget ancestors that own it. This names the REAL class
+            -- of a screen no adapter is detecting (FindAllOf on a native base can return
+            -- NOTHING while the _C blueprint name works — the 2026-07-06 gotcha — so a
+            -- silent screen may simply be scanned under the wrong name). Text boxes are
+            -- the census anchor because FindAllOf("CFUIMultiLineTextBox") is proven to
+            -- enumerate fully (screen_list / discover.lua rely on it).
+            pcall(function()
+                f:write("visible-screen census (owner chains of on-screen text):\n")
+                -- Several anchors: the first census used only CFUIMultiLineTextBox and
+                -- came back EMPTY with the items menu open and read aloud (2026-07-15) —
+                -- either the native-name gotcha or screens built on the wrapper/plain
+                -- text classes. Per-anchor totals tell which anchor sees anything at
+                -- all; owner lines are written the moment a chain is first seen, so a
+                -- mid-walk abort still leaves the partial census on disk.
+                local seen = {}
+                for _, anchor in ipairs({ "CFUIMultiLineTextBox", "CFUIXcmnMultiLineText",
+                                          "Xcmn_MultiLineText_C", "TextBlock" }) do
+                    local all
+                    pcall(function() all = FindAllOf(anchor) end)
+                    local total, on = 0, 0
+                    for _, t in pairs(all or {}) do
+                        if Core.valid(t) then
+                            total = total + 1
+                            local ok_os, os_r = pcall(Core.on_screen, t)
+                            if ok_os and os_r then
+                                on = on + 1
+                                -- Owner = the full-name OUTER chain (GetParent walks only
+                                -- slate panels and missed cross-UserWidget owners — the v2
+                                -- census printed "(no owner)" for everything at the title).
+                                -- The path up to .WidgetTree. IS the owning root widget.
+                                local fn = "?"
+                                pcall(function() fn = t:GetFullName() end)
+                                local key = fn:match("^(.-)%.WidgetTree%.") or fn:sub(1, 100)
+                                if not seen[key] then
+                                    seen[key] = true
+                                    local txt
+                                    pcall(function() txt = t:GetText():ToString() end)
+                                    if not txt or txt == "" then
+                                        pcall(function() txt = t.Text:ToString() end)
+                                    end
+                                    f:write(string.format("  %s   e.g. \"%s\"\n",
+                                        key, tostring(txt or ""):sub(1, 40)))
+                                end
+                            end
+                        end
+                    end
+                    f:write(string.format("  [anchor %s: total=%d on_screen=%d]\n",
+                        anchor, total, on))
+                end
+            end)
         end
         -- Ring-pause diagnostic (mute-pause reports): every Start_Top_C instance with
         -- its own visibility enum + effective on_screen, so a wrong-instance latch vs a
@@ -2841,7 +2917,8 @@ function Nav.dump()
                     if not path then f:write("  findpath -> NIL path object\n") return end
                     f:write("  findpath obj=" .. path:GetFullName() .. "\n")
                     local n2 = "?"
-                    pcall(function() n2 = tostring(#path.PathPoints) end)
+                    local _, npts = Core.array_of(path, "PathPoints")
+                    if npts then n2 = tostring(npts) end
                     f:write("  findpath PathPoints=" .. n2 .. "\n")
                     pcall(function()
                         local ds = path:GetDebugString()
@@ -2862,7 +2939,10 @@ function Nav.dump()
                                 { X = s2.x, Y = s2.y, Z = s2.z },
                                 { X = e2.x, Y = e2.y, Z = e2.z }, a, nil)
                             local c2 = "nil"
-                            if p2 then pcall(function() c2 = tostring(#p2.PathPoints) end) end
+                            if p2 then
+                                local _, np2 = Core.array_of(p2, "PathPoints")
+                                if np2 then c2 = tostring(np2) end
+                            end
                             f:write(string.format("  findpath via %s -> points=%s\n", nm, c2))
                         end
                     end

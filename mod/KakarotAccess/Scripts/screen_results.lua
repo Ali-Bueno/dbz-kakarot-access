@@ -59,9 +59,10 @@ end
 -- unless EVERY visible digit parses.
 local function image_number(arr_owner, member)
     local digits, ok = {}, true
+    local arr, n = Core.array_of(arr_owner, member)
+    if not arr then return nil end
     pcall(function()
-        local arr = arr_owner[member]
-        for i = 1, #arr do
+        for i = 1, n do
             local img = arr[i]
             if Core.valid(img) and Core.is_visible(img) then
                 local tok = texture_token(img)
@@ -76,9 +77,10 @@ end
 -- All currently-readable lines with stable keys, in on-screen order.
 local function lines()
     local out = { { key = "screen", text = I18n.header(6) } }
+    local bars, nbars = Core.array_of(host, "UIClearBar_List")
+    if not bars then return out end
     pcall(function()
-        local bars = host.UIClearBar_List
-        for i = 1, #bars do
+        for i = 1, nbars do
             local bar = bars[i]
             if Core.valid(bar) and Core.on_screen(bar) then
                 local name = Core.read_text(bar.TextBox_Item)

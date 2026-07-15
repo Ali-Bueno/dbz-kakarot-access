@@ -141,16 +141,16 @@ local function overlay_text()
     pcall(function() res = host.WL_CookingResult end)
     if Core.valid(res) and Core.on_screen(res) then
         local parts = {}
-        pcall(function()
-            local boxes = res.TextBoxCtn
-            for i = 1, #boxes do
+        local boxes, n = Core.array_of(res, "TextBoxCtn")
+        if boxes then pcall(function()
+            for i = 1, n do
                 local b = boxes[i]
                 if Core.on_screen(b) then
                     local t = clean(Core.read_text(b))
                     if t then parts[#parts + 1] = t end
                 end
             end
-        end)
+        end) end
         if #parts > 0 then return table.concat(parts, ", ") end
     end
     return nil

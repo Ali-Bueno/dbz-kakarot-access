@@ -18,6 +18,8 @@
 -- Perf: FindAllOf is expensive, so the big object lists are fetched ONCE and reused (an
 -- earlier version called FindAllOf per-container and hung the game). Not shipped.
 
+local Core = require("ui_core")   -- Core.array_of: the only safe way to read a reflected TArray
+
 local Discover = {}
 
 local OUT_DIR = "D:\\code\\unreal\\dragon ball kakarot access\\mod\\KakarotAccess\\Scripts\\dumps\\"
@@ -310,12 +312,12 @@ function Discover.run()
                 out[#out + 1] = "     CursorSnapThreshold=" .. vec2(host, "CursorSnapThreshold")
                     .. "  CursorMoveSpeed=" .. tostring((function() local ok,v=pcall(function() return host.CursorMoveSpeed end); return ok and v end)())
                 -- DestinationIconList (TArray<FDestinationIconInfo{Icon,Slot}>) — ordered truth.
-                local n = -1; pcall(function() n = #host.DestinationIconList end)
-                out[#out + 1] = "     DestinationIconList count=" .. tostring(n)
-                if n and n > 0 and n < 200 then
+                local arr, n = Core.array_of(host, "DestinationIconList")
+                out[#out + 1] = "     DestinationIconList count=" .. tostring(n or -1)
+                if arr and n and n > 0 and n < 200 then
                     pcall(function()
                         for i = 1, n do
-                            local e = host.DestinationIconList[i]
+                            local e = arr[i]
                             local ic = e and e.Icon
                             if valid(ic) then
                                 out[#out + 1] = string.format("       [%d] %s", i, tostring(widget_text(ic.Txt_Name) or "?"))
@@ -535,17 +537,23 @@ function Discover.run()
                         local fn = o:GetFullName()
                         if fn:find(prefix, 1, true) then
                             local ids = "-"
-                            pcall(function()
-                                local a, parts = o.CurrentDynamicAssignInputControllerId, {}
-                                for i = 1, #a do parts[#parts + 1] = a[i]:ToString() end
-                                ids = table.concat(parts, "|")
-                            end)
+                            do
+                                local a, n = Core.array_of(o, "CurrentDynamicAssignInputControllerId")
+                                if a then pcall(function()
+                                    local parts = {}
+                                    for i = 1, n do parts[#parts + 1] = a[i]:ToString() end
+                                    ids = table.concat(parts, "|")
+                                end) end
+                            end
                             local keys = "-"
-                            pcall(function()
-                                local a, parts = o.CurrentKeyIds, {}
-                                for i = 1, #a do parts[#parts + 1] = tostring(tonumber(a[i])) end
-                                keys = table.concat(parts, "|")
-                            end)
+                            do
+                                local a, n = Core.array_of(o, "CurrentKeyIds")
+                                if a then pcall(function()
+                                    local parts = {}
+                                    for i = 1, n do parts[#parts + 1] = tostring(tonumber(a[i])) end
+                                    keys = table.concat(parts, "|")
+                                end) end
+                            end
                             out[#out + 1] = string.format(
                                 "  PLAT %s vis=%s ctrlIds=%s keyIds=%s",
                                 fn:sub(#prefix + 1):match("^[^%s]*") or "?", isvis(o), ids, keys)
@@ -724,12 +732,12 @@ function Discover.run()
                 out[#out + 1] = "  (Tips_C not present)"
             else
                 -- The window-pointer array order (index 0 may track the current page).
-                pcall(function()
-                    local arr = tips.UITipsWin_List
-                    for i = 1, #arr do
+                local arr, n = Core.array_of(tips, "UITipsWin_List")
+                if arr then pcall(function()
+                    for i = 1, n do
                         out[#out + 1] = string.format("  UITipsWin_List[%d] page=%q", i, gettext(arr[i].Txt_Page))
                     end
-                end)
+                end) end
                 for _, wn in ipairs({ "Tips_Win00", "Tips_Win01" }) do
                     local w = tips[wn]
                     if valid(w) then

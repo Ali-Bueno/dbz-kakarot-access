@@ -39,13 +39,13 @@ local function clean(t) return t and A.markup_to_speech(t) or nil end
 local BAR_COUNT = 4   -- Xlist_Bar01_00..03 (UShop_Top_C, Shop_Top.hpp)
 local function rows_of(h)
     local out = {}
-    pcall(function()
-        local arr = h.ListBarCtn
-        for i = 1, #arr do
+    local arr, n = Core.array_of(h, "ListBarCtn")
+    if arr then pcall(function()
+        for i = 1, n do
             local r = arr[i]
             if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
         end
-    end)
+    end) end
     if #out == 0 then
         for i = 0, BAR_COUNT - 1 do
             local r
