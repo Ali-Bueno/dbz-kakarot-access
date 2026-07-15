@@ -64,14 +64,15 @@
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
 needs. The RE for it is recorded in *Derived facts* if that ever changes — don't re-derive it.
 
-**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — seven bugs + one
-feature, each bullet carries its diagnosis lead: (1) level-up not announced (suspect:
-`Info_Log_Level_C` directory mapping, the fishing-ring failure pattern); (2) battle results reading
-a constant "222" for every stat value; (3) radar re-tracks the story objective after combat instead
-of the user's pick; (4) subtitles read even with the game's subtitles option off; (5) episode title
-cards not read; (6) Soul Emblems grid still silent (screenshot 95 identified it); (7) the cooking
-ENTRY menu ("Preparar un platillo"/"Salir", screenshot 96) silent — the dish list after it reads;
-(+) d-pad snap navigation for the Community board.
+**NEXT SESSION, FIRST: the 2026-07-15 user-reported batch in the Backlog** — eight bugs + one
+feature, each bullet carries its diagnosis lead: (0) quest objective HUD confirmed NOT reading
+(screenshot 97; map `fm.QuestNavigation`); (1) level-up not announced (suspect: `Info_Log_Level_C`
+directory mapping, the fishing-ring failure pattern); (2) battle results reading a constant "222"
+for every stat value; (3) radar re-tracks the story objective after combat instead of the user's
+pick; (4) subtitles read even with the game's subtitles option off; (5) episode title cards not read
+(leads: `fm.QuestMainStart` / `fm.QuestMainLogo`); (6) Soul Emblems grid still silent (screenshot 95
+identified it); (7) the cooking ENTRY menu ("Preparar un platillo"/"Salir", screenshot 96) silent —
+the dish list after it reads; (+) d-pad snap navigation for the Community board.
 
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have
@@ -120,17 +121,23 @@ scrambled, the block sort had no positions to work with (`Core.slot_pos`) — du
 anything; and if the GAME turns out to react to the d-pad on that page (it shows only R-stick rotate + X/Y/B,
 so it shouldn't), move the binding to LB/RB rather than blocking the pad. For the keyhelp: open the inventory and the character
 menu and check you hear the choices ("botón X: asignar", "botón Y: árbol de habilidades", "botón A: usar")
-once on entry, and again only when they change. Then the **backlog** below: the quest-objective HUD is built
-but never verified in-game (the radar 2.0 batch + R3 picker were verified 2026-07-15).
+once on entry, and again only when they change. Then the **backlog** below (the radar 2.0 batch + R3 picker were verified 2026-07-15; the
+quest-objective HUD verify FAILED — see the batch above, item 0).
 
 ## Backlog
 All work through 2026-07-14 is COMMITTED and PUSHED (latest: 47df2d2). The narrative of how each
 feature was derived lives in PROGRESS.md and in the git log; this list is only what is still OPEN.
 
-- **Quest objective HUD** (`quest_objective.lua`) — pending verify. The F10 on-demand read needs a FULL
-  game restart (Ctrl+Shift+R does not re-run main.lua, where the keybind is registered); no Lua errors in
-  the log and the bind is present, so most likely it was just never restarted. The reactive reader only
-  speaks when the objective CHANGES — an objective already on screen staying put is expected silence.
+- **BUG CONFIRMED (user, 2026-07-15): the quest objective HUD is NOT read** (`quest_objective.lua`) —
+  full restarts happened today and it stayed mute. Screenshot "Captura de pantalla (97).png" pins the
+  element: the flag-icon panel above the minimap, single line "¡Lleva a Vegeta a un lugar remoto!".
+  Leads, in order: (a) `UIFieldManager` holds the widget by pointer — `QuestNavigation`
+  (`UAT_UIQuestNavigation*`, AT.hpp UIFieldManager body, 0x568): verify `Quest_Navi_C` is its BP
+  subclass and MAP it in `ui_directory` (`{"fm", "QuestNavigation"}`) so detection stops depending on
+  scans; (b) quest_objective runs OUTSIDE the registry loop — it must call `Core.begin_scan_tick()`
+  at its step top or its scans starve (the battle_monitor rule); (c) check the boot log that the F10
+  bind registered and no Lua error fired; (d) remember the reactive reader only speaks on CHANGE —
+  after the fix it should also read the objective once when it first appears.
 - **BUG (user, 2026-07-15): level-up is not announced.** Nothing is spoken on leveling up in the
   field. PRIME SUSPECT: `Info_Log_Level_C` is directory-mapped to `{"fm", "InfoLevelUp"}` — if the
   game never sets that field this is EXACTLY the fishing ring-core failure again (owner reachable +
@@ -158,9 +165,11 @@ feature was derived lives in PROGRESS.md and in the git log; this list is only w
   options data at runtime — find where the option lives: the options save / GameUserSettings family /
   whatever `Start_Option_C` writes; NO hardcoded defaults). If the option is off, speak nothing.
 - **BUG (user, 2026-07-15): episode TITLE CARDS are not read** (e.g. "Goku contra Nappa y Vegeta" at
-  an episode start). Likely a telop-family widget not covered by `screen_telop`
-  (`Quest_Main_Telop_C`). Lead: grep AT.hpp / the object dump for episode/chapter/telop widget class
-  names, then capture one live (F7/census) when a card shows.
+  an episode start). STRONG LEADS (AT.hpp, UIFieldManager body): the manager holds
+  `QuestMainStart` (`UAT_UIQuestMainStart*`, 0x558) and `QuestMainLogo` (`UAT_UIQuestMainLogo*`,
+  0x700) by pointer — one of those is almost certainly the episode card; check their classes' text
+  members in the dump, then map + register a reader (both are directory-mappable off `fm`).
+  Fallback: F7/census while a card is up.
 - **BUG (user, 2026-07-15): the Soul Emblems GRID is still silent** — screenshot "Captura de pantalla
   (95).png" identifies it: header "EMBLEMAS DE ALMA", 3×7 grid of emblem portraits, page 1/7 (LB/RB),
   keyhelp X=Ordenar Y=Detalles A=Conjunto B=Atrás, cursor = golden border on the hovered emblem. This
