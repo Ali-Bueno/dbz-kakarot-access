@@ -514,6 +514,7 @@ local function grid_host()
 end
 
 local ghost_refresh_done = false   -- one watch-lane arm per menu-flow visit
+local handoff_armed = false        -- one fresh arm per board→grid (mode 10) handoff
 
 -- Menu-flow ENTRY SIGNAL (first visit of a session read ~5s late — user 2026-07-16):
 -- the grid class is NEVER-seen then, so it waited out the full absent-scan backoff, and
@@ -615,9 +616,29 @@ function Commu.is_active()
                         grid_slots, grid_byai = slots()
                         if #grid_slots > 0 then m = "grid" end
                     end
-                    if not m then m = "board" end
+                    if not m then
+                        m = "board"
+                        -- Board→grid HANDOFF arm (community STORY TUTORIAL,
+                        -- 2026-07-16): mode 10 says the grid owns input, but on the
+                        -- session's first grid the widget doesn't exist yet — and
+                        -- this flow has NO other entry signal (no ring close, no
+                        -- ghost board), so the fresh grid sat out the never-seen
+                        -- scan backoff while the tutorial asked to pick Gohan.
+                        -- Mode 10 itself is the positive "user is waiting" evidence:
+                        -- arm the watch lane fresh once, then renew it while the
+                        -- handoff persists (maintain_wait can't renew here — an
+                        -- adapter IS active), capped by the arm's own WAIT_RENEW_S.
+                        if not handoff_armed then
+                            handoff_armed = true
+                            watch_grid()
+                        elseif wait_clock
+                            and os.clock() - wait_clock < WAIT_RENEW_S then
+                            renew_grid()
+                        end
+                    end
                 elseif BOARD_LIVE_MODES[mode_v or -1] then
                     m = "board"
+                    handoff_armed = false
                 else
                     board = nil        -- parked/ghost pane: not this adapter's screen
                     ghost_board = true -- …but it IS the menu-flow signature (see below)
@@ -649,6 +670,7 @@ function Commu.is_active()
     -- it in ui_core: a VALID parked instance is not the fresh screen, pane_live is).
     if m == "grid" then
         unwatch_grid()
+        handoff_armed = false
         wait_clock = nil   -- flow satisfied: no more renewals this visit
         if entry_t0 then
             print(string.format("[KakarotAccess] emb grid commit +%.2fs after entry edge\n",

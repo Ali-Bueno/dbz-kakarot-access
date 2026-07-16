@@ -8,6 +8,7 @@
 local Core = require("ui_core")
 local Transition = require("transition")
 local KeyhelpWatch = require("keyhelp_watch")
+local GuideWatch = require("guide_watch")
 local Input = require("input")
 
 local Registry = {}
@@ -144,6 +145,9 @@ local function step()
     if active then
         active.update()
         KeyhelpWatch.update()
+        -- Tutorial guidance line (guide_watch.lua): queued after the screen's own
+        -- readout, same slot as the keyhelp read.
+        GuideWatch.update()
     end
 end
 

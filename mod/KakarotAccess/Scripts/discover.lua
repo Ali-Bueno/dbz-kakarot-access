@@ -396,7 +396,10 @@ function Discover.run()
                 if okv and o:IsVisible() == true then
                     local ok2, s = pcall(function() return o.Text:ToString() end)
                     if ok2 and s and s ~= "" then
-                        out[#out + 1] = string.format("  %q  <- %s", s, short(o:GetFullName()))
+                        -- FULL path (the short() form hid the owner of the community
+                        -- tutorial's instruction box for a whole session, 2026-07-16)
+                        out[#out + 1] = string.format("  %q\n        <- %s",
+                            s, o:GetFullName())
                     end
                 end
             end

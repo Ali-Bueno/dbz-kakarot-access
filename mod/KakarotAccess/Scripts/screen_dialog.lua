@@ -301,22 +301,36 @@ end
 
 -- The last fully-announced no-choice notice still on screen. NOT cleared by reset()
 -- (the registry resets adapters on every switch — clearing it there would make a
--- released notice re-claim and re-announce in a loop).
+-- released notice re-claim and re-announce in a loop). NOT cleared on an off-screen
+-- BLINK either (community tutorial, 2026-07-16): the parked reward window kept every
+-- visibility signal true for 20+ minutes and flickered off/on with each R1/L1 page
+-- flip in the emblems grid — clearing the latch on the first off tick re-announced
+-- the stale "Received the community leader Goku" notice on every blink, drowning the
+-- grid reader. Only a window that STAYS off for SPOKEN_GRACE_S is genuinely closed;
+-- a genuinely NEW notice re-claims anyway because its text differs.
 local spoken = nil
+local off_since = nil
+local SPOKEN_GRACE_S = 3.0
+
+local function window_gone()
+    off_since = off_since or os.clock()
+    if os.clock() - off_since > SPOKEN_GRACE_S then spoken = nil end
+    state = { msg = nil, labels = {}, sel = nil }
+end
 
 function Dialog.is_active()
     tick = tick + 1
     if not Core.on_screen(win) then acquire() end   -- acquire is now cheap (cached refs)
     if not Core.on_screen(win) then
-        spoken = nil
-        state = { msg = nil, labels = {}, sel = nil }
+        window_gone()
         return false
     end
+    off_since = nil
     local msg = message(win)
     local labels, sel, items = choices()
-    -- Nothing to say (no message AND no options): release.
+    -- Nothing to say (no message AND no options): release. The latch keeps its text —
+    -- a mid-animation blank read must not turn the next flicker into a re-announce.
     if not msg and #labels == 0 then
-        spoken = nil
         state = { msg = nil, labels = {}, sel = nil }
         return false
     end

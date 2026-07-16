@@ -20,7 +20,8 @@
 | Speech pipeline (PRISM) | done | Logs chosen backend on boot |
 | Overworld main menu (native selection) | done | `screen_field.lua`, reads via `UAT_UIStartTop` offsets |
 | Battle-pause menu (native selection) | done | `screen_pause.lua`, `UAT_UIXCmnPause +0x43C` |
-| Dialog / message / confirm popups | done | `screen_dialog.lua` (incl. reward/emblem content pools, gift picker) |
+| Dialog / message / confirm popups | done | `screen_dialog.lua` (incl. reward/emblem content pools, gift picker). 2026-07-16: notice latch (`spoken`) now survives off-screen BLINKS (cleared only after 3s continuously off) — the parked reward window (`Xcmn_Win01_C_0`, ALL visibility signals true 20 min after closing) flickered with every R1/L1 page flip in the tutorial emblems grid and re-announced "Recibiste al líder… Goku" on each blink. Pending in-game verify |
+| Tutorial guidance line | wip | `guide_watch.lua` (NEW 2026-07-16) — the pinned instruction box ("Después de seleccionar a Gohan, oprime A…"): Xcmn_Win01 reused with the text in the RICH side (`ExMainTxt`) of `WL_TxtDetail`/`WL_TxtHelp`/`WL_WorkText` (plain `mainTxt` keeps STALE text — dump-proven), so only rich is read, gated on the rich block visible+non-empty. Keyhelp_watch pattern: registry dispatcher, queued, text-keyed latch that deliberately survives screen changes. Pending in-game verify |
 | NPC subtitles / dialogue | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` now gated on the game's OWN subtitles option — `ATSaveSystem.Option.EnableSubtitle` (reflected property read, FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. Pending re-verify with the option off |
 | Difficulty / choice lists | done | `screen_choicelist.lua`, `screen_choice.lua` |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua` |
@@ -61,9 +62,39 @@
 | Quest HUD / episode-card fields | `UIFieldManager.QuestNavigation` 0x568 (`Quest_Navi_C`), `.QuestMainStart` 0x558 (`TitleText` 0x3E0), `.QuestMainLogo` 0x700 (image-only) | AT.hpp (2026-07-15 sweep) |
 | Soul-emblem grid slot lock | `UAT_UIXCmnEmb_Cursor.UnlockState` u8 @0x408 (reflected), name text `Txt_Commu` @0x3B0; grid = `AT_UICommunityStart.EmbList.EmbAry`; the MENU-flow owner (`cm.MenuSoulEmListIns` = `USoulEmblemMenu`) reflects NO widget field → class must stay UNMAPPED | AT.hpp:37780/31730-31790 |
 | Battle-result detail values | `UAT_UIQuestMainClearDetail` reflects NO numeric members — digits only as `Image_PercentageList` textures; real values presumably in unreflected tail 0x3C0..0x418 | AT.hpp:35209 |
+| Message window text nodes | `UAT_UIGameWindow` (Xcmn_Win01 base): `WL_TxtTitle` 0x468, `WL_TxtDetail` 0x470, `WL_TxtHelp` 0x4E8, `WL_WorkText` 0x4F0 — each an `Xcmn_MultiLineText` wrapper with PLAIN `mainTxt` + RICH `ExMainTxt` inners; the game reuses the window across notices/tutorial boxes and the plain side keeps stale text with every visibility signal still true (no reflected layout/live state — unreflected tail 0x640..0x6B8, Ghidra if ever needed) | AT.hpp:33299; dumps 2026-07-16 |
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+**2026-07-16 afternoon batch: the COMMUNITY STORY TUTORIAL (pick Gohan → place next to Goku),
+CODED, pending in-game verify.** The user's report: every R1/L1 press in the emblems grid
+re-announced "Recibiste al líder de la comunidad… Goku" and the grid selection never read.
+Three defects, three fixes (dumps 11:33-11:34 + screenshots 99-102 + `dump_nav_targets.txt`
+directory-trace snapshots were the evidence):
+1. `screen_dialog` — the parked reward window (`Xcmn_Win01_C_0`) keeps ALL visibility
+   signals true (vis/Visible/op=1/inVP=true, census line 791) 20 min after closing, and
+   blinks off/on-screen per page flip; each blink cleared the `spoken` latch → re-announce
+   loop. Latch now survives blinks (`SPOKEN_GRACE_S=3.0` continuous-off before clearing;
+   the empty-read branch no longer clears either).
+2. `guide_watch.lua` (NEW) — reads the tutorial instruction box (rich `ExMainTxt` of
+   `WL_TxtDetail`/`WL_TxtHelp`/`WL_WorkText`; plain is stale by design), queued behind the
+   active screen's readout, once per text change.
+3. `screen_community` — board→grid handoff (mode 10) with no grid slots now ARMS the watch
+   lane fresh + renews while the handoff persists (capped `WAIT_RENEW_S`); the story
+   tutorial had NO other entry signal (no ring close, no ghost board), so the session's
+   first grid sat out the never-seen backoff exactly while the tutorial said "pick Gohan".
+Plus `discover.lua`: the rich-text sweep now prints FULL owner paths (the truncated form
+hid the instruction box's owner all session — next F7 pins it definitively).
+VERIFY (fresh save start or any community tutorial): (a) reward popup reads ONCE, never
+again while paging the grid with R1/L1; (b) on entering the grid the instruction
+("Después de seleccionar a Gohan, oprime botón A…") reads after the grid's own readout, and
+re-reads only when the tutorial step changes; (c) grid slots read within ~1s of the grid
+opening from the board (watch lines in the log if ENTRY_DEBUG re-enabled); (d) regression:
+normal dialogs/confirmations still read, autosave notices still read on each REAL
+appearance (>3s apart), cooking/emblems/pause unaffected. If the instruction does NOT
+read, take one F7 on that screen — the rich sweep now names the real owner; adjust
+`guide_watch.MEMBERS` (or its host class) from that dump instead of guessing.
+
 **The Skill Tree is CLOSED — do not reopen it.** The "requiere nivel N" reason was deliberately DROPPED
 (user, 2026-07-14): pressing A on a locked node makes the game state the requirement itself, in the message
 window the dialog reader already speaks, so the tri-state ("bloqueada" / "adquirida") is all the reader
