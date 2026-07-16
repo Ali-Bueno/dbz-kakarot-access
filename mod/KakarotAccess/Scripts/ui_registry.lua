@@ -41,6 +41,10 @@ local tick_n = 0
 -- (a real menu press holds longer than one tick, so the edge is caught), and gated on
 -- "some adapter is active": in combat/free-roam (no active adapter) button mashing must
 -- never trigger scan work.
+local TRACE_COMMITS = false -- 2026-07-16 emblems diagnosis: log screen commits by adapter
+                            -- index (cross-ref app.lua order). Re-enable to name a
+                            -- shadowing adapter when a screen reads late/never.
+
 local BOOST_BTNS = Input.BTN.A | Input.BTN.B | Input.BTN.X | Input.BTN.Y | Input.BTN.START
 local BOOST_COOLDOWN = 3    -- registry ticks between pad-triggered boost windows. Not 1:
                             -- an uncooled boost per press turned list navigation into a
@@ -112,6 +116,20 @@ local function step()
         if active and active.reset then active.reset() end
         if cur and cur.reset then cur.reset() end
         active, pending, pending_n = cur, nil, 0
+        -- TEMP diagnosis (2026-07-16 emblems latency): one line per screen change naming
+        -- the winning adapter by its registration index (cross-ref app.lua order; 0 =
+        -- none). Names any adapter silently shadowing a late-registered one. Turn OFF
+        -- once the emblems first-visit timeline is closed.
+        if TRACE_COMMITS then
+            local idx = 0
+            if cur then
+                for i, a in ipairs(adapters) do
+                    if a == cur then idx = i break end
+                end
+            end
+            print(string.format("[KakarotAccess] screen commit -> adapter #%d t=%.2f\n",
+                idx, os.clock()))
+        end
         -- New context: the screen's actions ("X: assign", "Y: skill tree") are read once,
         -- queued behind its own announcement (keyhelp_watch.lua).
         KeyhelpWatch.screen_changed(cur)

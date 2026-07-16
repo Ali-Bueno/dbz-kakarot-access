@@ -220,6 +220,8 @@ local SCANS_PER_TICK = 2   -- was 3: three FindAllOf in one tick was the measure
 -- budget). All callers are serialized on the game thread, so the shared per-tick state
 -- (budget + os_memo) being reset by any of them is harmless — but don't assume "per tick"
 -- means "per registry tick" here.
+local service_watches   -- forward decl — assigned below the watch lane (Core.watch_for)
+
 function Core.begin_scan_tick()
     scan_budget = SCANS_PER_TICK
     os_memo = {}
@@ -227,6 +229,12 @@ function Core.begin_scan_tick()
     -- thread). It is the reference the remaining NotifyOnNewObject — the transition gate — checks
     -- itself against, so we can never again ASSUME a callback is on the right thread.
     if _G.__KakarotGameTid == nil then _G.__KakarotGameTid = Mem.thread_id() end
+    -- Serve armed watches FIRST, before the adapter sweep can spend the budget: a
+    -- watched class queried at the tail of the sweep was starved on every contended
+    -- tick (the 10ms-time-gate lesson, budget edition — measured on the soul-emblems
+    -- flow 2026-07-16: zero watched scans ran in the whole 5s window), and the sweep's
+    -- first-active short-circuit can stop its adapter being polled at all.
+    if service_watches then service_watches() end
 end
 local function scan_allowed()
     if scan_budget <= 0 then return false end
@@ -509,6 +517,53 @@ function Core.refresh_all(cls_name)
     all_next[cls_name] = 0
 end
 
+-- Targeted watch lane: an adapter that KNOWS a class is being opened right now (an entry
+-- signal — e.g. the game's LAZY menu controller just flipped null→valid) registers a
+-- short watch. While it lasts, the class re-scans every WATCH_EVERY ticks regardless of
+-- its backoff — including when the cached pool still holds a VALID parked instance (the
+-- soul-emblems flow spawns a FRESH widget per visit next to the old parked one, so
+-- any_valid() alone can't say "done"; the ADAPTER clears the watch when its screen
+-- actually reads, ui_core only caps it). Bounded by design: one named class, a ~5s
+-- deadline, the shared per-tick budget, and an explicit clear — it can never become the
+-- per-tick forcing or the boost-window storm.
+local watch_until, watch_next = {}, {}
+local WATCH_EVERY = 8     -- ~800ms between re-scans PER CLASS. Was 4: with two classes
+                          -- armed that was one 65ms FindAllOf per 200ms (~30% of the
+                          -- game thread) — felt as navigation lag spikes (user,
+                          -- 2026-07-16). Callers watching several classes stagger them
+                          -- via `delay` so the combined cadence stays even (~400ms).
+local WATCH_TICKS = 30    -- ~3s cap (was 5): the widget is born ~1s after the confirm
+                          -- (run-3 timeline); long constructions (first-visit tutorial)
+                          -- are covered by the caller RENEWING the watch, not by one
+                          -- long window — a false arm must stay cheap.
+-- `delay` (ticks): postpone the FIRST scan — used to interleave multi-class watches.
+-- Applied ONLY on a FRESH arm: renewals (callers re-arm every poll while waiting) must
+-- never touch watch_next or the delay would be pushed forward forever and the class
+-- would never scan.
+function Core.watch_for(cls_name, ticks, delay)
+    local fresh = watch_until[cls_name] == nil
+    watch_until[cls_name] = now() + (ticks or WATCH_TICKS)
+    if fresh and delay and delay > 0 then
+        watch_next[cls_name] = now() + delay
+    end
+end
+function Core.watch_clear(cls_name)
+    watch_until[cls_name] = nil
+end
+
+-- The watch pump, called from begin_scan_tick (see there): querying each armed class
+-- through cached_all both runs the watch cadence and gives it FIRST claim on the fresh
+-- per-tick budget. Never during a transition — a watch can survive a map switch armed,
+-- and scans mid-load are the boot-hang class of bugs. (Assigned, not local: forward-
+-- declared above begin_scan_tick; cached_all resolves through Core at call time.)
+service_watches = function()
+    if next(watch_until) == nil then return end
+    if Transition.active() then return end
+    for cls in pairs(watch_until) do   -- cached_all may nil an expired key: legal in-loop
+        Core.cached_all(cls)
+    end
+end
+
 function Core.cached_all(cls_name, tick)
     -- Directory fast path (see cached_live): the returned list holds every valid live
     -- candidate; an empty list means the game's own manager field is null — the screen
@@ -524,13 +579,31 @@ function Core.cached_all(cls_name, tick)
     -- pay one IsValid here at most.
     local boost_due = not due and tick < boost_until
         and boosted_gen[cls_name] ~= boost_gen and not any_valid(c)
-    if due or boost_due then
+    -- Watch lane (Core.watch_for): expired watches drop here; a live one makes the class
+    -- due every WATCH_EVERY ticks even past its backoff and even with valid cached
+    -- entries (see the watch_for comment — a parked instance is not the fresh screen).
+    local watching = watch_until[cls_name]
+    if watching and tick >= watching then
+        watch_until[cls_name] = nil
+        watching = nil
+    end
+    local watch_due = (watching and not due and not boost_due
+        and tick >= (watch_next[cls_name] or 0)) or false
+    if due or boost_due or watch_due then
         -- Honour the per-tick scan budget (see Core.cached_live): if it's spent, reuse
         -- the stale list (or {} on first sight) and try the refresh on a later tick.
         -- Callers already validity/visibility-check every entry, so stale is harmless.
         if scan_allowed() then
             if boost_due then boosted_gen[cls_name] = boost_gen end
+            if watching then watch_next[cls_name] = tick + WATCH_EVERY end
             c = timed_findall(cls_name)
+            -- Watched scans are rare, event-driven and the whole point of the lane —
+            -- log each one so a first-visit latency report says WHEN the instance
+            -- became findable (bounded: <= WATCH_TICKS/WATCH_EVERY lines per arm).
+            if watching then
+                print(string.format("[KakarotAccess] watch %s: %d found t=%.2f\n",
+                    cls_name, #c, os.clock()))
+            end
             all_cache[cls_name] = c
             -- Alive pool → slow idle refresh. Nothing live: a DESTROYED pool (has entries,
             -- all invalid) re-detects on the fast ~4s cadence; a NEVER-seen class (empty)

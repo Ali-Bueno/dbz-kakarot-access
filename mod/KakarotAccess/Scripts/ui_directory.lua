@@ -193,7 +193,9 @@ local MAP = {
     -- UCommunityMenu's m_xStart_Community) reflects NOTHING (AT.hpp:41863), so no
     -- trustworthy owner field exists for the menu flow. Mapped, a null UIEmbListIns
     -- asserts "absent" and kills the scan fallback — exactly the reported silence.
-    -- Scan path + pad-press boost serve it instead.
+    -- Scan path serves it instead, made fast by an ENTRY SIGNAL: the lazy controller
+    -- (mm.m_xSoulEmblemMenu / cm.MenuSoulEmListIns) flipping null→valid arms a
+    -- ui_core watch lane (screen_community.menu_entry_signal, via Directory.peek).
     ["Start_Commu_Detail_C"]   = { {"fm", "CommunityDetail"} },
     ["Battle_Hud_P_Main_C"]    = { {"bm", "BattleHudPlayer"} },
     ["Battle_Hud_E_Main_C"]    = { {"bm", "BattleHudEnemy"} },
@@ -307,6 +309,16 @@ function Directory.resolve(cls_name)
     end
     memo[cls_name] = { t = tick, list = list }
     return list
+end
+
+-- Guarded one-field look at a root, for adapters that need an ENTRY SIGNAL from a
+-- controller object the directory cannot map as a screen (its widget pointer is not
+-- reflected — the soul-emblems USoulEmblemMenu case). Returns the valid object or nil.
+-- Costs the same guarded hops the mapped chains pay; the root lookup is shared/cached.
+function Directory.peek(root_key, field)
+    local g = getters[root_key]
+    if not g then return nil end
+    return prop(g(), field)
 end
 
 -- Map switch: the PlayerController, HUD and MenuManager die with the level. Drop

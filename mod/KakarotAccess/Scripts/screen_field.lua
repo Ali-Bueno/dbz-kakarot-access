@@ -48,7 +48,23 @@ local FIXED_SUB_BY_SID = {
 local ann = Core.make_announcer()
 local top, tick = nil, 0
 local cached_screen, cached_name = nil, nil
+local cached_sid = nil     -- START_TOP_LIST_ID of the focused row (see the watch below)
 local last_dbg = nil
+
+-- AT_enums.hpp START_TOP_LIST_ID: COMMUNITY_EMBLEM = 8 (the "Soul Emblems" row of the
+-- Community fixed submenu — same source as FIXED_SUB_BY_SID above).
+local SID_COMMUNITY_EMBLEM = 8
+
+-- Arm the grid watch if the emblems row was focused within this long before the ring
+-- closed — NOT only on the very last polled tick: run 2+3 (2026-07-16) showed the
+-- close never armed, consistent with the game resetting the depth flag during the
+-- close animation so the final poll reads ring level (sid 0) and clobbers the cache.
+-- Long enough to survive the close animation; short enough that navigating away and
+-- backing out doesn't false-arm (and a false arm is just one bounded 5s watch anyway).
+local EMBLEM_ARM_GRACE_S = 2.0
+local sid_emblem_clock = nil   -- os.clock when the emblems row was last seen focused
+local ring_was_open = false    -- edge for the one-line close trace below
+local RING_DEBUG = false       -- one line per ring close with the sid (2026-07-16 diagnosis)
 
 -- The UAT_UIStartTopList item at 0-based `idx` of a reflected TArray member of `top`, or nil.
 local function list_item(arr_name, idx)
@@ -114,7 +130,8 @@ local function resolve()
                 local name, sid = item_name(item)
                 if name then
                     return parent_name, name,           -- screen = the section; name = the row
-                        string.format("SUB %s sub=%s sid=%s", arr, tostring(sub_idx), tostring(sid))
+                        string.format("SUB %s sub=%s sid=%s", arr, tostring(sub_idx), tostring(sid)),
+                        sid
                 end
             end
         end
@@ -128,7 +145,8 @@ local function resolve()
             local name = sid and I18n.startlist(sid)
             if name then
                 return parent_name, name,
-                    string.format("FIXEDSUB sub=%s sid=%s", tostring(sub_idx), tostring(sid))
+                    string.format("FIXEDSUB sub=%s sid=%s", tostring(sub_idx), tostring(sid)),
+                    sid
             end
         end
     end
@@ -140,7 +158,8 @@ local function resolve()
     return I18n.t("main_menu"), parent_name,
         string.format("ring=%s sid=%s depth=%s sub=%s", tostring(ring_idx),
             tostring(parent_sid), tostring(depth),
-            tostring(Mem.i32(top, OFF.startTop.subIndex)))
+            tostring(Mem.i32(top, OFF.startTop.subIndex))),
+        parent_sid
 end
 
 -- The OPEN ring instance. The game pools SEVERAL Start_Top_C and can open the ring on
@@ -158,9 +177,32 @@ end
 function Field.is_active()
     tick = tick + 1
     top = live_ring()
-    if not top then cached_screen, cached_name = nil, nil return false end
+    if not top then
+        -- The ring just closed with "Soul Emblems" recently focused: the user (almost
+        -- certainly) confirmed it and the game is BUILDING the emblem grid right now —
+        -- the exact instant the grid classes need their watch lane. Recency, not the
+        -- last polled tick (see EMBLEM_ARM_GRACE_S); watch_grid covers BOTH host
+        -- classes (run 2 caught the menu flow materializing the NATIVE-named one).
+        if ring_was_open then
+            local age = sid_emblem_clock and (os.clock() - sid_emblem_clock) or nil
+            if age and age < EMBLEM_ARM_GRACE_S then
+                require("screen_community").watch_grid()
+            end
+            if RING_DEBUG then
+                print(string.format(
+                    "[KakarotAccess] ring closed sid=%s emblem_age=%s armed=%s t=%.2f\n",
+                    tostring(cached_sid), age and string.format("%.2f", age) or "never",
+                    tostring(age ~= nil and age < EMBLEM_ARM_GRACE_S), os.clock()))
+            end
+        end
+        ring_was_open = false
+        sid_emblem_clock = nil
+        cached_screen, cached_name, cached_sid = nil, nil, nil
+        return false
+    end
+    ring_was_open = true
 
-    local screen, name, dbg = resolve()
+    local screen, name, dbg, sel_sid = resolve()
 
     -- Diagnostic (one line per change) so the ring/submenu index->name mapping is
     -- verifiable. DISABLED by default: the file append runs on the GAME THREAD per
@@ -174,14 +216,17 @@ function Field.is_active()
         end)
     end
 
-    if not name then cached_screen, cached_name = nil, nil return false end
+    if not name then cached_screen, cached_name, cached_sid = nil, nil, nil return false end
 
     -- Context change (ring <-> submenu) -> re-announce the screen name + item (menus.md).
     if screen ~= cached_screen then ann:reset() end
-    cached_screen, cached_name = screen, name
+    cached_screen, cached_name, cached_sid = screen, name, sel_sid
+    if sel_sid == SID_COMMUNITY_EMBLEM then sid_emblem_clock = os.clock() end
     return true
 end
 
+-- cached_sid deliberately NOT cleared here: reset() runs at the registry commit,
+-- AFTER is_active already saw the ring close and consumed the sid for the watch arm.
 function Field.reset() ann:reset() cached_screen, cached_name, last_dbg = nil, nil, nil end
 
 function Field.update()

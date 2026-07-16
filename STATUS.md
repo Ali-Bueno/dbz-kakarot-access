@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-16
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -36,7 +36,7 @@
 | Episode title cards | wip | `screen_questcard.lua` (NEW 2026-07-15) — `AT_UIQuestMainStart.TitleText` (0x3E0) via `{"fm","QuestMainStart"}` (0x558); telop pattern (once per appearance, queued), registered below telop. `fm.QuestMainLogo` is image-only (ChapterTitleImage) — unread, by design. Pending in-game verify |
 | Cooking menu | done | `screen_cooking.lua`, VERIFIED in-game 2026-07-15 night end-to-end (entry menu via the second `Shop_Top_C` chain; dish list; cook — latch spoke "Bollo jugoso al vapor" legitimately). HONEST CAVEAT from the latch log: the ghost pane read `vis=0 opacity=1.0` — `pane_live` did NOT discriminate it; the shadowing was actually killed by the yields (ring/entry-rows) + spoken-key suppression + the game parking the pane a while later. `LATCH_DEBUG` stays ON (one line per activation) to catch any residual window (e.g. emblems right after cooking) |
 | Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
-| Soul Emblems grid / Community | done | `screen_community.lua`. 2026-07-15 saga, ALL VERIFIED in-game by night (entry on the normal path ~5 s first visit of a session, then instant; MOVEMENT verified — the native commuGrid cursor IS driven in the menu flow on `Start_Commu_Emb_C`, gridcurs dump; `GRID_DEBUG` back OFF): (1) unmapped from the directory (no trustworthy owner — two flows, `MenuSoulEmListIns` = `USoulEmblemMenu` reflects nothing); (2) menu-flow instance is the BP class **`Start_Commu_Emb_C`** (census) — `grid_host()` scans both names; (3) the GHOST BOARD was claiming the screen (`BOARD_LIVE_MODES` gate + `Core.pane_live` fixed it — screenshot 98); (4) "reads only after reload" = stale pool + parked-first pick — `grid_host()` enumerates the pool picking the live instance, and a ghost board with no live grid forces ONE budgeted rescan per visit. **ENTRY READS on the normal path now (user-verified; first visit of a session ~5 s while the pool rescans — known minor)**. STILL PENDING: cursor MOVEMENT verify (`GRID_DEBUG=true` writes `gridcurs` lines to `dumps/dump_community.txt` — if movement is silent, that dump says whether the native commuGrid offsets are driven in the menu flow). Bonus fact: each slot (`UAT_UIXCmnEmb_Cursor`) reflects `UnlockState` u8 @0x408 |
+| Soul Emblems grid / Community | done | `screen_community.lua`. 2026-07-15 saga, ALL VERIFIED in-game by night (entry on the normal path ~5 s first visit of a session, then instant; MOVEMENT verified — the native commuGrid cursor IS driven in the menu flow on `Start_Commu_Emb_C`, gridcurs dump; `GRID_DEBUG` back OFF): (1) unmapped from the directory (no trustworthy owner — two flows, `MenuSoulEmListIns` = `USoulEmblemMenu` reflects nothing); (2) menu-flow instance is the BP class **`Start_Commu_Emb_C`** (census) — `grid_host()` scans both names; (3) the GHOST BOARD was claiming the screen (`BOARD_LIVE_MODES` gate + `Core.pane_live` fixed it — screenshot 98); (4) "reads only after reload" = stale pool + parked-first pick — `grid_host()` enumerates the pool picking the live instance, and a ghost board with no live grid forces ONE budgeted rescan per visit. **ENTRY READS on the normal path now (user-verified)**. 2026-07-16: the ~5 s FIRST-visit lag (never-seen class waiting out ABSENT_BACKOFF; no ghost-board signature exists yet then) fixed with an ENTRY SIGNAL — the game's lazy menu controller (`mm.m_xSoulEmblemMenu` @0x158 / `cm.MenuSoulEmListIns` @0x80, both reflected; the controller's WIDGET pointer is not, AT.hpp:43512, which is why the class can't be directory-mapped) flips null→valid on first open and arms `Core.watch_for("Start_Commu_Emb_C")` (~400 ms budgeted re-scans, ~5 s cap, cleared when the grid reads); the ghost-board path arms the same lane instead of the old single-shot refresh. PENDING in-game verify (fresh session → open emblems: should read in ~1 s, log line "soul-emblem menu controller appeared"). STILL PENDING: cursor MOVEMENT verify (`GRID_DEBUG=true` writes `gridcurs` lines to `dumps/dump_community.txt` — if movement is silent, that dump says whether the native commuGrid offsets are driven in the menu flow). Bonus fact: each slot (`UAT_UIXCmnEmb_Cursor`) reflects `UnlockState` u8 @0x408 |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
 | Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). 2026-07-15: constant-"222" value bug — detail rows have NO reflected numeric members (value likely in the 0x3C0..0x418 unreflected tail; digit images may share one atlas texture) — `DEBUG=true` in screen_results dumps per-digit brush textures to `dumps/dump_results.txt` on the next real results screen; fix follows the dump |
 | Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed. 2026-07-15: battle-interruption resume — a world-gate/transition drop of a MANUAL pick stashes `resume_pick` (plain data) and re-acquires it by category+key when the world returns (10 tries, ~3 s apart); the quest auto-scan stays quiet while pending; cleared by B / F3 off / a new pick. Pending in-game verify |
@@ -82,6 +82,76 @@ latch saga, Soul Emblems grid entry AND movement all verified in game). Remainin
    with the d-pad instead of the free left stick) — needs a WRITE primitive (mem_bridge poke API
    or input steering), a DLL rebuild and a full restart: a design session of its own. All the
    socket/cursor data is already mapped (see the Backlog bullet).
+3. **Emblems-grid FIRST-visit latency — RUN 2 (2026-07-16) found three more defects, fixed,
+   pending verify.** (a) ~~screen_loading ghost~~ — RETRACTED by the user: those 10s WERE the
+   real loading screen (ring opened after, read fine at t=65.8). The pane_live gate + LOAD_DEBUG
+   stay as rule-compliance/prophylaxis, but the REAL run-2 news is: the soul-emblem controller
+   is created DURING the save load (edge t=62.69 mid-loading-screen), so the controller edge is
+   NOT an entry signal on save-load sessions — the re-arm window (c) happens to cover a
+   straight-to-emblems flow (<30s), but a late visit needs the ring arm. AND the ring-close arm
+   didn't fire despite the user browsing to the emblems row — consistent with the game resetting
+   the depth flag during the close animation (last poll reads ring level, sid 0, clobbering the
+   cache) → the arm now uses a RECENCY grace (`EMBLEM_ARM_GRACE_S=2.0`: emblems row focused
+   within 2s of the close) + `RING_DEBUG` one-liner per ring close (sid + focus age) to confirm.
+   **RUN 3 (13:45 session): FIRST entry read in ~1.5s after confirm** (widget born t=77.3, gates
+   live 77.84, commit 77.86 — detection ~0.4s: solved). Remaining, fixed same day: (d) RE-ENTRY
+   silent — no arm exists on a re-visit (controller never re-edges, edge_clock cleared, ring arm
+   was still sid-clobbered, ghost-board path needs a parked board this save doesn't have; stale
+   pool → 30s refresh) — the ring grace arm (c-fix) is the cover, now in place; (e) the edge
+   re-arm loop scanned 21s straight (controller is born during the SAVE LOAD, so "flow in
+   progress" held through tutorial+ring) → re-arm now ALSO gated on `Registry.active_adapter()
+   == nil` (display idle = the real waiting-for-widget gap); (f) the pane_live gate on
+   screen_loading REVERTED — the run-2 "ghost" was a real 10s load (user), and with the gate on
+   the loading adapter never activated in run 3 (non-interactive overlay ≠ Visible visibility —
+   pane_live rejects it by design; recap reader would be dead). VERIFY: enter (fast), exit,
+   RE-ENTER (the new case — expect "ring closed sid=... armed=true" then watch lines then
+   commit ≤1s), plus one save-load to confirm the recap still reads.
+   (g) user felt NAVIGATION LAG SPIKES with the reads now fast — the watch cost: two classes
+   at 400ms each = one 65ms FindAllOf per 200ms (~30% game thread) during windows (incl. false
+   arms on backing out). Tuned: `WATCH_EVERY` 4→8 per class + `watch_for(cls, ticks, delay)`
+   stagger (fresh-arm only — a renewal must never push watch_next or the class never scans)
+   interleaving the two classes at ~400ms combined, `WATCH_TICKS` 5s→3s (long constructions
+   are covered by RENEWAL, not window length). Expected: reads ~0.8-1.2s, spikes halved and
+   capped at 3s per arm. If still felt, next lever is WATCH_EVERY 8→10 + accepting ~1.5s reads.
+   (h) stutters persisted in GAMEPLAY AND COMBAT → the renewal loop was anchored to the
+   CONTROLLER edge, which is born during the SAVE LOAD — so it scanned through the first ~30s
+   of post-load free roam; and a back-out false arm kept renewing through COMBAT (minimap
+   hidden there + no registry adapter active, so neither old gate stopped it). Final shape:
+   the controller edge arms NOTHING (diagnostic print only); renewals anchor to `wait_clock`,
+   set ONLY by a real arm (ring-close grace / ghost board) and CANCELLED by positive gameplay
+   evidence — `Core.free_roam` (minimap) OR `battle_hud_up()` (Battle_Hud_P_Main_C via the
+   directory, pointer reads) — cap `WAIT_RENEW_S=30`. A false arm now costs 1-2 scans. If any
+   stutter remains after this, STOP GUESSING and profile: play a few minutes, Ctrl+F5, read
+   `findall scans` / `ui step ms`.
+   (b) the first-of-session menu flow materialized the NATIVE-named instance
+   (`AT_UICommunityStart`), not the BP one — the watch covered only `Start_Commu_Emb_C` (13
+   scans of the wrong pool) → `GRID_CLASSES` + watch_grid()/unwatch_grid() cover both, in
+   community (edge/ghost/clear) and field (ring-close arm). (c) the widget genuinely does not
+   EXIST until 5-13s after the controller edge (tutorial popup in between) — one 5s window
+   expires mid-flow → menu_entry_signal now RENEWS the watch while the controller exists and
+   no community mode has read, capped at `EDGE_REARM_S=30` per edge. Detection itself is
+   PROVEN instant now: gates flipped live → commit in the same tick (75.63→75.65). VERIFY:
+   fresh session → emblems; expect ring readable right after load (loading ghost gone),
+   watch lines on BOTH classes, commit within ~1s of the widget existing; the residual wait
+   = the game's own construction (tutorial + assets), unfixable — if it still confuses,
+   consider announcing "cargando" on the edge. Then turn OFF: ENTRY_DEBUG, TRACE_COMMITS,
+   LOAD_DEBUG. The instrumented timeline (edge 13:13:17, commit +24.46s,
+   ZERO watched scans, ZERO gate lines) decomposed into THREE defects: (a) the
+   controller-existence edge fires when the ring's Community SUBMENU opens — ~20s before the
+   user confirms — so the 5s watch expired mid-browse (the edge is now just a fallback; the
+   PRECISE arm is screen_field: ring closes while the focused row's sid == COMMUNITY_EMBLEM(8)
+   → `watch_for`); (b) watched scans were BUDGET-STARVED by sweep position (Commu is adapter
+   #128; earlier adapters drained the 2/tick budget on contended ticks — the 10ms-time-gate
+   lesson, budget edition) → watches are now pumped from `begin_scan_tick` BEFORE the sweep
+   (`service_watches`, transition-gated, first claim on the budget); (c) the ENTRY_DEBUG gate
+   lines never printed — declared BELOW grid_host, so inside it they resolved as nil GLOBALS
+   (Lua upvalue rule) — moved above. Plus `TRACE_COMMITS=true` in ui_registry (one line per
+   screen commit, adapter index) to name any shadowing adapter. VERIFY (restart not strictly
+   needed for the ring path — reload ok — but a fresh session tests the real first-visit):
+   ring → Comunidad → Emblemas de alma; expect log "ring closed on Soul Emblems row" at
+   confirm, "watch Start_Commu_Emb_C: N found" lines within ~1s, "emb gates" lines, and
+   "emb grid commit +~1s". Then turn OFF: ENTRY_DEBUG (screen_community), TRACE_COMMITS
+   (ui_registry) — the watch-scan print in ui_core can stay (bounded, event-driven).
 
 **FISHING is CLOSED** (re-verified end-to-end 2026-07-15; the four fixes and the pooled-ring-core
 lesson are recorded in the section table row — the reusable rule: a QTE-style overlay class may have

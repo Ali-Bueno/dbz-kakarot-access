@@ -33,6 +33,8 @@ local Speech = require("speech")
 local Mem = require("mem")
 local OFF = require("native_offsets")
 local Transition = require("transition")
+local Dir = require("ui_directory")
+local Registry = require("ui_registry")
 
 local BOARD = OFF.commuBoard
 local GRID = OFF.commuGrid
@@ -440,6 +442,41 @@ Transition.on_begin("screen_community", clear_state)
 -- into silence, which is exactly what happened live on the placement screen).
 local grid_slots, grid_byai = nil, nil
 
+-- First-visit latency diagnosis (2026-07-16). NOTE: declared ABOVE grid_host — the
+-- first cut declared these below it, so inside grid_host they resolved as (nil)
+-- GLOBALS, not upvalues, and the gate lines silently never printed (a Lua local is
+-- only an upvalue of functions defined AFTER it).
+local ENTRY_DEBUG = false   -- verified 2026-07-16 (first visit ~1.5s, re-entry, no stutters)
+local entry_t0, entry_gates = nil, nil
+
+-- BOTH grid host classes must be watched: run 2 (2026-07-16) caught the first-of-session
+-- menu flow materializing the NATIVE-named instance (AT_UICommunityStart, live host in
+-- the gates log) while the watch covered only the BP name — 13 scans of the wrong pool.
+local GRID_CLASSES = { "AT_UICommunityStart", "Start_Commu_Emb_C" }
+-- Staggered so the two per-class cadences interleave (combined one 65ms scan per
+-- ~400ms, not two back-to-back — the navigation lag spikes, user 2026-07-16).
+local WATCH_STAGGER = 4
+local wait_clock = nil   -- os.clock of the last FRESH arm; anchors renewals + their cap
+
+-- FRESH arm (ring close / ghost board): starts the wait window renewals extend.
+local function watch_grid()
+    wait_clock = os.clock()
+    if ENTRY_DEBUG then entry_t0, entry_gates = os.clock(), nil end
+    for i, cls in ipairs(GRID_CLASSES) do
+        Core.watch_for(cls, nil, (i - 1) * WATCH_STAGGER)
+    end
+end
+-- RENEWAL: extends the deadline only — no stagger reset, no wait_clock reset (a renewal
+-- that re-anchored the cap would never expire).
+local function renew_grid()
+    for _, cls in ipairs(GRID_CLASSES) do Core.watch_for(cls) end
+end
+local function unwatch_grid()
+    for _, cls in ipairs(GRID_CLASSES) do Core.watch_clear(cls) end
+end
+-- Exported for screen_field's ring-close arm (the class list lives here only).
+Commu.watch_grid = watch_grid
+
 -- The Soul Emblems grid host. The MENU-opened grid ("EMBLEMAS DE ALMA") is the
 -- BLUEPRINT class Start_Commu_Emb_C (census 2026-07-15) — FindAllOf on the native
 -- AT_UICommunityStart returns nothing for it (the board's Start_Commu_Brd_C lesson),
@@ -449,17 +486,91 @@ local grid_slots, grid_byai = nil, nil
 -- keep an older parked instance on-screen (pane_live false) next to the live one, and
 -- taking the first match latched the parked ghost (the fishing pooled-ring lesson).
 local function grid_host()
-    for _, cls in ipairs({ "AT_UICommunityStart", "Start_Commu_Emb_C" }) do
+    local hit = nil
+    local dbg = (ENTRY_DEBUG and entry_t0) and {} or nil
+    for _, cls in ipairs(GRID_CLASSES) do
         for _, g in ipairs(Core.cached_all(cls, tick)) do
-            if Core.valid(g) and Core.on_screen(g) and Core.pane_live(g) then
-                return g
+            local v = Core.valid(g)
+            local on = v and Core.on_screen(g) or false
+            local live = on and Core.pane_live(g) or false
+            if dbg then
+                dbg[#dbg + 1] = string.format("%s v=%s on=%s live=%s",
+                    cls, tostring(v), tostring(on), tostring(live))
             end
+            if live and not hit then hit = g end
+        end
+        if hit and not dbg then return hit end
+    end
+    -- Diagnosis only (see ENTRY_DEBUG): one line per GATE-STATE change between the
+    -- entry edge and the grid commit — "none" means the pool has no instance at all.
+    if dbg then
+        local sig = #dbg > 0 and table.concat(dbg, " | ") or "none"
+        if sig ~= entry_gates then
+            entry_gates = sig
+            print(string.format("[KakarotAccess] emb gates t=%.2f %s\n", os.clock(), sig))
         end
     end
-    return nil
+    return hit
 end
 
-local ghost_refresh_done = false   -- one forced pool rescan per menu-flow visit
+local ghost_refresh_done = false   -- one watch-lane arm per menu-flow visit
+
+-- Menu-flow ENTRY SIGNAL (first visit of a session read ~5s late — user 2026-07-16):
+-- the grid class is NEVER-seen then, so it waited out the full absent-scan backoff, and
+-- the ghost-board signature doesn't exist yet on a first visit either. But the game's
+-- menu CONTROLLERS are lazy (the UMenuManager family lesson): UMenuManager's
+-- m_xSoulEmblemMenu (AT.hpp 0x158) / UICommManager's MenuSoulEmListIns (0x80) are null
+-- until the Soul Emblems menu is first opened — and their widget pointer is NOT
+-- reflected (USoulEmblemMenu reflects only GameHUD, AT.hpp:43512), which is exactly why
+-- the class can't be directory-MAPPED. The controller flipping null→valid is the
+-- "opening right now" edge: put the grid's BP class on the ui_core watch lane so the
+-- pool re-scans every ~400ms until the widget exists, instead of eating the backoff.
+local menu_ctrl_seen = false
+
+-- The controller edge NO LONGER ARMS anything (2026-07-16 final): run 2/3 proved the
+-- game creates it DURING THE SAVE LOAD, not at menu entry, so arming/renewing off it
+-- scanned through post-load GAMEPLAY for up to 30s — the user's free-roam stutters.
+-- The real entry signals are the ring-close grace arm (screen_field) and the ghost
+-- board; this stays as a diagnostic edge print only.
+local function menu_entry_signal()
+    local seen = Dir.peek("mm", "m_xSoulEmblemMenu") ~= nil
+        or Dir.peek("cm", "MenuSoulEmListIns") ~= nil
+    if ENTRY_DEBUG and seen ~= menu_ctrl_seen then
+        print(string.format("[KakarotAccess] soul-emblem menu controller %s t=%.2f\n",
+            seen and "appeared" or "GONE", os.clock()))
+    end
+    menu_ctrl_seen = seen
+end
+
+-- Wait-window maintenance: after a FRESH arm (watch_grid), keep the watch alive while
+-- the user is plausibly waiting for the grid — nothing of ours reading, no other screen
+-- claiming — for at most WAIT_RENEW_S (run 2: a first-visit construction can take 5-13s
+-- with the tutorial popup in between, far past one 3s watch window). CANCELLED the
+-- moment gameplay is confirmed: free roam (minimap back) OR combat (battle HUD up — the
+-- minimap hides in battle and no registry adapter is active there, so without this a
+-- back-out arm kept scanning through COMBAT, the user's stutter report 2026-07-16).
+local WAIT_RENEW_S = 30
+
+-- Combat probe: the battle HUD class is directory-mapped ({"bm","BattleHudPlayer"}) —
+-- pointer reads, never a scan, so this is safe to consult per tick while waiting.
+local function battle_hud_up()
+    for _, w in ipairs(Core.cached_all("Battle_Hud_P_Main_C", tick)) do
+        if Core.valid(w) and Core.on_screen(w) then return true end
+    end
+    return false
+end
+
+local function maintain_wait()
+    if not wait_clock then return end
+    if os.clock() - wait_clock > WAIT_RENEW_S then
+        wait_clock = nil
+    elseif Core.free_roam(tick) or battle_hud_up() then
+        unwatch_grid()
+        wait_clock = nil
+    elseif mode == nil and Registry.active_adapter() == nil then
+        renew_grid()
+    end
+end
 
 -- Board mode-machine values under which the BOARD genuinely owns input (Ghidra
 -- FUN_1414c7de0): 7 free-cursor browse, 9 detail, 12/13/14/17 tutorial-popup waits,
@@ -474,6 +585,8 @@ local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true, [13] = true,
 function Commu.is_active()
     tick = tick + 1
     grid_slots, grid_byai = nil, nil
+    menu_entry_signal()
+    maintain_wait()
     local ghost_board = false
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     local m = det and "detail" or nil
@@ -525,12 +638,24 @@ function Commu.is_active()
             -- the pool cache "alive", so the scan never re-runs and the new screen
             -- stays invisible until the ~30 s pool refresh — the items-rebuild
             -- lesson. A parked board with no live grid is that flow's signature:
-            -- force ONE budgeted rescan per visit.
+            -- arm the watch lane (re-scans every ~400ms, not the old single shot —
+            -- one early scan could still miss the widget mid-construction) per visit.
             ghost_refresh_done = true
-            Core.refresh_all("Start_Commu_Emb_C")
+            watch_grid()
         end
     end
     if m then ghost_refresh_done = false end
+    -- The watched screen actually reads now — stop the scan lane (any_valid can't do
+    -- it in ui_core: a VALID parked instance is not the fresh screen, pane_live is).
+    if m == "grid" then
+        unwatch_grid()
+        wait_clock = nil   -- flow satisfied: no more renewals this visit
+        if entry_t0 then
+            print(string.format("[KakarotAccess] emb grid commit +%.2fs after entry edge\n",
+                os.clock() - entry_t0))
+            entry_t0, entry_gates = nil, nil
+        end
+    end
     if m ~= mode then
         ann:reset()
         clear_state()

@@ -251,6 +251,18 @@ refresh and do not scan per tick — that is what lags navigation. Deliberately-
 **Every TArray read goes through a guarded helper** (`Core.array_of`): `owner[prop]` yields an INVALID
 RemoteObject, not nil, and a raw `GetArrayNum` on it is the uncatchable throw — `arr ~= nil` is not a
 validity check.
+**Every adapter for a pooled pane must gate on the pane being GENUINELY LIVE, not just rendered**
+(rule from the Kakarot cooking-latch episode, 2026-07-15 — user directive). A pooled full-screen pane
+can stay `on_screen` with readable stale content long after closing; an adapter gated only on
+`on_screen` + content then SHADOWS every adapter registered below it (pause ring, emblems, …) and
+re-announces the stale content on every dispatcher flip — and fixing it screen-by-screen ("yield to
+the ring", "yield to X") is whack-a-mole. The live test is engine state, not content:
+`GetVisibility() == Visible(0)` (a parked pooled widget keeps rendering under another
+ESlateVisibility) AND `RenderOpacity > ~0` (close animations fade opacity to 0 while visibility flags
+lag) — both pcall-guarded, unreadable counts as live. Reference implementation: `pane_live` +
+spoken-key flip-flop suppression (survives `reset()`, cleared only on genuine close, `reannounce()`
+for F1) in the Kakarot mod's `screen_cooking.lua`. Apply this check to EVERY new menu adapter whose
+host is pooled.
 
 ---
 
