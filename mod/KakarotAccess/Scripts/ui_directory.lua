@@ -184,7 +184,14 @@ local MAP = {
 
     -- HUD-held screens
     ["Xcmn_Pause_C"]           = { {"hud", "UIPause"} },
-    ["Start_Commu_Brd_C"]      = { {"hud", "UICommBoardIns"}, {"cm", "UICommBrdIns"} },
+    -- Start_Commu_Brd_C deliberately NOT mapped (2026-07-16, story-tutorial replay):
+    -- the field names are real (AAT_GameHUD.UICommBoardIns @0x5D0, cm.UICommBrdIns
+    -- @0x58) but the STORY-flow board leaves BOTH null (it hangs off the
+    -- cm.MenuCommunityBrdIns CONTROLLER, whose widget ptr is not reflected — the
+    -- soul-emblem-menu hole again), so the mapping asserted "absent", killed the
+    -- scan fallback, and the tutorial board read NOTHING for the whole session
+    -- (claim trace: board=false on the open board). Scan path serves it; entry
+    -- costs one ABSENT_BACKOFF on a fresh session.
     -- AT_UICommunityStart (Soul Emblems grid) deliberately NOT mapped — third strike
     -- 2026-07-15: even after the find_hud fix the user reports the MENU-opened grid
     -- ("EMBLEMAS DE ALMA") silent. The manager has TWO flows: cm.UIEmbListIns (board

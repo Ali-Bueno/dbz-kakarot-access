@@ -19,8 +19,18 @@ local Speech = require("speech")
 local I18n = require("i18n")
 local Registry = require("ui_registry")
 local Transition = require("transition")
+local A = require("ui_archetypes")
 
 local Quest = {}
+
+-- Objective text carries CFramework markup (<span color=…>fogata</>, <inputicon…>) —
+-- read it THROUGH markup_to_speech so the tags/glyphs resolve to speech instead of
+-- being spoken literally ("Cocina un pez en una <span color=...>fogata</>", user
+-- 2026-07-16). Same sink the dialogue/menu readers use.
+local function read_clean(node)
+    if not Core.valid(node) then return nil end
+    return A.markup_to_speech(Core.read_text(node))
+end
 
 local TICK_MS = 300          -- objectives change rarely; a slow loop keeps HUD reads cheap
 local HOST_CLASS = "Quest_Navi_C"
@@ -42,7 +52,7 @@ local function first_text(host, names)
     for _, nm in ipairs(names) do
         local node
         if pcall(function() node = host[nm] end) and Core.valid(node) then
-            local t = Core.read_text(node)
+            local t = read_clean(node)
             if t then return t end
         end
     end
@@ -55,9 +65,9 @@ local function row_line(host, member)
     local row
     if not pcall(function() row = host[member] end) or not Core.valid(row) then return nil end
     if not Core.on_screen(row) then return nil end
-    local obj = Core.read_text(row.Txt_List_00)
+    local obj = read_clean(row.Txt_List_00)
     if not obj then return nil end
-    return Core.phrase(obj, Core.read_text(row.Txt_List_01))
+    return Core.phrase(obj, read_clean(row.Txt_List_01))
 end
 
 -- The whole current objective as one string (title + each visible objective line for
@@ -94,6 +104,11 @@ end
 local function step()
     if Transition.active() then return end
     if Registry.active_adapter() then return end
+    -- Don't cut a PROTECTED line (a reward notice / tutorial instruction still
+    -- playing): the objective would interrupt "Emblemas de alma recibidos…" a few
+    -- seconds in (user 2026-07-16). Deferring keeps `last` stale, so it re-announces
+    -- once the protected line finishes (diff gate still fires).
+    if Speech.protected() then return end
     -- This loop is independent of the menu Registry loop, so it must seed its own
     -- per-tick FindAllOf budget (Core.begin_scan_tick), or first_on_screen could find
     -- no budget left and never locate the HUD host.

@@ -136,7 +136,10 @@ return {
         hoveredCache = 0x5D8,   -- int32 the game's OWN cached hovered index, written by its
                                 -- hover tracker FUN_1414e3170 every tick: 1-based socket, or
                                 -- -1 over empty/no-data sockets (it stores hit_test(frame, 1));
-                                -- 0x80000001 sentinel right after a board switch
+                                -- 0x80000001 sentinel right after a board switch.
+                                -- FROZEN while an emblem is HELD: the tracker early-outs on
+                                -- frame+0x7B8 != 0 (FUN_1414f91e0) and never writes it — in
+                                -- placing mode ONLY the hit-test replica is valid (2026-07-16)
         -- on the cursor WIDGET (frame.WL_PanelCursor, a UCanvasPanel)
         cursorX      = 0x90,    -- float RenderTransform.Translation.X (the game's own source)
         cursorY      = 0x94,    -- float RenderTransform.Translation.Y

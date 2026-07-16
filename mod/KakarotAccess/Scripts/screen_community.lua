@@ -45,6 +45,9 @@ local Commu = {}
 -- The cursor mystery is SOLVED (2026-07-04, verified in-game: tutorial modes freeze
 -- the cursor; hovered read from host+0x5D8 / the hit-test replica) — OFF unless a
 -- regression needs ground truth again.
+-- ON 2026-07-16: regression "moving the board cursor announces no panel" in the
+-- story-tutorial replay — dump_state is the ground truth (mode/sub/hovered/cache).
+-- Turn OFF once the tutorial pass is verified.
 local DEBUG = false
 
 local ann = Core.make_announcer()
@@ -56,6 +59,11 @@ local label_cache, label_idx, label_tick = nil, nil, 0
 local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same slot's label
 local last_title = nil      -- board title, gates the spoken board summary
 local panel_cache = nil     -- { key, list = {panel...} } per board
+-- Placing-mode hover debounce state (helper defined below near board_update; declared
+-- HERE so clear_state — defined above that helper — resets the real upvalues, not
+-- accidental globals, per the Lua "upvalue only for functions defined after" rule).
+local hov_stable, hov_cand, hov_cand_n = 0, 0, 0
+local HOVER_STABLE = 2
 
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
@@ -204,7 +212,11 @@ end
 -- indexes the raw array (frame+0x548) bounded by activeCount, so the list must NOT be
 -- visibility-filtered or the indices would misalign on partially-unlocked boards.
 local function board_panels(frame, key)
-    if panel_cache and panel_cache.key == key then return panel_cache end
+    -- Cached list must still be alive (a pooled board REBUILDS its panels per visit).
+    if panel_cache and panel_cache.key == key
+       and panel_cache.list[1] and Core.valid(panel_cache.list[1]) then
+        return panel_cache
+    end
     local c = { key = key, list = {} }
     local arr, n = Core.array_of(frame, "WL_PanelTbl")
     if arr then pcall(function()
@@ -214,19 +226,27 @@ local function board_panels(frame, key)
             c.list[i] = p
         end
     end) end
-    panel_cache = c
+    -- NEVER cache an empty/failed read as final (the items-rebuild lesson): the
+    -- story-tutorial board's WL_PanelTbl populates ticks after the frame exists, and
+    -- a cached empty list froze the hit-test replica at "no sockets" for the whole
+    -- visit — reticle readable (700,760), activeCount 11, hov=nil (2026-07-16).
+    if #c.list > 0 then panel_cache = c end
     return c
 end
 
--- CURSOR SOLVED (Ghidra 2026-07-04, code/decompiled/manual_1414f2ab0.c): the game's
--- own hit-test reads the cursor from WL_PanelCursor's RenderTransform.Translation
--- (raw +0x90/+0x94) and tests it against each socket's PointerCenterOffset + a hidden
--- board position (panel+0x550) + hidden frame adjusts, square-range per socket (the
--- leader socket 1 has its own adjust/range). board_hovered() below replicates it
--- 1:1 (offsets in native_offsets.commuBoard). A cursor frozen at 542,319 during the
--- earlier passes just means the game never moved it (the grid/tutorial modes own the
--- input then — host+0x500 is the board MODE: 7 browse / 9 detail / 10 grid / 16
--- tutorial demo, NOT a hovered index).
+-- CURSOR SOLVED (Ghidra 2026-07-04 + opus RE 2026-07-16, code/decompiled/
+-- manual_1414f2ab0.c): the game's own hit-test reads WL_PanelCursor's
+-- RenderTransform.Translation (raw +0x90/+0x94) — which is a FIXED RETICLE
+-- (~700,760): the stick pans the BOARD underneath it, and that pan lives in the
+-- frame adjusts (+0x428/0x42C, leader +0x430/0x434) that both the game and this
+-- replica re-read on every call. Each socket's hit position = PointerCenterOffset +
+-- hidden board position (panel+0x550) + adjust, square-range per socket (leader
+-- socket 1 has its own adjust/range), scanning LAST -> FIRST, first hit wins.
+-- board_hovered() replicates it 1:1 (offsets in native_offsets.commuBoard).
+-- While an emblem is HELD the game's own hover tracker FUN_1414e3170 early-outs
+-- (gate = frame+0x7B8 != 0) and host+0x5D8 freezes — placing mode has NO native
+-- per-tick cache (the game only hit-tests on the Decide press), so this replica is
+-- the ONLY per-tick source then.
 
 -- The game's socket hit-test, replicated exactly (first hit wins, LAST socket first).
 -- Returns the 1-based WL_PanelTbl index of the socket under the cursor, or nil.
@@ -430,6 +450,7 @@ local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
     last_title, panel_cache = nil, nil
     last_sub = nil
+    hov_stable, hov_cand, hov_cand_n = 0, 0, 0
 end
 
 -- Map-switch flush (transition.lua): panel_cache holds live widget refs across ticks —
@@ -515,6 +536,8 @@ end
 
 local ghost_refresh_done = false   -- one watch-lane arm per menu-flow visit
 local handoff_armed = false        -- one fresh arm per board→grid (mode 10) handoff
+local tut_last = nil               -- TEMP claim-state trace signature (see is_active)
+local speech_deferred = false      -- board/grid readout held while a protected line plays
 
 -- Menu-flow ENTRY SIGNAL (first visit of a session read ~5s late — user 2026-07-16):
 -- the grid class is NEVER-seen then, so it waited out the full absent-scan backoff, and
@@ -589,7 +612,13 @@ function Commu.is_active()
     menu_entry_signal()
     maintain_wait()
     local ghost_board = false
+    local board_rej = nil   -- DEBUG: why the board was rejected this tick (or nil)
+    -- pane_live gate (the standing pooled-pane rule): a PARKED detail sheet from an
+    -- earlier visit keeps reporting on_screen and, checked FIRST, it claimed the
+    -- screen over the live board — the story-tutorial "cursor announces no panel"
+    -- suspect (2026-07-16).
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
+    if det and not Core.pane_live(det) then det = nil end
     local m = det and "detail" or nil
     if not m then
         -- BOARD before GRID: the emblem grid stays rendered (21 visible slots)
@@ -599,17 +628,31 @@ function Commu.is_active()
         -- on the native AT_UICommunityBoard found NOTHING live. It only owns the
         -- screen while its panel frame is really rendered (pooled-closed collapses).
         board = Core.first_on_screen("Start_Commu_Brd_C", tick)
+        if not board then board_rej = "not-found" end
         if board then
             local frame
             pcall(function() frame = board.WL_BrdFrame end)
-            if Core.valid(frame) and Core.on_screen(frame) and Core.pane_live(board) then
+            -- Liveness is the MODE MACHINE, not pane_live. pane_live wants strict
+            -- ESlateVisibility Visible(0), but the STORY-TUTORIAL board renders under a
+            -- non-Visible flag while the tutorial owns input — Start_Commu_Brd_C_0 was
+            -- present + fully populated in the F7 dump and the keyhelp said "board", yet
+            -- pane_live rejected it, so the board was NEVER claimed and the empty panels
+            -- read nothing ("los huecos vacíos no funcionan", 2026-07-16). Memory is
+            -- explicit that pane_live NEVER discriminated the ghost pane — the mode gate
+            -- did — so dropping it here is safe: a parked/ghost board reads a non-live
+            -- mode and falls through below.
+            local mode_v = Core.valid(frame) and Mem.i32(board, BOARD.mode) or nil
+            board_rej =
+                (not Core.valid(frame) and "frame-invalid")
+                or (not Core.on_screen(frame) and "frame-offscreen")
+                or (not mode_v and "no-mode") or nil
+            if Core.valid(frame) and Core.on_screen(frame) and mode_v then
                 -- Board MODE 10 = the emblem GRID owns the input (confirm on a socket
                 -- opens it; the board stays rendered beneath, which is why board-first
                 -- shadowed it into silence — sockets read, emblems didn't, user
                 -- 2026-07-06). Hand the tick to the grid reader while it has slots;
                 -- the other LIVE modes stay with the board; a parked mode (see
                 -- BOARD_LIVE_MODES) means a ghost pane — fall through to the grid.
-                local mode_v = Mem.i32(board, BOARD.mode)
                 if mode_v == 10 then
                     grid = grid_host()
                     if grid then
@@ -642,6 +685,7 @@ function Commu.is_active()
                 else
                     board = nil        -- parked/ghost pane: not this adapter's screen
                     ghost_board = true -- …but it IS the menu-flow signature (see below)
+                    board_rej = "ghost-mode=" .. tostring(mode_v)
                 end
             else
                 board = nil   -- host up but frame not rendered (or wrong base class)
@@ -681,6 +725,20 @@ function Commu.is_active()
     if m ~= mode then
         ann:reset()
         clear_state()
+    end
+    -- TEMP trace (2026-07-16 tutorial regression): one log line per CLAIM-state
+    -- change — which sub-mode owns the tick and the board's native mode. Names the
+    -- shadower if the board isn't the one reading. Turn OFF with DEBUG.
+    if DEBUG then
+        local sig = string.format("claim=%s det=%s board=%s grid=%s mode_v=%s rej=%s",
+            tostring(m), tostring(det ~= nil), tostring(board ~= nil),
+            tostring(grid ~= nil),
+            board and tostring(Mem.i32(board, BOARD.mode)) or "-",
+            tostring(board_rej))
+        if sig ~= tut_last then
+            tut_last = sig
+            print("[KakarotAccess] commu " .. sig .. "\n")
+        end
     end
     mode = m
     return m ~= nil
@@ -903,6 +961,23 @@ local last_held = false      -- emblem-in-hand edge detector
 local last_sub = nil         -- last spoken link-bonus subtitle
 local snap_tick = 0          -- DEBUG state-snapshot throttle
 
+-- PLACING-mode hover debounce (state declared up with the other board locals). While
+-- an emblem is HELD the game freezes its own hover cache (opus RE 2026-07-16) and the
+-- emblem rides a FREE analog cursor, so the hit-test replica returns a jittery
+-- socket/gap/socket stream as the stick drifts; announcing every transient with
+-- interrupt=true shreds the speech to nothing (user: "no lee" while placing). Only
+-- accept a value that holds for HOVER_STABLE ticks; a differing sample is a transient
+-- and keeps the last stable one. 0 = over a gap (no socket is index 0). Browse mode
+-- is unaffected: it reads the game's already-stable cache, not the replica.
+local function debounce_hover(raw)   -- raw: socket index >=1, or 0 for a gap
+    raw = raw or 0
+    if raw == hov_stable then hov_cand_n = 0; return hov_stable end
+    if raw ~= hov_cand then hov_cand, hov_cand_n = raw, 1
+    else hov_cand_n = hov_cand_n + 1 end
+    if hov_cand_n >= HOVER_STABLE then hov_stable, hov_cand_n = raw, 0 end
+    return hov_stable
+end
+
 -- Link-bonus voice subtitles (played on placement, board mode 16). The screen
 -- registry gives the display to ONE adapter, so the dialogue reader below us never
 -- runs while the board is active — the board reads its own subtitles widget
@@ -925,7 +1000,7 @@ end
 
 -- DEBUG: periodic one-line state snapshot (board mode, sub-state, cursor, hovered) —
 -- the ground truth for the next live pass if anything still reads wrong.
-local function dump_state(frame, hovered)
+local function dump_state(frame, hovered, pc)
     if tick - snap_tick < 20 then return end
     snap_tick = tick
     local cw
@@ -941,7 +1016,7 @@ local function dump_state(frame, hovered)
     end)
     local f = io.open(dump_path(), "a")
     if not f then return end
-    f:write(string.format("[%d] state host=%x inst=%d mode=%s sub=%s held=%s curs=%s,%s n=%s hov=%s cache=%s\n",
+    f:write(string.format("[%d] state host=%x inst=%d mode=%s sub=%s held=%s curs=%s,%s n=%s panels=%d hov=%s cache=%s\n",
         os.time(),
         Mem.addr(board) or 0, inst,
         tostring(Mem.i32(board, BOARD.mode)),
@@ -949,6 +1024,7 @@ local function dump_state(frame, hovered)
         tostring((Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0),
         cx and string.format("%.0f", cx) or "?", cy and string.format("%.0f", cy) or "?",
         tostring(Mem.i32(frame, BOARD.activeCount)),
+        (pc and #pc.list) or -1,
         tostring(hovered),
         tostring(Mem.i32(board, BOARD.hoveredCache))))
     f:close()
@@ -973,14 +1049,30 @@ local function board_update()
     -- EMPTY sockets (the cache stores -1 over those). The hovered socket is the
     -- announcer's focused NAME, so moves announce and idling stays silent; leaving
     -- every socket announces "free" once so a confirm there is known to open the grid.
+    -- Emblem in hand? Computed FIRST: while held the game's hover tracker
+    -- FUN_1414e3170 EARLY-OUTS (gate FUN_1414f91e0 = "frame+0x7B8 != 0") and never
+    -- writes the cache — host+0x5D8 is FROZEN at its pre-pickup value, so it must be
+    -- ignored and only the hit-test replica consulted (opus RE 2026-07-16; the game
+    -- itself only hit-tests on the Decide press in placing — there is no per-tick
+    -- native cache to read). The board PANS under a FIXED reticle (700,760): the
+    -- replica works in both browse and placing because the pan lives in the frame
+    -- adjusts it re-reads every call.
+    local held = (Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0
     local hovered = nil
     if Mem.i32(board, BOARD.mode) == 7 then
-        hovered = Mem.i32(board, BOARD.hoveredCache)
+        if not held then
+            hovered = Mem.i32(board, BOARD.hoveredCache)
+        end
         if not hovered or hovered < 1 or hovered > #pc.list then
             hovered = board_hovered(frame, pc)
         end
+        -- Placing rides a jittery free cursor → debounce (browse's cache is stable).
+        if held then
+            local s = debounce_hover((hovered and hovered >= 1) and hovered or 0)
+            hovered = s >= 1 and s or nil
+        end
     end
-    if DEBUG then dump_state(frame, hovered) end
+    if DEBUG then dump_state(frame, hovered, pc) end
     local n = Mem.i32(frame, BOARD.activeCount) or #pc.list
     if n > #pc.list then n = #pc.list end
     local item = title
@@ -998,8 +1090,7 @@ local function board_update()
     board_subtitles()
 
     -- An emblem was just picked up (or we returned from the grid carrying one):
-    -- explain the placement gesture once.
-    local held = (Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0
+    -- explain the placement gesture once. (`held` computed above, before the hover.)
     if held ~= last_held then
         last_held = held
         if held then Speech.say(I18n.t("board_holding"), false) end
@@ -1009,11 +1100,13 @@ local function board_update()
         last_title = title
         panel_cache = nil                    -- socket layout changes with the board
         last_idx, label_cache, label_idx = nil, nil, nil   -- labels too
+        -- Board entry summary — kept SHORT (user 2026-07-16: the full readout dumped
+        -- all ~10 community skills in one breath, "todo junto"). Overall level/rank +
+        -- placed emblems + the action hint only; the community-skills LIST is on demand
+        -- via the game's "Y: Detalles" (skills_text() stays for a future dedicated key).
         local bits = {}
         local s = board_summary()
         if s then bits[#bits + 1] = s end
-        local sk = skills_text()
-        if sk then bits[#bits + 1] = sk end
         local placed = placed_emblems(pc)
         if #placed > 0 then
             bits[#bits + 1] = I18n.t("placed") .. " " .. table.concat(placed, ", ")
@@ -1024,6 +1117,13 @@ local function board_update()
 end
 
 function Commu.update()
+    -- DEFER the panel/slot readout while a protected instruction/notice is still
+    -- playing (guide "select an empty panel, press A" / the reward emblems), so the
+    -- board no longer shreds it (user 2026-07-16). When the protected line finishes,
+    -- re-announce the CURRENT selection fresh (invalidate) — the readout that got cut
+    -- when the instruction first fired must come back, not stay swallowed.
+    if Speech.protected() then speech_deferred = true return end
+    if speech_deferred then speech_deferred = false; ann:invalidate() end
     if mode == "detail" then
         local name = read(det.Txt_Name)
         if not name then return end

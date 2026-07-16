@@ -145,10 +145,11 @@ local function step()
     if active then
         active.update()
         KeyhelpWatch.update()
-        -- Tutorial guidance line (guide_watch.lua): queued after the screen's own
-        -- readout, same slot as the keyhelp read.
-        GuideWatch.update()
     end
+    -- Tutorial guidance line (guide_watch.lua): runs with OR without an active
+    -- adapter (a guide box can be pinned over free roam), queued after whatever
+    -- else this tick announced.
+    GuideWatch.update()
 end
 
 function Registry.start()
@@ -191,6 +192,10 @@ function Registry.repeat_current()
     if not active then return end
     if active.reannounce then active.reannounce()
     elseif active.reset then active.reset() end
+    -- And the pinned tutorial instruction, if one is showing — on the community
+    -- board it is the step's task ("with an empty panel selected, press A…"), and
+    -- it must be recoverable on demand, not only on its once-per-change read.
+    GuideWatch.reannounce()
 end
 
 return Registry

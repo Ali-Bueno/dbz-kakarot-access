@@ -70,7 +70,8 @@ end
 -- empty build made every button resolution silently fail for the whole session
 -- (seen live 2026-07-03: the fishing button spoke in one session and not another).
 local function build_bindings()
-    local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {}, idxToCtrl = {} }
+    local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {}, idxToCtrl = {},
+                configToIcon = {} }
     local ico = StaticFindObject(ICON_DATA)
     if not Core.valid(ico) then
         -- The asset may simply not be loaded yet this session (StaticFindObject only
@@ -91,6 +92,7 @@ local function build_bindings()
             local icon = struct_str(e, "IconName")
             if cn ~= "" and ctrl ~= "" then m.configToCtrl[cn] = ctrl end
             if cn ~= "" and dyn ~= "" then m.configToDyn[cn] = dyn end
+            if cn ~= "" and icon ~= "" then m.configToIcon[cn] = icon end
             if dyn ~= "" and ctrl ~= "" and not m.dynToCtrl[dyn] then m.dynToCtrl[dyn] = ctrl end
             -- Face buttons are device-INDEXED everywhere (glyph "Btn_N", EATPlatBtnId
             -- Btn00..03); the asset pairs that index with the semantic button — the
@@ -169,7 +171,42 @@ end
 -- through the icon-data asset), with NO "controller:" prefix. For inline-icon markup
 -- (dialogs, tutorials, prompts) where we just want the button name. nil if unresolvable.
 function A.keyconfig_button(kc)
-    return A.button_name(kc) or (resolve_ctrl(kc) and A.button_name(resolve_ctrl(kc))) or nil
+    local direct = A.button_name(kc)
+    if direct then return direct end
+    local ctrl = resolve_ctrl(kc)
+    if ctrl then return A.button_name(ctrl) end
+    -- Icon-level fallback: some ids' asset entries carry NO controller pairing, only a
+    -- shared glyph name (IconName). A "Btn_N" icon (device-indexed face glyph) resolves
+    -- through the asset's own index->button pairing (idxToCtrl). "Decide"/"Cancel" are
+    -- the abstract platform confirm/back glyphs with no physical pairing ANYWHERE in
+    -- the asset — and the field-context entries (Field_Decide=Controller_Btn_B)
+    -- contradict the menu keyhelp evidence (confirm=A), so guessing a button could
+    -- misdirect; speak the localized ACTION instead, true on any layout. Live case:
+    -- the community tutorial's <inputicon KeyConfigId="Comm_EmbSet"/> (icon=Decide)
+    -- was silently dropped — the guide said "oprime  para…" (2026-07-16).
+    if not bindings then return nil end
+    local icon = bindings.configToIcon[kc] or kc
+    local n = icon:match("^Btn_?(%d+)$")
+    if n and bindings.idxToCtrl[tonumber(n)] then
+        return A.button_name(bindings.idxToCtrl[tonumber(n)])
+    end
+    if icon == "Decide" then return I18n.t("btn_decide") end
+    if icon == "Cancel" then return I18n.t("btn_cancel") end
+    -- Navigation-device glyph families, decoded from the icon NAME (the atlas naming,
+    -- see input-icons-and-keyconfig.md): Stk_* = the sticks, Btn_Key_* = the d-pad
+    -- ("keypad") glyphs — dump_keyhelp paired "Mover" with PLAT_X/Btn_Key_Ud. Ud/Lr/All
+    -- are composite direction glyphs; the NUMBERED Btn_Key_N are individual slots whose
+    -- direction numbering is nowhere in readable data (vehicle guide rows: Ride=Key_2,
+    -- GetOff=Key_4, Select=Key_6), so they speak the generic device rather than risk
+    -- naming a wrong direction — Ghidra atlas decode is the backlog upgrade.
+    local ICON_WORD = {
+        Stk_Nut_L = "stick_l", Stk_L = "stick_l",
+        Stk_Nut_R = "stick_r", Stk_R = "stick_r",
+        Btn_Key_Ud = "dpad_ud", Btn_Key_Lr = "dpad_lr", Btn_Key_All = "dpad",
+    }
+    if ICON_WORD[icon] then return I18n.t(ICON_WORD[icon]) end
+    if icon:match("^Btn_Key_%d+$") then return I18n.t("dpad") end
+    return nil
 end
 
 -- The spoken button for a live UAT_UIXcmnPlatBtn glyph widget (QTE / minigame / prompt

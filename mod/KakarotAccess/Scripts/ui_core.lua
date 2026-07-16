@@ -134,6 +134,15 @@ end
 -- throw escaped. So `arr ~= nil` is NOT a validity check — the array (a RemoteObject, so it has
 -- IsValid) and its owner must both be checked before the call. Every TArray read goes through
 -- here; never call GetArrayNum directly.
+--
+-- SECOND failure mode this guard can NOT stop (2026-07-16, screen_dialog WL_LvTextList): a
+-- native FIXED C-array member (e.g. `UCFUIXcmnMultiLineText* X[7]`) collapses to a
+-- RemoteObject that PASSES the IsValid check below, and GetArrayNum on it raises the
+-- "UObject instance is nullptr" C++ error THROUGH the pcall — the process survives (UE4SS
+-- catches it at its callback boundary) but the whole Lua tick aborts mid-function, through
+-- every enclosing pcall. There is no runtime check for this: the caller must never pass a
+-- fixed-array member here — check the member's declared size in the CXX header dump (a
+-- pointer with size > 0x8 is a fixed array).
 function Core.array_of(owner, name)
     if not Core.valid(owner) then return nil, nil end
     local arr
