@@ -62,6 +62,7 @@
 | Quest HUD / episode-card fields | `UIFieldManager.QuestNavigation` 0x568 (`Quest_Navi_C`), `.QuestMainStart` 0x558 (`TitleText` 0x3E0), `.QuestMainLogo` 0x700 (image-only) | AT.hpp (2026-07-15 sweep) |
 | Soul-emblem grid slot lock | `UAT_UIXCmnEmb_Cursor.UnlockState` u8 @0x408 (reflected), name text `Txt_Commu` @0x3B0; grid = `AT_UICommunityStart.EmbList.EmbAry`; the MENU-flow owner (`cm.MenuSoulEmListIns` = `USoulEmblemMenu`) reflects NO widget field → class must stay UNMAPPED | AT.hpp:37780/31730-31790 |
 | Battle-result detail values | `UAT_UIQuestMainClearDetail` reflects NO numeric members — digits only as `Image_PercentageList` textures; real values presumably in unreflected tail 0x3C0..0x418 | AT.hpp:35209 |
+| Icon glyph direction (`Btn_Key_N`) | DATA, not code: `CFTextIconData.IconList` (`FCFIconArt {Key, PLAT_P/X/W_Icon brushes}`, CFramework.hpp:694-698) maps IconName → brush whose TEXTURE name carries the direction (`Btn_Key_Dwn` etc., enum `EGCGPlatTexType` GCG_enums.hpp:240-262); exe has NO `Btn_Key_1..6` strings and no switch. Render path: `<inputicon>` → KeyConfigList → IconName → IconList Key → platform brush. Same indexed IconName on keyboard (key literal unrecoverable — speaking the d-pad direction is correct there too) | opus Ghidra RE 2026-07-16 (project `code/ghidra/KakarotAT`); read at runtime in `ui_archetypes.build_bindings` (`iconTex`) |
 | Message window text nodes | `UAT_UIGameWindow` (Xcmn_Win01 base): `WL_TxtTitle` 0x468, `WL_TxtDetail` 0x470, `WL_TxtHelp` 0x4E8, `WL_WorkText` 0x4F0 — each an `Xcmn_MultiLineText` wrapper with PLAIN `mainTxt` + RICH `ExMainTxt` inners; the game reuses the window across notices/tutorial boxes and the plain side keeps stale text with every visibility signal still true (no reflected layout/live state — unreflected tail 0x640..0x6B8, Ghidra if ever needed) | AT.hpp:33299; dumps 2026-07-16 |
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
@@ -75,9 +76,24 @@ appearance); map transitions clear the notice epoch (Transition.on_begin); Speec
 unfinished queued lines after an interrupt (subtitle vs pickup toast); keyconfig_button resolves
 abstract glyphs (Decide/Cancel → action words, Btn_Key_*/Stk_* → device words); the emblem reward
 reads through the window's WL_TextCmuCtn TArray. Diagnosis traces are OFF (cooking LATCH_DEBUG and
-results DEBUG stay on — separate open items). **OPEN, in flight: Btn_Key_N → d-pad DIRECTION
-decode (opus/Ghidra agent running; on return, add the N→direction table to keyconfig_button with
-its evidence and speak "cruceta abajo" etc.).** The round-by-round narrative below is history.
+results DEBUG stay on — separate open items). **ROUND 22 (the Btn_Key_N direction, SOLVED — opus Ghidra RE):
+the number→direction pairing is pure DATA (see the new Derived-facts row) — `build_bindings` now
+also reads the asset's `IconList` into `iconTex` (IconName → brush texture name) and
+`keyconfig_button` decodes the texture name through the shared glyph vocabulary (the four single
+directions reuse the localized d-pad button words), so the vehicle guide rows should now speak
+"cruceta abajo: Conducir" etc.; generic "cruceta" survives only if the brush is unreadable.
+FINAL RESOLUTION (same night, after two failed runtime reads + the user's screenshots): the
+IconList brush read is a DEAD END — every brush's reflected ResourceName is None, and ANY member
+call on its ResourceObject (even behind a passing Core.valid) raises the pcall-PIERCING nullptr
+error from inside the registry sweep (first cut silenced the tips MOD-WIDE and re-threw per tick
+by aborting build_bindings mid-way; the gated retry still threw once per reload). AND the
+question was MOOT: the user's screenshots (120/121) show the game renders the NEUTRAL whole-d-pad
+glyph for the numbered Btn_Key_N ids — generic "cruceta" IS the faithful reading. Shipped state:
+IconList read REMOVED (dead-end note in ui_archetypes), named glyph ids decode via glyph_word
+(Btn_Key_Ud/Up/Dwn/L/R → localized d-pad words, Stk_* → sticks, Decide/Cancel → action words),
+numbered Btn_Key_N → generic "cruceta". Verified: page 1 fully resolved (LT+X combos, sticks,
+Start/Select), page 2 matches the sighted rendering.** The round-by-round narrative below is
+history.
 
 **2026-07-16 afternoon batch: the COMMUNITY STORY TUTORIAL (pick Gohan → place next to Goku),
 CODED, pending in-game verify.** The user's report: every R1/L1 press in the emblems grid

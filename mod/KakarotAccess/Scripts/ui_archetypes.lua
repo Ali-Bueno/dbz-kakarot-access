@@ -106,6 +106,18 @@ local function build_bindings()
     return m
 end
 
+-- DEAD END — do NOT try to read the IconList brushes (2026-07-16, tried twice):
+-- the numbered d-pad icons' direction would live in the asset's IconList brush
+-- textures (opus Ghidra RE: no native switch, no "Btn_Key_1..6" strings in the exe),
+-- but (a) every brush's reflected ResourceName is None (dump_iconlist), and (b) any
+-- member call on its ResourceObject — even behind a passing Core.valid — raises the
+-- pcall-PIERCING nullptr error from inside the registry sweep (two log tracebacks;
+-- same class as discover's brush_of lesson). AND the question is MOOT: the game
+-- renders the NEUTRAL whole-d-pad glyph for the numbered ids (user screenshots
+-- 120/121, vehicle guide rows) — the generic "cruceta" word IS the faithful reading.
+-- Directional glyphs elsewhere arrive as NAMED icon ids (Btn_Key_Ud/Up/…), which
+-- glyph_word already decodes.
+
 -- Drop the cached map so the next resolve rebuilds it (call on options-screen entry,
 -- since rebinding a controller button changes the mapping).
 function A.clear_binding_cache() bindings = nil end
@@ -167,6 +179,26 @@ function A.row_binding(row)
     return name and (I18n.t("controller_prefix") .. name) or nil
 end
 
+-- Navigation-device glyph vocabulary, shared by icon IDS and the IconList TEXTURE
+-- names (atlas naming, see input-icons-and-keyconfig.md): Stk_* = the sticks,
+-- Btn_Key_* = the d-pad ("keypad") family — the four single directions reuse the
+-- localized d-pad button words (I18n.button tokens), Ud/Lr/All are composites.
+local ICON_BTN = {
+    Btn_Key_Up = "Up", Btn_Key_Dwn = "Down", Btn_Key_L = "Left", Btn_Key_R = "Right",
+}
+local ICON_WORD = {
+    Stk_Nut_L = "stick_l", Stk_L = "stick_l",
+    Stk_Nut_R = "stick_r", Stk_R = "stick_r",
+    Btn_Key_Ud = "dpad_ud", Btn_Key_Lr = "dpad_lr",
+    Btn_Key_All = "dpad", Btn_Key = "dpad", Btn_Pad = "dpad",
+}
+local function glyph_word(name)
+    if not name then return nil end
+    if ICON_BTN[name] then return I18n.button(ICON_BTN[name]) end
+    if ICON_WORD[name] then return I18n.t(ICON_WORD[name]) end
+    return nil
+end
+
 -- The spoken button for ANY KeyConfigId (direct button id or action alias resolved
 -- through the icon-data asset), with NO "controller:" prefix. For inline-icon markup
 -- (dialogs, tutorials, prompts) where we just want the button name. nil if unresolvable.
@@ -192,20 +224,13 @@ function A.keyconfig_button(kc)
     end
     if icon == "Decide" then return I18n.t("btn_decide") end
     if icon == "Cancel" then return I18n.t("btn_cancel") end
-    -- Navigation-device glyph families, decoded from the icon NAME (the atlas naming,
-    -- see input-icons-and-keyconfig.md): Stk_* = the sticks, Btn_Key_* = the d-pad
-    -- ("keypad") glyphs — dump_keyhelp paired "Mover" with PLAT_X/Btn_Key_Ud. Ud/Lr/All
-    -- are composite direction glyphs; the NUMBERED Btn_Key_N are individual slots whose
-    -- direction numbering is nowhere in readable data (vehicle guide rows: Ride=Key_2,
-    -- GetOff=Key_4, Select=Key_6), so they speak the generic device rather than risk
-    -- naming a wrong direction — Ghidra atlas decode is the backlog upgrade.
-    local ICON_WORD = {
-        Stk_Nut_L = "stick_l", Stk_L = "stick_l",
-        Stk_Nut_R = "stick_r", Stk_R = "stick_r",
-        Btn_Key_Ud = "dpad_ud", Btn_Key_Lr = "dpad_lr", Btn_Key_All = "dpad",
-    }
-    if ICON_WORD[icon] then return I18n.t(ICON_WORD[icon]) end
-    if icon:match("^Btn_Key_%d+$") then return I18n.t("dpad") end
+    local w = glyph_word(icon)
+    if w then return w end
+    -- NUMBERED Btn_Key_N: the game renders the NEUTRAL whole-d-pad glyph for these
+    -- (user screenshots 2026-07-16, vehicle guide) — the generic word IS what a
+    -- sighted player sees. See the IconList DEAD END note above build_bindings'
+    -- callers before ever trying to refine this.
+    if icon:match("^Btn_Key") then return I18n.t("dpad") end
     return nil
 end
 
