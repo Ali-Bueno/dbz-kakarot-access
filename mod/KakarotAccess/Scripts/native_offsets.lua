@@ -257,6 +257,33 @@ return {
         docId     = 0x5b4,   -- int32: 0=EULA, 1=privacy policy, 2|3=KPI / data analysis  (CONFIRMED)
     },
 
+    -- Character status instance (UATStatusInstanceBase; subclasses ATPlayerStatusInstance /
+    -- ATEnemyStatus share the base layout). Reached via REFLECTED members:
+    -- AAT_Character.AttributeComponent (@0x8E8) -> .StatusInstance (@0x100); only the final
+    -- member is native (the class reflects NOTHING). Ghidra (2026-07-17, code/decompiled/
+    -- manual_140f8aba0.c + _ufunc_GetPowerCompareRank.c) proved the live level is an int32
+    -- served virtually with floor 1, but the RTTI-stripped binary hid the member; PINNED by
+    -- the Ctrl+Shift+F5 runtime dump (dump_enemy_level.txt, 2026-07-17, two saves): +0x1C
+    -- read player 4 / 64 (per save) and enemies 2/5/6/93 (per area), the only slot varying
+    -- like the displayed "Lv N". Same dump corroborates the block is live status: +0x394
+    -- (float) fell 500->287 on an enemy while it was being hit (its current HP).
+    -- Character status instance, ENEMY variant (ATEnemyStatus, the subclass extension
+    -- 0x390..0x3A0 past UATStatusInstanceBase's 0x390). SOLVED 2026-07-17 by LIVE
+    -- getter-chain decoding (Ctrl+Shift+F5 dump v2, dump_enemy_level.txt): the game's own
+    -- level read is AAT_Character.AttributeComponent(@0x8E8) vtable[0x3E8] (rva F3D280:
+    -- mov rcx,[rcx+0x100]; jmp [vt+0x278]) -> ATEnemyStatus vtable[0x278] (rva FB88F0:
+    -- mov eax,[rcx+0x390]; ret). Cross-checked in game: resolved 3 on an enemy a level-6
+    -- player beat easily. (History: +0x1C was tried first and REFUTED in game — it read
+    -- 94 there; it's a per-character id, not the level.)
+    -- PLAYER variant differs (ATPlayerStatusInstance vtable[0x278] = rva FB8900:
+    -- level = [[si+0x390]+0x328] — 0x390 is a POINTER there); enemy-only readers must
+    -- never be pointed at the player's instance.
+    statusInstance = {
+        level = 0x390,   -- int32 on ATEnemyStatus ONLY (live-decoded; on the player
+                         -- instance this slot is a pointer)
+        -- hpNow = 0x394 (float, current HP — observed 500->287 under attack; unused)
+    },
+
     pause = {
         -- CONFIRMED by runtime diffing (F4 dev tool): int32 at 0x43C steps 0->1->2 and
         -- wraps as you move the battle-pause cursor (3 rows). In the hidden tail 0x438..0x500.

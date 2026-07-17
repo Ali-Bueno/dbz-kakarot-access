@@ -76,6 +76,12 @@ function Mem.bytes(obj, off, n)
     return m.read_bytes(a, off or 0, n)
 end
 
+-- Base VA of a loaded module (default: the game exe). Lets a dump translate a live code
+-- pointer (e.g. a vtable slot) into an RVA Ghidra can decompile (image base 0x140000000).
+function Mem.module_base(name)
+    if loaded and m.module_base then return m.module_base(name) end
+end
+
 -- Read directly from an absolute address (when you already have the VA) — needed to walk a
 -- native array whose data pointer we just read (the element addresses aren't UObject bases).
 function Mem.at_i32(addr, off) if loaded and addr then return m.read_i32(addr, off or 0) end end

@@ -1,0 +1,55 @@
+// FUN_142bfe8d0 @ 142bfe8d0
+142bfe8d0  PUSH RDI
+142bfe8d2  SUB RSP,0x20
+142bfe8d6  MOV EAX,dword ptr [RCX + 0x8]
+142bfe8d9  SHR EAX,0x4
+142bfe8dc  TEST AL,0x1
+142bfe8de  JZ 0x142bfe8e4   -> 142bfe8e4
+142bfe8e0  XOR EDI,EDI
+142bfe8e2  JMP 0x142bfe8e8   -> 142bfe8e8
+142bfe8e4  MOV RDI,qword ptr [RCX + 0x20]
+142bfe8e8  MOV RDI,qword ptr [RDI + 0x468]
+142bfe8ef  TEST RDI,RDI
+142bfe8f2  JZ 0x142bfe992   -> 142bfe992
+142bfe8f8  MOV qword ptr [RSP + 0x30],RBX   -> Stack[0x8]
+142bfe8fd  MOV qword ptr [RSP + 0x38],RSI   -> Stack[0x10]
+142bfe902  CALL 0x1431b68d0   -> 1431b68d0 [FUN_1431b68d0]
+142bfe907  MOV RBX,RAX
+142bfe90a  MOV RAX,qword ptr [RAX + 0x100]
+142bfe911  TEST RAX,RAX
+142bfe914  JNZ 0x142bfe929   -> 142bfe929
+142bfe916  MOV RDX,qword ptr [RBX]
+142bfe919  MOV RCX,RBX
+142bfe91c  CALL qword ptr [RDX + 0x340]
+142bfe922  MOV RAX,qword ptr [RBX + 0x100]
+142bfe929  MOV RBX,qword ptr [RAX + 0x28]
+142bfe92d  MOVSXD RAX,dword ptr [RAX + 0x30]
+142bfe931  LEA RCX,[RAX + RAX*0x2]
+142bfe935  LEA RSI,[RBX + RCX*0x8]
+142bfe939  CMP RBX,RSI
+142bfe93c  JZ 0x142bfe988   -> 142bfe988
+142bfe93e  NOP
+142bfe940  MOV RAX,qword ptr [RBX]
+142bfe943  CMP RAX,qword ptr [0x145b9ee30]   -> 145b9ee30
+142bfe94a  JNZ 0x142bfe95e   -> 142bfe95e
+142bfe94c  MOV RCX,RDI
+142bfe94f  CALL 0x143111e90   -> 143111e90 [FUN_143111e90]
+142bfe954  MOVSS XMM1,dword ptr [RBX + 0xc]
+142bfe959  MOVAPS XMM2,XMM0
+142bfe95c  JMP 0x142bfe977   -> 142bfe977
+142bfe95e  CMP RAX,qword ptr [0x145b9ee48]   -> 145b9ee48
+142bfe965  JNZ 0x142bfe97f   -> 142bfe97f
+142bfe967  MOV RCX,RDI
+142bfe96a  CALL 0x143111e20   -> 143111e20 [FUN_143111e20]
+142bfe96f  MOVSS XMM2,dword ptr [RBX + 0xc]
+142bfe974  MOVAPS XMM1,XMM0
+142bfe977  MOV RCX,RDI
+142bfe97a  CALL 0x143120aa0   -> 143120aa0 [FUN_143120aa0]
+142bfe97f  ADD RBX,0x18
+142bfe983  CMP RBX,RSI
+142bfe986  JNZ 0x142bfe940   -> 142bfe940
+142bfe988  MOV RBX,qword ptr [RSP + 0x30]   -> Stack[0x8]
+142bfe98d  MOV RSI,qword ptr [RSP + 0x38]   -> Stack[0x10]
+142bfe992  ADD RSP,0x20
+142bfe996  POP RDI
+142bfe997  RET

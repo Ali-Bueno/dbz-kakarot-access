@@ -81,6 +81,10 @@ RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, function() App.nav_companion() en
 -- Scripts/dumps/dump_nav_targets.txt for offline diagnosis.
 RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)
 
+-- Ctrl+Shift+F5: dev-only — dump the level-offset hunt windows (player + nearby
+-- enemies) to Scripts/dumps/dump_enemy_level.txt. See Nav.dump_levels.
+RegisterKeyBind(Key.F5, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function() App.nav_dump_levels() end)
+
 -- F2: read the on-screen button prompts (the contextual keyhelp bar) in full.
 RegisterKeyBind(Key.F2, function() App.read_keyhelp() end)
 

@@ -1,0 +1,204 @@
+// distinct functions at vtable slot 0x3E8 (index 125): 202
+slot0x3E8 target 0x1401b0820  (no func)  usedByVtables=1  vb=0x1438bdaa8
+slot0x3E8 target 0x140815f70  msgpack_version_minor  usedByVtables=1  vb=0x1439391e8
+slot0x3E8 target 0x140801680  FUN_140801680  usedByVtables=1  vb=0x1439398c0
+slot0x3E8 target 0x1438246b6  _purecall  usedByVtables=6  vb=0x14393b018  vb=0x1439651d8  vb=0x143a23678
+slot0x3E8 target 0x140829430  FUN_140829430  usedByVtables=1  vb=0x14393b490
+slot0x3E8 target 0x1407e4710  caseD_42  usedByVtables=74  vb=0x14393cb08  vb=0x1439a64e0  vb=0x1439a6c10
+slot0x3E8 target 0x1407e4520  FUN_1407e4520  usedByVtables=35  vb=0x1439608d8  vb=0x1439cd160  vb=0x1439d3808
+slot0x3E8 target 0x142b1e110  FUN_142b1e110  usedByVtables=1  vb=0x143966288
+slot0x3E8 target 0x140821870  FUN_140821870  usedByVtables=7  vb=0x1439728d0  vb=0x14397dab0  vb=0x14397f9e0
+slot0x3E8 target 0x1407e2f60  _guard_check_icall  usedByVtables=305  vb=0x143975ba0  vb=0x14397d488  vb=0x143980010
+slot0x3E8 target 0x14287f870  FUN_14287f870  usedByVtables=1  vb=0x14397c358
+slot0x3E8 target 0x140816220  FUN_140816220  usedByVtables=3  vb=0x14397cdb8  vb=0x143a44db0  vb=0x143f745c8
+slot0x3E8 target 0x1420134c0  FUN_1420134c0  usedByVtables=9  vb=0x14397e0e8  vb=0x144592430  vb=0x1445a5650
+slot0x3E8 target 0x142018180  FUN_142018180  usedByVtables=7  vb=0x14397f388  vb=0x143b4b158  vb=0x143b572a8
+slot0x3E8 target 0x142011a90  FUN_142011a90  usedByVtables=1  vb=0x143980660
+slot0x3E8 target 0x142884de0  FUN_142884de0  usedByVtables=1  vb=0x143980c80
+slot0x3E8 target 0x142934730  (no func)  usedByVtables=1  vb=0x1439815c8
+slot0x3E8 target 0x142938ff0  FUN_142938ff0  usedByVtables=1  vb=0x143982288
+slot0x3E8 target 0x1407fe110  FUN_1407fe110  usedByVtables=1  vb=0x14398f238
+slot0x3E8 target 0x142008b80  FUN_142008b80  usedByVtables=5  vb=0x14398fb50  vb=0x143f95020  vb=0x14411a060
+slot0x3E8 target 0x1408acec0  (no func)  usedByVtables=1  vb=0x1439a5630
+slot0x3E8 target 0x140949370  FUN_140949370  usedByVtables=2  vb=0x1439ad620  vb=0x1439c0930
+slot0x3E8 target 0x140818bf0  FUN_140818bf0  usedByVtables=2  vb=0x1439d4378  vb=0x143ba2410
+slot0x3E8 target 0x140a35e80  (no func)  usedByVtables=1  vb=0x1439f41a0
+slot0x3E8 target 0x140a79710  FUN_140a79710  usedByVtables=1  vb=0x143a07c80
+slot0x3E8 target 0x14201b8c0  FUN_14201b8c0  usedByVtables=27  vb=0x143a14ac0  vb=0x143a1f2a0  vb=0x143a618b8
+slot0x3E8 target 0x14200bd40  FUN_14200bd40  usedByVtables=8  vb=0x143a1b1a0  vb=0x143a1ba50  vb=0x1444b1c28
+slot0x3E8 target 0x142010490  FUN_142010490  usedByVtables=13  vb=0x143a1c3b0  vb=0x143a85888  vb=0x143dcc3c8
+slot0x3E8 target 0x142c685f0  FUN_142c685f0  usedByVtables=16  vb=0x143a247a0  vb=0x143cd9b78  vb=0x143cf7b98
+slot0x3E8 target 0x1407e4550  FUN_1407e4550  usedByVtables=11  vb=0x143a27f98  vb=0x143b6d7b0  vb=0x143be83f8
+slot0x3E8 target 0x140816f10  FUN_140816f10  usedByVtables=4  vb=0x143a2c360  vb=0x143ab9c68  vb=0x143abfd38
+slot0x3E8 target 0x142c1aab0  FUN_142c1aab0  usedByVtables=1  vb=0x143a2df70
+slot0x3E8 target 0x142011a70  FUN_142011a70  usedByVtables=2  vb=0x143a2f318  vb=0x14496e3e0
+slot0x3E8 target 0x142c22ac0  FUN_142c22ac0  usedByVtables=1  vb=0x143a464b8
+slot0x3E8 target 0x141a755d0  (no func)  usedByVtables=4  vb=0x143a4cf00  vb=0x143a89518  vb=0x143ae12a0
+slot0x3E8 target 0x142c2eda0  FUN_142c2eda0  usedByVtables=1  vb=0x143a4fc00
+slot0x3E8 target 0x142c42af0  FUN_142c42af0  usedByVtables=1  vb=0x143a50508
+slot0x3E8 target 0x142010350  FUN_142010350  usedByVtables=10  vb=0x143a532c8  vb=0x143b2c228  vb=0x143f95d38
+slot0x3E8 target 0x142c22740  (no func)  usedByVtables=1  vb=0x143a72400
+slot0x3E8 target 0x1426b00c0  FUN_1426b00c0  usedByVtables=1  vb=0x143a78618
+slot0x3E8 target 0x142c08140  (no func)  usedByVtables=1  vb=0x143a7eaf0
+slot0x3E8 target 0x142b66a50  (no func)  usedByVtables=1  vb=0x143a83c38
+slot0x3E8 target 0x140bcf290  FUN_140bcf290  usedByVtables=1  vb=0x143a8c3c0
+slot0x3E8 target 0x140881a80  (no func)  usedByVtables=4  vb=0x143a94da8  vb=0x143ac95f8  vb=0x143c18860
+slot0x3E8 target 0x142b1f850  (no func)  usedByVtables=2  vb=0x143a962c0  vb=0x1443dc7e0
+slot0x3E8 target 0x140bf93c0  caseD_7e  usedByVtables=1  vb=0x143aa1088
+slot0x3E8 target 0x1407e9f60  FUN_1407e9f60  usedByVtables=1  vb=0x143aa6608
+slot0x3E8 target 0x14200fca0  FUN_14200fca0  usedByVtables=25  vb=0x143aaec10  vb=0x143ab4be0  vb=0x143ac4380
+slot0x3E8 target 0x14200bc90  FUN_14200bc90  usedByVtables=8  vb=0x143abc238  vb=0x143ac48e8  vb=0x143c6c758
+slot0x3E8 target 0x142c07a50  FUN_142c07a50  usedByVtables=5  vb=0x143acffe0  vb=0x143cea330  vb=0x14423c218
+slot0x3E8 target 0x142b0b530  FUN_142b0b530  usedByVtables=2  vb=0x143aef868  vb=0x144ce2308
+slot0x3E8 target 0x140cda480  (no func)  usedByVtables=1  vb=0x143b01910
+slot0x3E8 target 0x140d9d3ac  (no func)  usedByVtables=1  vb=0x143b3a598
+slot0x3E8 target 0x1420119a0  FUN_1420119a0  usedByVtables=2  vb=0x143b48d78  vb=0x1440d40e8
+slot0x3E8 target 0x142003050  FUN_142003050  usedByVtables=3  vb=0x143b4c6c8  vb=0x143b5fb98  vb=0x144c3b718
+slot0x3E8 target 0x1420181d0  FUN_1420181d0  usedByVtables=14  vb=0x143b4cd78  vb=0x143b63378  vb=0x143b6e928
+slot0x3E8 target 0x142012730  FUN_142012730  usedByVtables=3  vb=0x143b856d8  vb=0x143b85e38  vb=0x144d40fe8
+slot0x3E8 target 0x142008a00  FUN_142008a00  usedByVtables=2  vb=0x143b8b158  vb=0x143bed8c8
+slot0x3E8 target 0x140ee8c40  FUN_140ee8c40  usedByVtables=3  vb=0x143ba1bf0  vb=0x143badae0  vb=0x143bbbde0
+slot0x3E8 target 0x140ee90e0  FUN_140ee90e0  usedByVtables=12  vb=0x143ba8e98  vb=0x143bac648  vb=0x143bb8b78
+slot0x3E8 target 0x140e73290  (no func)  usedByVtables=1  vb=0x143baa4f8
+slot0x3E8 target 0x14203cc80  FUN_14203cc80  usedByVtables=3  vb=0x143bc79c8  vb=0x144b8fd78  vb=0x144d3bd90
+slot0x3E8 target 0x140eb7710  FUN_140eb7710  usedByVtables=1  vb=0x143bcf138
+slot0x3E8 target 0x14203da90  FUN_14203da90  usedByVtables=3  vb=0x143be9c88  vb=0x144129e78  vb=0x1443c2308
+slot0x3E8 target 0x140817780  FUN_140817780  usedByVtables=1  vb=0x143bef3c0
+slot0x3E8 target 0x140fbba60  (no func)  usedByVtables=1  vb=0x143c1b0f0
+slot0x3E8 target 0x142c14640  FUN_142c14640  usedByVtables=3  vb=0x143c499b8  vb=0x144232e58  vb=0x144334508
+slot0x3E8 target 0x140821890  FUN_140821890  usedByVtables=1  vb=0x143c5be40
+slot0x3E8 target 0x140d5d670  (no func)  usedByVtables=1  vb=0x143c84f10
+slot0x3E8 target 0x142fa3550  FUN_142fa3550  usedByVtables=1  vb=0x143c89d78
+slot0x3E8 target 0x142b21b90  FUN_142b21b90  usedByVtables=1  vb=0x143c95680
+slot0x3E8 target 0x1410f57b0  FUN_1410f57b0  usedByVtables=1  vb=0x143cc1710
+slot0x3E8 target 0x1407e4610  FUN_1407e4610  usedByVtables=1  vb=0x143cef698
+slot0x3E8 target 0x142b0d190  (no func)  usedByVtables=1  vb=0x143cfd618
+slot0x3E8 target 0x142b15070  FUN_142b15070  usedByVtables=1  vb=0x143d0d5d0
+slot0x3E8 target 0x142c08160  (no func)  usedByVtables=1  vb=0x143d1df60
+slot0x3E8 target 0x141213860  FUN_141213860  usedByVtables=1  vb=0x143d33f60
+slot0x3E8 target 0x142039e00  FUN_142039e00  usedByVtables=4  vb=0x143d4abd8  vb=0x143dd4b78  vb=0x143e34288
+slot0x3E8 target 0x141276200  (no func)  usedByVtables=2  vb=0x143d57e80  vb=0x143d65fe0
+slot0x3E8 target 0x1407e9f70  FUN_1407e9f70  usedByVtables=3  vb=0x143d58f38  vb=0x143ee7c30  vb=0x14453d8c8
+slot0x3E8 target 0x142b1bca0  (no func)  usedByVtables=3  vb=0x143dfb7c8  vb=0x1443420d0  vb=0x144553010
+slot0x3E8 target 0x142b0acd0  (no func)  usedByVtables=2  vb=0x143dfbeb0  vb=0x144c9f6a0
+slot0x3E8 target 0x142b2a970  FUN_142b2a970  usedByVtables=1  vb=0x143e16388
+slot0x3E8 target 0x1409ac520  FUN_1409ac520  usedByVtables=1  vb=0x143e182a0
+slot0x3E8 target 0x1429b67a0  FUN_1429b67a0  usedByVtables=40  vb=0x143e4dd60  vb=0x143e56028  vb=0x143e56fc8
+slot0x3E8 target 0x141a705e0  FUN_141a705e0  usedByVtables=2  vb=0x143e9aa38  vb=0x144019ab8
+slot0x3E8 target 0x14200bde0  FUN_14200bde0  usedByVtables=9  vb=0x143f4eea8  vb=0x143f6d090  vb=0x143f7c8c0
+slot0x3E8 target 0x141913ed0  FUN_141913ed0  usedByVtables=1  vb=0x143f863e0
+slot0x3E8 target 0x142b3c460  FUN_142b3c460  usedByVtables=1  vb=0x143f8dbe0
+slot0x3E8 target 0x142b28840  FUN_142b28840  usedByVtables=23  vb=0x143f9c3e8  vb=0x143fa5c38  vb=0x14418a6b8
+slot0x3E8 target 0x141a70760  FUN_141a70760  usedByVtables=69  vb=0x143fb1010  vb=0x143fb15a8  vb=0x143fb9268
+slot0x3E8 target 0x141a70640  FUN_141a70640  usedByVtables=2  vb=0x143fb8bd8  vb=0x143fc0e08
+slot0x3E8 target 0x1429b6c60  FUN_1429b6c60  usedByVtables=2  vb=0x143fda110  vb=0x14404b950
+slot0x3E8 target 0x141a70580  FUN_141a70580  usedByVtables=1  vb=0x143ff25f8
+slot0x3E8 target 0x1429b5e60  FUN_1429b5e60  usedByVtables=3  vb=0x143ff9ca8  vb=0x144020b28  vb=0x1440735c0
+slot0x3E8 target 0x1429b5e40  thunk_FUN_142a07cc0  usedByVtables=2  vb=0x144010368  vb=0x144055128
+slot0x3E8 target 0x1429bc200  FUN_1429bc200  usedByVtables=1  vb=0x144040a80
+slot0x3E8 target 0x1429b6490  FUN_1429b6490  usedByVtables=2  vb=0x14405bee0  vb=0x14406b2c0
+slot0x3E8 target 0x141a559d0  FUN_141a559d0  usedByVtables=1  vb=0x14407bc50
+slot0x3E8 target 0x1429b6ad0  FUN_1429b6ad0  usedByVtables=1  vb=0x1440848e0
+slot0x3E8 target 0x140ed5a90  FUN_140ed5a90  usedByVtables=3  vb=0x14409f420  vb=0x1440b79f0  vb=0x1440be650
+slot0x3E8 target 0x140edd5b0  FUN_140edd5b0  usedByVtables=1  vb=0x1440a5220
+slot0x3E8 target 0x140ed6110  FUN_140ed6110  usedByVtables=1  vb=0x1440b16b0
+slot0x3E8 target 0x140ee1630  FUN_140ee1630  usedByVtables=1  vb=0x1440c4188
+slot0x3E8 target 0x140eed400  FUN_140eed400  usedByVtables=1  vb=0x1440cb790
+slot0x3E8 target 0x14173e920  (no func)  usedByVtables=2  vb=0x1440d3628  vb=0x144143548
+slot0x3E8 target 0x1420037e0  FUN_1420037e0  usedByVtables=1  vb=0x14414f1e0
+slot0x3E8 target 0x142b1fe30  FUN_142b1fe30  usedByVtables=1  vb=0x144167440
+slot0x3E8 target 0x140f8a4b0  FUN_140f8a4b0  usedByVtables=1  vb=0x1441897a8
+slot0x3E8 target 0x1420126f0  FUN_1420126f0  usedByVtables=2  vb=0x1441bf470  vb=0x144680a90
+slot0x3E8 target 0x14185aa10  (no func)  usedByVtables=1  vb=0x144207ef8
+slot0x3E8 target 0x142e7e5f0  FUN_142e7e5f0  usedByVtables=1  vb=0x144210840
+slot0x3E8 target 0x140808770  FUN_140808770  usedByVtables=3  vb=0x14421cc88  vb=0x144327ea8  vb=0x144776d48
+slot0x3E8 target 0x140ceac50  FUN_140ceac50  usedByVtables=1  vb=0x1442bf2b8
+slot0x3E8 target 0x142b21df0  FUN_142b21df0  usedByVtables=2  vb=0x1442e96d8  vb=0x144349ff8
+slot0x3E8 target 0x142c76e70  FUN_142c76e70  usedByVtables=1  vb=0x144302950
+slot0x3E8 target 0x1418d00f0  FUN_1418d00f0  usedByVtables=1  vb=0x144324fe8
+slot0x3E8 target 0x141a69e00  (no func)  usedByVtables=5  vb=0x14445a7c8  vb=0x14445afd8  vb=0x144464db8
+slot0x3E8 target 0x1419f1400  FUN_1419f1400  usedByVtables=1  vb=0x144464510
+slot0x3E8 target 0x1419f2bc0  (no func)  usedByVtables=2  vb=0x14447b0c0  vb=0x14448a218
+slot0x3E8 target 0x142b1a280  FUN_142b1a280  usedByVtables=2  vb=0x14447b660  vb=0x14449ba30
+slot0x3E8 target 0x141b5b5a0  FUN_141b5b5a0  usedByVtables=1  vb=0x144573c00
+slot0x3E8 target 0x141dcdf40  (no func)  usedByVtables=1  vb=0x1446ff680
+slot0x3E8 target 0x141e36a60  FUN_141e36a60  usedByVtables=1  vb=0x144707e20
+slot0x3E8 target 0x1407e68a0  FUN_1407e68a0  usedByVtables=1  vb=0x144709ff0
+slot0x3E8 target 0x141eae7e0  FUN_141eae7e0  usedByVtables=1  vb=0x144743430
+slot0x3E8 target 0x142047040  FUN_142047040  usedByVtables=1  vb=0x144779a50
+slot0x3E8 target 0x142042ef0  FUN_142042ef0  usedByVtables=1  vb=0x14478c2e0
+slot0x3E8 target 0x142084ee0  FUN_142084ee0  usedByVtables=1  vb=0x1447a3330
+slot0x3E8 target 0x14216b610  FUN_14216b610  usedByVtables=1  vb=0x1447c6de8
+slot0x3E8 target 0x1421206e0  FUN_1421206e0  usedByVtables=1  vb=0x1447c7ec0
+slot0x3E8 target 0x14088de90  FUN_14088de90  usedByVtables=3  vb=0x1447c8c08  vb=0x1447ddbd8  vb=0x1447de078
+slot0x3E8 target 0x14215f720  FUN_14215f720  usedByVtables=1  vb=0x1447c93e8
+slot0x3E8 target 0x1421d1730  FUN_1421d1730  usedByVtables=1  vb=0x1447cfdc8
+slot0x3E8 target 0x140b7b230  (no func)  usedByVtables=1  vb=0x1447d06f8
+slot0x3E8 target 0x140b7b150  FUN_140b7b150  usedByVtables=2  vb=0x1447d10a0  vb=0x1449d66f0
+slot0x3E8 target 0x141a6da70  (no func)  usedByVtables=1  vb=0x1447d7380
+slot0x3E8 target 0x1420f9020  FUN_1420f9020  usedByVtables=1  vb=0x1447dce08
+slot0x3E8 target 0x1422e0250  FUN_1422e0250  usedByVtables=1  vb=0x14480ed18
+slot0x3E8 target 0x1423052b0  FUN_1423052b0  usedByVtables=1  vb=0x144815d80
+slot0x3E8 target 0x142325770  FUN_142325770  usedByVtables=1  vb=0x14481d128
+slot0x3E8 target 0x142353030  FUN_142353030  usedByVtables=1  vb=0x144834538
+slot0x3E8 target 0x142490cb0  (no func)  usedByVtables=1  vb=0x14486f550
+slot0x3E8 target 0x1425f0ec0  (no func)  usedByVtables=1  vb=0x144897300
+slot0x3E8 target 0x1428101f0  FUN_1428101f0  usedByVtables=1  vb=0x1448cc150
+slot0x3E8 target 0x140b8a410  FUN_140b8a410  usedByVtables=1  vb=0x1448dbf48
+slot0x3E8 target 0x1426c9ef0  (no func)  usedByVtables=1  vb=0x1448e8bf0
+slot0x3E8 target 0x142702040  FUN_142702040  usedByVtables=1  vb=0x1448f8330
+slot0x3E8 target 0x14272a830  FUN_14272a830  usedByVtables=1  vb=0x1448fd1b8
+slot0x3E8 target 0x14228fac0  FUN_14228fac0  usedByVtables=1  vb=0x14490baa8
+slot0x3E8 target 0x1427d70f0  FUN_1427d70f0  usedByVtables=1  vb=0x14491bba0
+slot0x3E8 target 0x142810820  (no func)  usedByVtables=1  vb=0x1449465b8
+slot0x3E8 target 0x142821710  FUN_142821710  usedByVtables=1  vb=0x144947910
+slot0x3E8 target 0x142c688c0  FUN_142c688c0  usedByVtables=1  vb=0x144950fa8
+slot0x3E8 target 0x142848500  FUN_142848500  usedByVtables=1  vb=0x1449562f8
+slot0x3E8 target 0x142c73890  (no func)  usedByVtables=2  vb=0x14495d478  vb=0x144c4b7d0
+slot0x3E8 target 0x14287e080  FUN_14287e080  usedByVtables=1  vb=0x14496d118
+slot0x3E8 target 0x140855390  (no func)  usedByVtables=1  vb=0x1449739d8
+slot0x3E8 target 0x142872da0  (no func)  usedByVtables=1  vb=0x14497cba8
+slot0x3E8 target 0x142b78260  (no func)  usedByVtables=1  vb=0x1449823a8
+slot0x3E8 target 0x1408a6d80  FUN_1408a6d80  usedByVtables=1  vb=0x144999a48
+slot0x3E8 target 0x140b48d30  thunk_FUN_1420126f0  usedByVtables=1  vb=0x14499fa50
+slot0x3E8 target 0x14089f190  FUN_14089f190  usedByVtables=1  vb=0x1449a15e8
+slot0x3E8 target 0x14290dcb0  FUN_14290dcb0  usedByVtables=1  vb=0x1449a5158
+slot0x3E8 target 0x140a83480  FUN_140a83480  usedByVtables=1  vb=0x1449bb058
+slot0x3E8 target 0x140aca550  (no func)  usedByVtables=1  vb=0x1449bb580
+slot0x3E8 target 0x1429a09b0  FUN_1429a09b0  usedByVtables=1  vb=0x1449d46f0
+slot0x3E8 target 0x1407e4530  FUN_1407e4530  usedByVtables=1  vb=0x1449fd2d8
+slot0x3E8 target 0x141eb0bb0  FUN_141eb0bb0  usedByVtables=1  vb=0x1449ffd70
+slot0x3E8 target 0x142a61e70  (no func)  usedByVtables=1  vb=0x144a0c3a0
+slot0x3E8 target 0x142aa6620  FUN_142aa6620  usedByVtables=1  vb=0x144b83a40
+slot0x3E8 target 0x142af33f0  FUN_142af33f0  usedByVtables=1  vb=0x144b9b718
+slot0x3E8 target 0x142b010d0  (no func)  usedByVtables=1  vb=0x144ba4358
+slot0x3E8 target 0x142b3d0b0  FUN_142b3d0b0  usedByVtables=1  vb=0x144bb13e8
+slot0x3E8 target 0x142b73980  FUN_142b73980  usedByVtables=1  vb=0x144bb57a0
+slot0x3E8 target 0x142b78c30  FUN_142b78c30  usedByVtables=1  vb=0x144bb6380
+slot0x3E8 target 0x142bfe8d0  FUN_142bfe8d0  usedByVtables=1  vb=0x144bd6070
+slot0x3E8 target 0x142c22760  (no func)  usedByVtables=1  vb=0x144bfa4f0
+slot0x3E8 target 0x142b1f7a0  (no func)  usedByVtables=1  vb=0x144c02df0
+slot0x3E8 target 0x142c7c680  FUN_142c7c680  usedByVtables=1  vb=0x144c056a0
+slot0x3E8 target 0x142d5d770  FUN_142d5d770  usedByVtables=1  vb=0x144c49290
+slot0x3E8 target 0x142e06710  FUN_142e06710  usedByVtables=1  vb=0x144c721e0
+slot0x3E8 target 0x142e20ae0  FUN_142e20ae0  usedByVtables=1  vb=0x144c83c90
+slot0x3E8 target 0x1432235f0  FUN_1432235f0  usedByVtables=1  vb=0x144c947b0
+slot0x3E8 target 0x142ea9c00  FUN_142ea9c00  usedByVtables=1  vb=0x144cb1788
+slot0x3E8 target 0x142f14ce0  FUN_142f14ce0  usedByVtables=1  vb=0x144ccdab8
+slot0x3E8 target 0x142f40f18  (no func)  usedByVtables=1  vb=0x144cd8d08
+slot0x3E8 target 0x142b1f870  FUN_142b1f870  usedByVtables=1  vb=0x144ce0b40
+slot0x3E8 target 0x142b26430  FUN_142b26430  usedByVtables=1  vb=0x144ce3310
+slot0x3E8 target 0x140b7ad70  FUN_140b7ad70  usedByVtables=1  vb=0x144d00f88
+slot0x3E8 target 0x14305f640  FUN_14305f640  usedByVtables=1  vb=0x144d14638
+slot0x3E8 target 0x1430c7644  (no func)  usedByVtables=1  vb=0x144d3ca60
+slot0x3E8 target 0x141eabce0  FUN_141eabce0  usedByVtables=1  vb=0x144d3d648
+slot0x3E8 target 0x1431201d0  (no func)  usedByVtables=1  vb=0x144d40250
+slot0x3E8 target 0x1408ad2d0  (no func)  usedByVtables=1  vb=0x144d901a0
+slot0x3E8 target 0x14326d0d0  FUN_14326d0d0  usedByVtables=1  vb=0x144e89bf0
+slot0x3E8 target 0x14329b5b0  FUN_14329b5b0  usedByVtables=1  vb=0x144ea8e28
+slot0x3E8 target 0x142b1f8e0  FUN_142b1f8e0  usedByVtables=1  vb=0x144ec8158
+slot0x3E8 target 0x142c1a610  FUN_142c1a610  usedByVtables=1  vb=0x144ee06b0
+slot0x3E8 target 0x1433ca0f0  FUN_1433ca0f0  usedByVtables=1  vb=0x144eff708
+slot0x3E8 target 0x140039e94  (no func)  usedByVtables=1  vb=0x145417990
+slot0x3E8 target 0x1400971c0  FUN_1400971c0  usedByVtables=1  vb=0x1454187d0
+// flagged (read [this+0x100] then offset): 0

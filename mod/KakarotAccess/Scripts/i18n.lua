@@ -142,6 +142,7 @@ local S = {
         nav_right = "derecha",
         nav_companion = "compañero %d de %d",
         nav_no_companion = "Sin compañeros cerca",
+        nav_level = "nivel %d",
         nav_quest_mode = "Objetivo de misión",
         -- Quest objective HUD reader (quest_objective.lua).
         objective_none = "Sin objetivo activo",
@@ -168,6 +169,7 @@ local S = {
         -- R3 radar target picker (radar_menu.lua). Categories (L1/R1) + item nouns.
         radar_cat_quests = "Misiones",
         radar_cat_npc = "Personajes",
+        radar_cat_companions = "Compañeros",
         radar_cat_fishing = "Pesca",
         radar_cat_gathering = "Recolección",
         radar_cat_shops = "Tiendas",
@@ -181,6 +183,7 @@ local S = {
         cat_memory = "recuerdo",
         cat_item = "objeto",
         cat_npc = "personaje",
+        cat_companion = "compañero",
         cat_fishing = "zona de pesca",
         cat_collect = "punto de recolección",
         cat_hunt = "presa",
@@ -362,6 +365,7 @@ local S = {
         nav_right = "right",
         nav_companion = "companion %d of %d",
         nav_no_companion = "No companions nearby",
+        nav_level = "level %d",
         nav_quest_mode = "Quest objective",
         -- Quest objective HUD reader (quest_objective.lua).
         objective_none = "No active objective",
@@ -387,6 +391,7 @@ local S = {
         orb_purple = "purple", orb_silver = "silver", orb_gold = "gold",
         radar_cat_quests = "Quests",
         radar_cat_npc = "Characters",
+        radar_cat_companions = "Companions",
         radar_cat_fishing = "Fishing",
         radar_cat_gathering = "Gathering",
         radar_cat_shops = "Shops",
@@ -400,6 +405,7 @@ local S = {
         cat_memory = "memory",
         cat_item = "item",
         cat_npc = "character",
+        cat_companion = "companion",
         cat_fishing = "fishing spot",
         cat_collect = "gathering point",
         cat_hunt = "prey",
