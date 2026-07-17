@@ -2,27 +2,33 @@
 
 **KakarotAccess** makes *Dragon Ball Z: Kakarot* playable by blind and low-vision players. It reads
 the game's menus, dialogue and HUD out loud through your screen reader, and adds a 3‑D audio radar so
-you can navigate the open world, track quest objectives and locate enemies, NPCs and collectibles —
-without changing how the game plays for everyone else.
+you can navigate the open world and track quest objectives, enemies and collectibles — without
+changing how the game plays for everyone else.
+
+> ### 🎮 A game controller is **required**
+> This mod is designed to be played with a **controller** (Xbox / DualShock / DualSense). Core
+> features — the radar target picker, the config menu, stat stepping, the world map — are on the
+> controller, and the game itself plays far better with one. Keyboard shortcuts exist as extra
+> conveniences, but they are **not** a full substitute. Plug in a controller before you play.
 
 - **Screen-reader output** via **PRISM** (works with NVDA, JAWS and Windows SAPI).
 - **Audio navigation radar** with a directional beacon and arrival cues.
-- **Faithful gameplay** — nothing about the game itself is altered; the mod only reads and guides.
+- **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
 - **Fully translatable** — every spoken line lives in an editable text file (13 languages).
 
-> Engine: Unreal Engine 4.21 · Loader: **UE4SS** · Screen reader: **PRISM** (`prism.dll`)
+> Engine: Unreal Engine 4.21 · Loader: **UE4SS** · Screen reader: **PRISM**
 
 ---
 
 ## Requirements
 
 - **DRAGON BALL Z: KAKAROT** (Steam).
-- A **screen reader running** on Windows — NVDA, JAWS, or the built-in SAPI voice. PRISM speaks
-  through whichever one is active.
-- **UE4SS** (the Unreal script loader) installed in the game — the installer sets this up for you.
+- A **controller** (required — see above).
+- A **screen reader** running on Windows — NVDA, JAWS, or the built-in SAPI voice.
+- **UE4SS** (the Unreal script loader) — the installer sets this up for you.
 
-You do **not** need to install PRISM, Tolk or any voice separately: the mod ships its own
-`prism.dll` / `tolk.dll` and talks to the screen reader you already use.
+You don't need to install PRISM, Tolk or any voice separately: the mod ships its own screen-reader
+bridge and talks to whatever screen reader you already use.
 
 ---
 
@@ -30,23 +36,24 @@ You do **not** need to install PRISM, Tolk or any voice separately: the mod ship
 
 ### Recommended — the installer
 
-Download **KakarotAccess Installer** from the [Releases page](https://github.com/Ali-Bueno/dbz-kakarot-access/releases),
-run it, and press **Install**. It finds your game folder automatically, downloads the latest release,
-installs UE4SS and the mod, and tells you when it's done. Then just launch the game from Steam — you
-should hear *"Kakarot accessibility online."*
+Download **KakarotAccessInstaller.exe** from the
+[latest release](https://github.com/Ali-Bueno/dbz-kakarot-access/releases/latest), run it, and press
+**Install**. It finds your game folder automatically, downloads the latest version, sets up UE4SS and
+the mod, and tells you when it's done. Then launch the game from Steam — you should hear
+*"Kakarot accessibility online."*
 
-The installer can also update the mod, roll back to an older version, install the newest development
-build, or cleanly uninstall (your game saves are never touched).
+The installer can also update the mod, pick an older version, or cleanly uninstall (your game saves
+are never touched).
 
 ### Manual install
 
-If you prefer to install by hand, see [BUILD.md](BUILD.md) for the exact layout
+See [BUILD.md](BUILD.md) for the exact layout
 (`…\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\Mods\KakarotAccess\`) and how to enable the mod in
 `mods.txt`.
 
 ---
 
-## What it reads
+## What works
 
 **Menus & UI**
 - Main menu, pause menu, options / system / title screens, confirmation and choice popups.
@@ -68,7 +75,7 @@ If you prefer to install by hand, see [BUILD.md](BUILD.md) for the exact layout
 **Navigation radar**
 - A directional 3‑D audio beacon that tracks your current quest objective and plays an arrival cue,
   auto-resuming after battles.
-- A target picker to lock onto anything tracked, sorted by category: **Quests, Collectibles,
+- A target picker (**R3**) to lock onto anything tracked, sorted by category: **Quests, Collectibles,
   Characters, Companions, Enemies, Sites, Fishing, Gathering, Shops, Minigames, Dragon Balls**.
 - Enemy announcements include the enemy's **level**.
 - Auto-retargets when the objective changes, and auto-advances through gathering points as you take
@@ -76,9 +83,25 @@ If you prefer to install by hand, see [BUILD.md](BUILD.md) for the exact layout
 
 ---
 
+## Not yet supported (coming)
+
+These parts of the game aren't accessible yet — they're on the roadmap:
+
+- **Encyclopedia Z** menu.
+- **Baseball** minigame.
+- **Story** menu.
+- **Talking to your party / group members** while in a town or village.
+- Story/battle **results** numeric values (still being decoded).
+- Final polish on the **character status sheet**, **episode title cards** and the **Companions**
+  radar category.
+
+If something you need isn't listed, let me know (see the links at the bottom).
+
+---
+
 ## Controls
 
-### Gamepad (overworld)
+### Controller (primary)
 
 | Input | Action |
 |---|---|
@@ -93,7 +116,9 @@ If you prefer to install by hand, see [BUILD.md](BUILD.md) for the exact layout
 | **D-pad ↓ / ↑** (status sheet) | Step through the stat blocks |
 | **D-pad ↑ / ↓** (world map) | Choose a fast-travel destination |
 
-### Keyboard
+### Keyboard (optional extras)
+
+Handy shortcuts that mirror or complement the controller — not required to play:
 
 | Key | Action |
 |---|---|
@@ -102,15 +127,13 @@ If you prefer to install by hand, see [BUILD.md](BUILD.md) for the exact layout
 | **Ctrl+F2** | Toggle automatic button-help announcements |
 | **F3** | Toggle the navigation radar |
 | **Shift+F3** | Toggle NavMesh route guidance |
-| **F5** | Announce the tracked objective (distance, clock direction, above/below) |
+| **F5** | Announce the tracked objective (distance, clock direction) |
 | **Shift+F5** | Cycle companion tracking |
 | **F8** | Speech test (also names the active screen reader) |
 | **Ctrl+F8** | Silence speech immediately |
-| **F10** | Read the current quest objective |
 | **F11 / Shift+F11** | Next / previous stat block on the status sheet |
 | **Ctrl+M** | Toggle the menu reader on/off |
-
-<sub>Developer keys (F4, F6, F7, F9, Ctrl+F5, Ctrl+Shift+F5, Ctrl+Shift+R) are for mod development and diagnostics; end users can ignore them.</sub>
+| **Ctrl+Shift+R** | Reload the mod (useful after editing a translation file) |
 
 ---
 
@@ -135,11 +158,17 @@ it falls back to English, so you can't break it. See `lang/README.txt` for the f
 
 ## Known limitations
 
-- Story/battle **results** numeric values are still being decoded.
-- The **status sheet**, **episode title cards** and the **Companions** radar category are being
-  finalized.
 - **Skill Tree**: jumping straight to a level-2/3 node without visiting its level-1 node first won't
   be reported as locked.
+- See *Not yet supported* above for the systems still being worked on.
+
+---
+
+## Links & community
+
+- **Latest release:** https://github.com/Ali-Bueno/dbz-kakarot-access/releases/latest
+- **Discord:** https://discord.gg/TDBvUxeRX
+- **Patreon:** https://www.patreon.com/alibueno
 
 ---
 
@@ -147,7 +176,8 @@ it falls back to English, so you can't break it. See `lang/README.txt` for the f
 
 Build, architecture and iteration details are in [BUILD.md](BUILD.md). The reusable accessibility
 playbook and the reverse-engineering reference library live in [CLAUDE.md](CLAUDE.md),
-[PRINCIPLES.md](PRINCIPLES.md) and [`reference/`](reference/).
+[PRINCIPLES.md](PRINCIPLES.md) and [`reference/`](reference/). Developer/diagnostic keybinds are
+compiled out of releases (see `build_flags.lua` + `package.ps1`).
 
 ## License
 
