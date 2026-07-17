@@ -57,6 +57,24 @@ local function faded(h)
     return ok and type(op) == "number" and op < 0.05
 end
 
+-- TEMP TRACE (2026-07-17 round 5, user: cards mostly silent again): one log line
+-- whenever the observed card state CHANGES — pins where the pipeline loses them
+-- (detection, gate, text read, dedup, or commit). Turn OFF once diagnosed.
+local TRACE = true
+local last_trace = nil
+
+local function vis_of(h)
+    local v = "?"
+    pcall(function() v = tostring(h:GetVisibility()) end)
+    return v
+end
+
+local function op_of(h)
+    local o = "?"
+    pcall(function() o = string.format("%.2f", h:GetRenderOpacity()) end)
+    return o
+end
+
 local function node_text(host, member)
     local t
     pcall(function()
@@ -68,23 +86,44 @@ local function node_text(host, member)
     return (t and t ~= "") and t or nil
 end
 
--- "Name, popular title" from whichever size variant is visible.
+-- "Name, popular title" from whichever size variant is visible. Second return =
+-- trace detail (which member supplied each part).
 local function card_text(host)
-    local name = node_text(host, "NameTxt") or node_text(host, "NameTxt_Large")
-    local pop  = node_text(host, "PopularNameTxt") or node_text(host, "PopularNameTxt_Large")
-    if not name and not pop then return nil end
-    return Core.phrase(name, pop)
+    local name, nsrc = nil, "-"
+    for _, m in ipairs({ "NameTxt", "NameTxt_Large" }) do
+        name = node_text(host, m)
+        if name then nsrc = m break end
+    end
+    local pop, psrc = nil, "-"
+    for _, m in ipairs({ "PopularNameTxt", "PopularNameTxt_Large" }) do
+        pop = node_text(host, m)
+        if pop then psrc = m break end
+    end
+    if not name and not pop then return nil, "no-text" end
+    return Core.phrase(name, pop),
+        string.format("name=%s@%s pop=%s@%s", tostring(name), nsrc, tostring(pop), psrc)
 end
 
 function Card.is_active()
     tick = tick + 1
     queue = nil
+    local tr = TRACE and {} or nil
+    local n = 0
     for _, host in ipairs(Core.cached_all("Info_Name_C", tick)) do
-        if Core.valid(host) and Core.on_screen(host) and not faded(host) then
-            local t = card_text(host)
+        if Core.valid(host) then
+            n = n + 1
+            local on = Core.on_screen(host)
+            local fd = faded(host)
+            local t, dbg = nil, nil
+            if on and not fd then t, dbg = card_text(host) end
+            if tr and n <= 3 then
+                tr[#tr + 1] = string.format("h%d on=%s vis=%s op=%s %s",
+                    n, tostring(on), vis_of(host), op_of(host), dbg or "-")
+            end
             if t then
                 local s = seen[t]
-                if not s or (os.clock() - s.last) > GONE_S then
+                local fresh = not s or (os.clock() - s.last) > GONE_S
+                if fresh then
                     s = { first = tick, spoken = false }   -- a fresh appearance
                     seen[t] = s
                 end
@@ -92,11 +131,24 @@ function Card.is_active()
                 -- Stable and not yet spoken THIS appearance. `spoken` is set in
                 -- update(), so a pending line survives losing ticks to a subtitle
                 -- and speaks on the first free tick — exactly once.
-                if not s.spoken and (tick - s.first + 1) >= STABLE_TICKS then
+                local stable = (tick - s.first + 1) >= STABLE_TICKS
+                if tr then
+                    tr[#tr + 1] = string.format("txt=%q fresh=%s stable=%s spoken=%s",
+                        t, tostring(fresh), tostring(stable), tostring(s.spoken))
+                end
+                if not s.spoken and stable then
                     queue = queue or {}
                     queue[#queue + 1] = t
                 end
             end
+        end
+    end
+    if tr then
+        local line = "cards n=" .. n .. " " .. table.concat(tr, " | ") ..
+            (queue and " QUEUED" or "")
+        if line ~= last_trace then
+            last_trace = line
+            print("[KakarotAccess] " .. line .. "\n")
         end
     end
     -- Active only while there is something new to say; released right after (notice
@@ -110,6 +162,7 @@ function Card.update()
     if not queue then return end
     for _, t in ipairs(queue) do
         if seen[t] then seen[t].spoken = true end
+        if TRACE then print("[KakarotAccess] cards SPOKE " .. t .. "\n") end
         Speech.say(t, false)   -- queued: never cuts a subtitle line
     end
     queue = nil
