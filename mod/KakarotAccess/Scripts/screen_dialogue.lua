@@ -143,7 +143,7 @@ end
 -- the "subtitles read though the game option is OFF" bug: it says whether the lines
 -- come from Xcmn_Subtitles_C (gate broken) or Field_Talk_Win_C (never gated, by
 -- design), and whether pane_live discriminates the option-off state. Turn OFF after.
-local SUB_TRACE = true
+local SUB_TRACE = false
 local trace_last = nil
 local function trace_line(src, w, line)
     if not SUB_TRACE or line == trace_last then return end

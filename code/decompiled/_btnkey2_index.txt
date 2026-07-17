@@ -1,0 +1,34 @@
+### string locations + surrounding bytes ###
+Btn_Key_Up @ 1446aafa9
+      1446aaf99: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446aafa9: 42 74 6e 5f 4b 65 79 5f 55 70 00 00 00 00 00 4d  Btn_Key_Up.....M
+      1446aafb9: 6f 75 73 65 43 6c 69 63 6b 44 65 63 69 64 65 00  ouseClickDecide.
+Btn_Key_Dwn @ 1446ab041
+      1446ab031: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446ab041: 42 74 6e 5f 4b 65 79 5f 44 77 6e 00 00 00 00 43  Btn_Key_Dwn....C
+      1446ab051: 00 30 00 35 00 36 00 41 00 63 00 30 00 36 00 00  .0.5.6.A.c.0.6..
+Btn_Key_L @ 1446aaf71
+      1446aaf61: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446aaf71: 42 74 6e 5f 4b 65 79 5f 4c 00 00 00 00 00 00 43  Btn_Key_L......C
+      1446aaf81: 00 30 00 35 00 39 00 41 00 63 00 30 00 36 00 00  .0.5.9.A.c.0.6..
+Btn_Key_R @ 1446aaff9
+      1446aafe9: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446aaff9: 42 74 6e 5f 4b 65 79 5f 52 00 00 00 00 00 00 54  Btn_Key_R......T
+      1446ab009: 75 74 6f 72 69 61 6c 00 00 00 00 00 00 00 00 43  utorial........C
+Btn_Key_Ud @ 1446ab0c1
+      1446ab0b1: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446ab0c1: 42 74 6e 5f 4b 65 79 5f 55 64 00 00 00 00 00 43  Btn_Key_Ud.....C
+      1446ab0d1: 00 30 00 35 00 38 00 41 00 63 00 30 00 35 00 00  .0.5.8.A.c.0.5..
+Btn_Key_Lr @ 1446ab089
+      1446ab079: 47 43 47 50 6c 61 74 54 65 78 54 79 70 65 3a 3a  GCGPlatTexType::
+      1446ab089: 42 74 6e 5f 4b 65 79 5f 4c 72 00 00 00 00 00 43  Btn_Key_Lr.....C
+      1446ab099: 00 30 00 35 00 38 00 41 00 63 00 30 00 34 00 00  .0.5.8.A.c.0.4..
+Btn_Key_1: NOT FOUND
+Btn_Key_2: NOT FOUND
+Btn_Key_3: NOT FOUND
+Btn_Key_4: NOT FOUND
+Btn_Key_5: NOT FOUND
+Btn_Key_6: NOT FOUND
+Btn_Key: NOT FOUND
+
+### 64-bit pointer references (pointer tables / lea imm64) ###

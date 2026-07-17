@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-17 (late night — cinematics-perf saga, session ended mid-verify)
+**Last updated:** 2026-07-17 (cinematics-perf saga VERIFIED by the user and closed)
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -69,33 +69,14 @@
 
 ## Next step
 
-**▶ RESUME HERE (2026-07-17, user went to sleep mid-verify). ALL of tonight's code is ON DISK,
-luac-validated, NOT COMMITTED (user gate: verify first). Rounds 1-13 below are the full story;
-this block is all tomorrow needs.**
+**CINEMATICS-PERF SAGA: CLOSED (2026-07-17, user verified in game).** Loading screens and
+cinematics run smoothly; the whole batch is committed (`9503cec` checkpoint) and pushed;
+`SUB_TRACE` turned off after the user's OK. The saga took the mod from 20% avg game-thread /
+2.3 scans/s down to ~3ms avg / ~0 scans during scenes. Rounds 1-13 below are the archived
+story of how.
 
-**State:** the cinematics-lag saga took the mod from 20% avg game-thread / 2.3 scans/s down to
-~3ms avg / ~0 expected scans. Verified by the user so far: subtitles-OFF stays silent,
-subtitles-ON reads again, Milk-emblem reward reads, big hitches gone. The LAST two fixes
-(round 13) are coded but UNTESTED: (a) emblem-watch gameplay-recency guard (`last_roam_t`,
-30s) — should kill the 3-4s audio mini-cuts; (b) loading-screen regression (recap/tips
-unread) — `Loading_C`/`Xcmn_MultiLineText_C` in QUIET_EXEMPT.
-
-**Tomorrow's checklist (Ctrl+Shift+R is enough — no restart needed):**
-1. Cutscene + the two-Ctrl+F5 ritual (F5 at scene start, ~60s, F5 again): expect
-   `findall scans` ≈ 0 in the second window and NO audio mini-cuts.
-2. A loading screen: story recap + tips must read again.
-3. If mini-cuts persist at scans=0: they're per-spoken-line → NVDA audio ducking
-   (`NVDA+Shift+D`), not the mod.
-4. Regression sweep (all should still work): menus open/read instantly; battle → results
-   announce at battle end; return-to-title → title menu + boot notices read; emblems menu
-   first visit still reads in ~1s (its watch now needs free-roam <30s + a press — the normal
-   flow always satisfies both).
-5. On user OK: turn OFF `SUB_TRACE` (screen_dialogue.lua), then COMMIT the whole batch
-   (quiet mode + world predicate, boost/hot fixes, watch guards, subtitle gate via
-   gi→SaveManager→SaveSystem chain, Milk rows-freshness fix, loading throttle+exemption,
-   pad relax, UE4SS ini hooks off). Suggested commit message: "Make cinematics smooth:
-   engine-state quiet mode, scan-lane guards, live save-system subtitle gate".
-   Still-open items from before tonight (results "222", d-pad board nav) are unchanged.
+**Still-open items (unchanged from before the saga):** results "222", d-pad board nav,
+combat false-positive verify, wind tunnel class hunt, radar `resume_pick` in-game verify.
 **2026-07-17 (round 13): TWO fixes. (a) The watch STILL armed (16 scans ≈ the user's felt
 3-4s audio mini-cuts; log 01:03 shows a FRESH BOOT straight into the cinematic): the
 load-confirm / line-advance presses open hot windows INSIDE the scene and the story level's
