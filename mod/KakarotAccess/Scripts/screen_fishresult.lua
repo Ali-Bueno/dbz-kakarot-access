@@ -36,9 +36,13 @@ FishResult.keyhelp_auto = false
 
 local ROW_MAX = 10   -- Xlist_Bar02_00.. probe cap (census showed _00; rows contiguous)
 
+local LIVE_WINDOW_S = 60   -- how long after the last minigame surface the pool may be probed
+local GONE_TICKS = 5       -- ticks of absence before the spoken set is forgotten
+
 local tick = 0
 local spoken = {}    -- line -> true while the sheet stays up (cleared on close)
 local queue = nil    -- lines to speak this tick (computed in is_active)
+local gone = 0       -- consecutive ticks without a live sheet (absence debounce)
 
 -- Close-animation ghost: opacity fades to 0 while visibility flags lag.
 local function faded(h)
@@ -107,11 +111,27 @@ end
 function FishResult.is_active()
     tick = tick + 1
     queue = nil
-    local host = Core.first_on_screen("Mgame_Result_C", tick)
-    if not host or faded(host) then
+    -- Probe the per-level result pool ONLY around a live/recent minigame (stamp
+    -- published by screen_fishing). Registered at the top of the stack, an
+    -- unconditional probe here ran every tick in EVERY state — prime suspect of
+    -- the 2026-07-17 return-to-title AV (freed pooled widget hit by IsValid
+    -- during world teardown — crash ledger).
+    local stamp = _G.__KakarotMinigameLive
+    if not stamp or os.clock() - stamp > LIVE_WINDOW_S then
         spoken = {}
+        gone = 0
         return false
     end
+    local host = Core.first_on_screen("Mgame_Result_C", tick)
+    if not host or faded(host) then
+        -- Debounced forget: the "Siguiente" close/page-flip can drop the sheet
+        -- for a tick or two — clearing `spoken` right away re-read the whole
+        -- sheet (user bug 2026-07-17). Forget only after a genuine absence.
+        gone = gone + 1
+        if gone >= GONE_TICKS then spoken = {} end
+        return false
+    end
+    gone = 0
     for _, line in ipairs(lines(host)) do
         if not spoken[line] then
             queue = queue or {}

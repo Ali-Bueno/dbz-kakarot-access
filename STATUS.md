@@ -84,6 +84,20 @@
 
 ## Next step
 
+**2026-07-17 (evening): SECOND same-signature AV, on return-to-title — mitigated (opus verdict,
+unproven pending next crash).** Differentiator vs weeks of stable title returns: aa1606b made the
+`Mgame_Result_C` pool (a PER-LEVEL pooled widget) probed via `Core.first_on_screen` EVERY tick in
+EVERY state (fishresult first-in-sweep + fishing's unconditional yield probe); `Core.valid`'s
+`IsValid()` on a GC-freed pooled widget is the uncatchable teardown AV (2026-07-04 class — the
+GameMode-notify gate leaves a pre-notify gap and a post-grace re-find window). FIX: both probes now
+gated on a live/recent minigame (`_G.__KakarotMinigameLive` stamp, 30/60 s windows) — the pool is
+never walked across an unrelated title transition. Same pass fixed the two re-read bugs (user):
+fishing yields ~3 s PAST the sheet (lingering HUD re-spoke the phase-1 prompt on "Siguiente"), and
+fishresult forgets `spoken` only after GONE_TICKS=5 of absence (the close flicker re-read the sheet).
+IF A THIRD AV ARRIVES: capture UE4SS.log BEFORE relaunching (it overwrites) — check whether
+"transition gate ON" printed before the AV, and get the AT-Win64-Shipping+0x offset; the durable fix
+is keeping the flush engaged while `Dir.root_ok("mm")` is false >1 tick (opus's option 2).
+
 **2026-07-17 (later): the notices batch CRASHED the game on its first test (fishing) — FIXED.**
 Fatal AV, no Lua traceback: `screen_toasts` evaluated `bar.Txt00` as a function ARGUMENT
 (outside every pcall) and `Info_Log_Bar02_C` has NO `Txt00` — the nonexistent-member fetch

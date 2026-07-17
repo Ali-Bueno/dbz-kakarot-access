@@ -324,23 +324,41 @@ end
 -- (the reported inconsistency). It existed to avoid full per-class scans, which is
 -- ui_core's job now: these classes resolve through the screen directory (pointer
 -- reads), and the scan fallback is budget- and backoff-gated centrally.
+local live_stamp = nil   -- os.clock() while any minigame surface is on screen
+local sheet_seen = nil   -- os.clock() of the last result-sheet sighting
+
 function Fishing.is_active()
     tick = tick + 1
-    -- The minigame is OVER while the result sheet (Mgame_Result_C, read by
-    -- screen_fishresult) is up — but the pooled fishing HUD lingers on_screen
-    -- beneath it. Yield outright: without this, the adapter flip-flop around the
-    -- sheet reset the diff gates and re-spoke stray phase-1 prompts over the
-    -- rewards (same feature, one flow — not a cross-screen yield).
-    local sheet = Core.first_on_screen("Mgame_Result_C", tick)
-    if sheet ~= nil then
-        fish, mash, pop = nil, nil, nil
-        Audio.tone_stop()
-        return false
-    end
     fish = live_on_screen("AT_UIMgameFishing")
     mash = live_on_screen("AT_UIQteMashAlert")
     pop = live_on_screen("AT_UIMiniGamePop")
-    return (fish or mash or pop) ~= nil
+    local any = (fish or mash or pop) ~= nil
+    if any then
+        live_stamp = os.clock()
+        -- Published for screen_fishresult: the result-sheet pool may only be
+        -- probed AROUND a live/recent minigame (see below).
+        _G.__KakarotMinigameLive = live_stamp
+    end
+    -- The minigame is OVER while the result sheet (Mgame_Result_C, read by
+    -- screen_fishresult) is up — but the pooled HUD lingers on_screen beneath
+    -- it and would re-speak the phase-1 prompt. Yield during the sheet AND for
+    -- ~3 s after it (the "Siguiente" close leaves the HUD lingering too — the
+    -- prompt re-read the user heard). The sheet probe itself is GATED on a
+    -- live/recent minigame: Mgame_Result_C is a per-level pool, and probing it
+    -- unconditionally every tick in every state was the prime suspect of the
+    -- 2026-07-17 return-to-title AV (freed pooled widget hit by IsValid during
+    -- world teardown — crash ledger).
+    if any or (live_stamp and os.clock() - live_stamp < 30) then
+        if Core.first_on_screen("Mgame_Result_C", tick) ~= nil then
+            sheet_seen = os.clock()
+        end
+        if sheet_seen and os.clock() - sheet_seen < 3 then
+            fish, mash, pop = nil, nil, nil
+            Audio.tone_stop()
+            return false
+        end
+    end
+    return any
 end
 
 local last_zone = nil
