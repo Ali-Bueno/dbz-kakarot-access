@@ -22,8 +22,11 @@
 --   * Liveness is OPACITY-ONLY: passive overlays render as HitTestInvisible (the
 --     Xcmn_Subtitles precedent), so the strict pane_live visibility==0 gate would
 --     hold every card silent; the opacity check still drops the fade-out ghost.
---   * RECENT_S dedup instead of a single latch: the pooled card swaps texts in
---     place, and a re-shown card may legitimately repeat later.
+--   * APPEARANCE-EDGE dedup (round 3, user bug 2026-07-17: cards re-announced on
+--     every subtitle flip): a card that stays continuously on screen speaks
+--     exactly ONCE — the time-window dedup re-fired on long-lived cards each time
+--     the dispatcher flipped back from a subtitle. A card only re-announces after
+--     it has been GONE for a few ticks (a genuine re-show).
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -38,11 +41,11 @@ Card.nav_mute = false
 -- (keyhelp_watch.lua).
 Card.keyhelp_auto = false
 
-local RECENT_S = 10   -- seconds before an identical card text may re-announce
+local STABLE_TICKS = 2   -- text must hold this many consecutive ticks before speaking
+local GONE_TICKS = 5     -- ticks of absence before a card counts as genuinely gone
 
 local tick = 0
-local prev = {}      -- text -> true (present last tick; stability edge)
-local recent = {}    -- text -> os.time() last spoken
+local seen = {}      -- text -> { first=tick, last=tick, spoken=bool } per appearance
 local queue = nil    -- texts to speak this tick (computed in is_active)
 
 -- Fade-out ghost: opacity drops to 0 while visibility flags lag.
@@ -73,22 +76,26 @@ end
 function Card.is_active()
     tick = tick + 1
     queue = nil
-    local cur = {}
     for _, host in ipairs(Core.cached_all("Info_Name_C", tick)) do
         if Core.valid(host) and Core.on_screen(host) and not faded(host) then
             local t = card_text(host)
-            if t then cur[t] = true end
+            if t then
+                local s = seen[t]
+                if not s or (tick - s.last) > GONE_TICKS then
+                    s = { first = tick, spoken = false }   -- a fresh appearance
+                    seen[t] = s
+                end
+                s.last = tick
+                -- Stable and not yet spoken THIS appearance. `spoken` is set in
+                -- update(), so a pending line survives losing ticks to a subtitle
+                -- and speaks on the first free tick — exactly once.
+                if not s.spoken and (tick - s.first + 1) >= STABLE_TICKS then
+                    queue = queue or {}
+                    queue[#queue + 1] = t
+                end
+            end
         end
     end
-    local now = os.time()
-    for t in pairs(cur) do
-        -- Stable (seen last tick too) and not spoken recently.
-        if prev[t] and (not recent[t] or now - recent[t] >= RECENT_S) then
-            queue = queue or {}
-            queue[#queue + 1] = t
-        end
-    end
-    prev = cur
     -- Active only while there is something new to say; released right after (notice
     -- pattern — the card must never hold the screen).
     return queue ~= nil
@@ -98,9 +105,8 @@ function Card.reset() end
 
 function Card.update()
     if not queue then return end
-    local now = os.time()
     for _, t in ipairs(queue) do
-        recent[t] = now
+        if seen[t] then seen[t].spoken = true end
         Speech.say(t, false)   -- queued: never cuts a subtitle line
     end
     queue = nil

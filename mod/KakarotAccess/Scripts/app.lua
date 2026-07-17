@@ -48,6 +48,11 @@ Registry.register(require("screen_agreement"))
 Registry.register(require("screen_pause"))
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
 -- are time-critical and a subtitle line must not shadow them.
+-- Fishing/minigame "¡BRAVO!" result sheet ABOVE the fishing prompt reader: the
+-- pooled fishing HUD lingers on_screen under the sheet, so registered below it the
+-- rewards never got a tick (user bug 2026-07-17 — they only spoke after "Siguiente"
+-- released the claim). A notice reader, it speaks and releases immediately.
+Registry.register(require("screen_fishresult"))
 Registry.register(require("screen_fishing"))
 -- Dialogue choices sit ABOVE the line reader: when an NPC question shows options,
 -- the choice (prompt + hovered option) must win over the lingering talk line.
@@ -139,7 +144,6 @@ Registry.register(require("screen_field"))
 -- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
 -- level-ups). Any real menu above outranks them.
 Registry.register(require("screen_battleresult"))
-Registry.register(require("screen_fishresult"))   -- fishing/minigame "¡BRAVO!" sheet
 Registry.register(require("screen_toasts"))
 Registry.register(require("screen_title"))
 

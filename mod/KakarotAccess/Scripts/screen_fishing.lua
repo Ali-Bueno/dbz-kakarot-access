@@ -326,6 +326,17 @@ end
 -- reads), and the scan fallback is budget- and backoff-gated centrally.
 function Fishing.is_active()
     tick = tick + 1
+    -- The minigame is OVER while the result sheet (Mgame_Result_C, read by
+    -- screen_fishresult) is up — but the pooled fishing HUD lingers on_screen
+    -- beneath it. Yield outright: without this, the adapter flip-flop around the
+    -- sheet reset the diff gates and re-spoke stray phase-1 prompts over the
+    -- rewards (same feature, one flow — not a cross-screen yield).
+    local sheet = Core.first_on_screen("Mgame_Result_C", tick)
+    if sheet ~= nil then
+        fish, mash, pop = nil, nil, nil
+        Audio.tone_stop()
+        return false
+    end
     fish = live_on_screen("AT_UIMgameFishing")
     mash = live_on_screen("AT_UIQteMashAlert")
     pop = live_on_screen("AT_UIMiniGamePop")
