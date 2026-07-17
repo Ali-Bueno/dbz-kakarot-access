@@ -24,9 +24,11 @@
 --     hold every card silent; the opacity check still drops the fade-out ghost.
 --   * APPEARANCE-EDGE dedup (round 3, user bug 2026-07-17: cards re-announced on
 --     every subtitle flip): a card that stays continuously on screen speaks
---     exactly ONCE — the time-window dedup re-fired on long-lived cards each time
---     the dispatcher flipped back from a subtitle. A card only re-announces after
---     it has been GONE for a few ticks (a genuine re-show).
+--     exactly ONCE. Round 4 (user: still repeated 2-3x per card): absence is
+--     measured in WALL CLOCK, not ticks — the idle-throttled sweep runs ~300 ms
+--     per tick in cinematics and camera cuts hide the card longer than any small
+--     tick window, so a tick-based gap re-armed the same card on every cut. A
+--     card text may only re-announce after GONE_S of genuine absence.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -42,10 +44,11 @@ Card.nav_mute = false
 Card.keyhelp_auto = false
 
 local STABLE_TICKS = 2   -- text must hold this many consecutive ticks before speaking
-local GONE_TICKS = 5     -- ticks of absence before a card counts as genuinely gone
+local GONE_S = 30        -- seconds of absence before a card counts as genuinely gone
+                         -- (cinematic camera cuts hide the card for shorter spans)
 
 local tick = 0
-local seen = {}      -- text -> { first=tick, last=tick, spoken=bool } per appearance
+local seen = {}      -- text -> { first=tick, last=os.clock, spoken=bool } per appearance
 local queue = nil    -- texts to speak this tick (computed in is_active)
 
 -- Fade-out ghost: opacity drops to 0 while visibility flags lag.
@@ -81,11 +84,11 @@ function Card.is_active()
             local t = card_text(host)
             if t then
                 local s = seen[t]
-                if not s or (tick - s.last) > GONE_TICKS then
+                if not s or (os.clock() - s.last) > GONE_S then
                     s = { first = tick, spoken = false }   -- a fresh appearance
                     seen[t] = s
                 end
-                s.last = tick
+                s.last = os.clock()
                 -- Stable and not yet spoken THIS appearance. `spoken` is set in
                 -- update(), so a pending line survives losing ticks to a subtitle
                 -- and speaks on the first free tick — exactly once.
