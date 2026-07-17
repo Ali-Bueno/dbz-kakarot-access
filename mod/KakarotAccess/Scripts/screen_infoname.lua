@@ -33,6 +33,7 @@
 local Core = require("ui_core")
 local A = require("ui_archetypes")
 local Speech = require("speech")
+local Dir = require("ui_directory")
 
 local Card = {}
 
@@ -75,6 +76,12 @@ local function op_of(h)
     return o
 end
 
+local function addr_of(h)
+    local a
+    pcall(function() a = string.format("%x", h:GetAddress()) end)
+    return a and a:sub(-6) or "?"
+end
+
 local function node_text(host, member)
     local t
     pcall(function()
@@ -114,12 +121,16 @@ function Card.is_active()
             n = n + 1
             local on = Core.on_screen(host)
             local fd = faded(host)
-            local t, dbg = nil, nil
-            if on and not fd then t, dbg = card_text(host) end
-            if tr and n <= 3 then
-                tr[#tr + 1] = string.format("h%d on=%s vis=%s op=%s %s",
-                    n, tostring(on), vis_of(host), op_of(host), dbg or "-")
+            -- TRACE round 6: texts are read for the trace REGARDLESS of the gate
+            -- (round-5 trace showed on_screen=false always — the display path is
+            -- invisible to that check, so we must see what parked vs active hosts
+            -- actually hold).
+            local t, dbg = card_text(host)
+            if tr and n <= 4 then
+                tr[#tr + 1] = string.format("h%d@%s on=%s vis=%s op=%s %s",
+                    n, addr_of(host), tostring(on), vis_of(host), op_of(host), dbg or "-")
             end
+            if not (on and not fd) then t = nil end   -- behavior unchanged this round
             if t then
                 local s = seen[t]
                 local fresh = not s or (os.clock() - s.last) > GONE_S
@@ -144,6 +155,18 @@ function Card.is_active()
         end
     end
     if tr then
+        -- The game's own display pointer: fm.InfoName (the AT_UIInfoName container)
+        -- and its InfoCoreCtn (the active AT_UIInfoNameCore) — candidate gate.
+        local ctn = Dir.peek("fm", "InfoName")
+        if Core.valid(ctn) then
+            local core
+            pcall(function() core = ctn.InfoCoreCtn end)
+            tr[#tr + 1] = string.format("CTN@%s on=%s vis=%s op=%s core=%s",
+                addr_of(ctn), tostring(Core.on_screen(ctn)), vis_of(ctn), op_of(ctn),
+                Core.valid(core) and addr_of(core) or "nil")
+        else
+            tr[#tr + 1] = "CTN nil"
+        end
         local line = "cards n=" .. n .. " " .. table.concat(tr, " | ") ..
             (queue and " QUEUED" or "")
         if line ~= last_trace then
