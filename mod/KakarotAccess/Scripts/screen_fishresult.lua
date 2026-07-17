@@ -58,16 +58,31 @@ local function lines(host)
     local name = node_text(host, "TxtName", "Txt_Name")     -- species ("Pescado rojo")
     if name then out[#out + 1] = Core.phrase(cap0, name) end
     local cap1 = node_text(host, "TxtCap01", "Txt_Cap01")   -- "Objetos ganados"
+    -- Obtained-item rows: the native InfoLogBarList TArray (AT.hpp @0x408,
+    -- TArray<UAT_UIInfoLogBar02*>) via the array_of guard; the census tree names
+    -- (Xlist_Bar02_NN) only as fallback, each fetch pcall-guarded.
+    local rows = {}
+    local arr, n = Core.array_of(host, "InfoLogBarList")
+    if arr then
+        pcall(function()
+            for i = 1, n do rows[#rows + 1] = arr[i] end
+        end)
+    end
+    if #rows == 0 then
+        for i = 0, ROW_MAX - 1 do
+            local row
+            pcall(function() row = host[string.format("Xlist_Bar02_%02d", i)] end)
+            if not Core.valid(row) then break end
+            rows[#rows + 1] = row
+        end
+    end
     local first = true
-    for i = 0, ROW_MAX - 1 do
-        local row
-        pcall(function() row = host[string.format("Xlist_Bar02_%02d", i)] end)
-        if not Core.valid(row) then break end
-        if Core.on_screen(row) then
+    for _, row in ipairs(rows) do
+        if Core.valid(row) and Core.on_screen(row) then
             local item = node_text(row, "Txt_List")
             if item then
-                local n = node_text(row, "Txt_Num")
-                local text = n and (item .. ", " .. n) or item
+                local num = node_text(row, "Txt_Num")
+                local text = num and (item .. ", " .. num) or item
                 if first and cap1 then
                     text = cap1 .. ": " .. text
                     first = false

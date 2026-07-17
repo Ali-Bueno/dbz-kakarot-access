@@ -7,7 +7,7 @@
 --   * Info_Log02_C : UAT_UIInfoLog02 — the highlighted log ("¡Gohan alcanzó el
 --     nvl. 7!", skill-tree unlocks — it carries a LevelUpColor + skill-tree icon):
 --     bars Info_Log_Bar_00..04 (Info_Log02.hpp — note the extra underscore), text
---     on the bar's native TextBox (AT_UIInfoLog02Bar 0x3C0), BP twin Txt00.
+--     on the bar's native TextBox (AT_UIInfoLog02Bar 0x3C0) — its ONLY text member.
 --     (The old Info_Log_Level_C loop is gone: that class exists NOWHERE in the
 --     ObjectDump, so level-ups were never announced — user bug 2026-07-17; the
 --     real banner was pinned by the F7 census dump_1784302864_002.)
@@ -67,7 +67,14 @@ local function lines()
                 local bar
                 pcall(function() bar = host["Info_Log_Bar_" .. string.format("%02d", i)] end)
                 if Core.valid(bar) and Core.on_screen(bar) then
-                    local t = node_text(bar.TextBox) or node_text(bar.Txt00)
+                    -- Fetch INSIDE pcall, and TextBox ONLY: Info_Log_Bar02_C
+                    -- reflects TextBox (AT_UIInfoLog02Bar 0x3C0) and has NO Txt00 —
+                    -- a naked `bar.Txt00` argument here was the 2026-07-17 fishing
+                    -- crash (nonexistent-member fetch outside pcall = uncatchable,
+                    -- retried per tick on every blank pooled bar).
+                    local box
+                    pcall(function() box = bar.TextBox end)
+                    local t = node_text(box)
                     if t then out[#out + 1] = t end
                 end
             end
