@@ -372,6 +372,53 @@ function Discover.run()
         end
         out[#out + 1] = ""
 
+        -- Agreement viewer (boot privacy / data-analysis documents): the doc body is
+        -- textures, so the ONLY name for "which document is this" is the brush texture
+        -- of HeadImage/SubjectImage. Press F7 once per document; screen_agreement maps
+        -- the recovered names to localized labels.
+        out[#out + 1] = "==== agreement viewer (AT_UIXcmnAgreement: which doc is up) ===="
+        flush()
+        do
+            -- host via the AT_Title pointer (the shipped adapter's route) + scan fallback.
+            local ag = nil
+            for _, gt in pairs(FindAllOf("Gametitle_C") or {}) do
+                if valid(gt) then
+                    pcall(function()
+                        local actor = gt.ActorTitle
+                        if actor and actor:IsValid() then
+                            local d = actor.AgreementDialog
+                            if d and d:IsValid() then ag = d end
+                        end
+                    end)
+                    if ag then break end
+                end
+            end
+            if not valid(ag) then
+                pcall(function()
+                    local o = FindFirstOf("AT_UIXcmnAgreement")
+                    if valid(o) and not o:GetFullName():find("Default__", 1, true) then ag = o end
+                end)
+            end
+            if valid(ag) then
+                -- NO brush reads here: on this widget Brush.ResourceObject:GetName()
+                -- throws the PIERCING nullptr error (through both pcalls) despite the
+                -- IsValid gate, and killed two whole dumps (2026-07-17, UE4SS.log).
+                -- Doc/page identity comes from Ghidra (tail 0x3E0..0x508) instead.
+                out[#out + 1] = "-- HOST " .. short(ag:GetFullName())
+                    .. "  vis=" .. isvis(ag) .. " enum=" .. vis_enum(ag)
+                pcall(function()
+                    out[#out + 1] = "     HeadImage vis=" .. isvis(ag.HeadImage)
+                        .. "  SubjectImage vis=" .. isvis(ag.SubjectImage)
+                    out[#out + 1] = "     LeftArrow vis=" .. isvis(ag.LeftArrow)
+                        .. "  RightArrow vis=" .. isvis(ag.RightArrow)
+                end)
+            else
+                out[#out + 1] = "  (no live AT_UIXcmnAgreement — press F7 while a document is on screen)"
+            end
+        end
+        flush()
+        out[#out + 1] = ""
+
         out[#out + 1] = "==== all visible on-screen text (plain) ===="
         flush()
         for _, o in pairs(ALLTEXT) do

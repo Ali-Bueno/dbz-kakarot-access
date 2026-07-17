@@ -40,6 +40,11 @@ Registry.register(require("screen_memory"))
 -- full-screen sequence; reads incrementally following the game's reveal animation.
 Registry.register(require("screen_results"))
 Registry.register(require("screen_dialog"))
+-- Boot agreement / privacy policy (AT_UIXcmnAgreement): the first screen after launch.
+-- Below the dialog reader (a confirm popup over it must win), above everything else —
+-- the title menu stays interactive-visible UNDERNEATH it (F7 2026-07-17) and would
+-- otherwise claim the tick and blurt "Main menu" over the agreement.
+Registry.register(require("screen_agreement"))
 Registry.register(require("screen_pause"))
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
 -- are time-critical and a subtitle line must not shadow them.

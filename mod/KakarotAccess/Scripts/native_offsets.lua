@@ -242,6 +242,21 @@ return {
     -- UFunction). ListBarArray is the reflected TArray at 0x3a8 (data) / 0x3b0 (count).
     -- TO FIND: with the game running, diff mem.bytes(pause, 0x438, 0xC8) while moving the
     -- pause cursor and note which int32 steps 0->1->2; set selectedIndex to that offset.
+    -- Boot agreement viewer: UAT_UIXcmnAgreement (class size 0x5E8). The doc/page state
+    -- sits AFTER the reflected ImageTextureMap (0x508), at 0x5A8..0x5BC. CONFIRMED by
+    -- Ghidra (2026-07-17, scripts in code/ghidra/agree_*.java): MouseClickTabRight impl
+    -- FUN_1416eee20 does n=*(this+0x5A8)+1, bounds it against *(this+0x5B0), writes the
+    -- request to 0x5AC; the deferred commit FUN_1416f0030 -> SetPage FUN_141700200 clamps
+    -- and stores 0x5A8 (stable after a flip settles). Texture loader FUN_1416daef0 picks
+    -- the asset-name format by *(this+0x5B4): 0="Eula_%02d", 1="Privacypolicy_%02d",
+    -- 2|3="Kpi_%02d" (3 = the W180 region variant) — i.e. docId names the document.
+    agreement = {
+        page      = 0x5a8,   -- int32, current page, 0-based, committed post-flip  (CONFIRMED)
+        pageWant  = 0x5ac,   -- int32, requested page during the flip animation  (CONFIRMED)
+        pageCount = 0x5b0,   -- int32, page count of the current document  (CONFIRMED)
+        docId     = 0x5b4,   -- int32: 0=EULA, 1=privacy policy, 2|3=KPI / data analysis  (CONFIRMED)
+    },
+
     pause = {
         -- CONFIRMED by runtime diffing (F4 dev tool): int32 at 0x43C steps 0->1->2 and
         -- wraps as you move the battle-pause cursor (3 rows). In the hidden tail 0x438..0x500.
