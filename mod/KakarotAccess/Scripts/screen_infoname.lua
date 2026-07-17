@@ -14,10 +14,16 @@
 -- QUIET_EXEMPT entry in ui_core keeps it scannable mid-cinematic (cards appear
 -- with no press, exactly when quiet mode reigns).
 --
--- Telop pattern: each card speaks ONCE per appearance (dedup while it stays live,
--- forgotten when it leaves), queued so it never cuts a subtitle line. pane_live-
--- gated: the card animates out by fading (OutAnim), and a parked pooled instance
--- keeps its last text.
+-- Read rules (first in-game round, 2026-07-17: only a bare "Goku" was heard):
+--   * ALL on-screen instances are read, not just the first (cards can coexist).
+--   * A card text must be STABLE for 2 consecutive ticks before speaking — the
+--     name and the popular title animate in separately, so a one-tick partial
+--     ("Goku") must never be spoken over the full line.
+--   * Liveness is OPACITY-ONLY: passive overlays render as HitTestInvisible (the
+--     Xcmn_Subtitles precedent), so the strict pane_live visibility==0 gate would
+--     hold every card silent; the opacity check still drops the fade-out ghost.
+--   * RECENT_S dedup instead of a single latch: the pooled card swaps texts in
+--     place, and a re-shown card may legitimately repeat later.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -32,9 +38,18 @@ Card.nav_mute = false
 -- (keyhelp_watch.lua).
 Card.keyhelp_auto = false
 
+local RECENT_S = 10   -- seconds before an identical card text may re-announce
+
 local tick = 0
-local seen = nil      -- card text already spoken while its card stays live
-local pending = nil   -- text to speak this tick (computed in is_active)
+local prev = {}      -- text -> true (present last tick; stability edge)
+local recent = {}    -- text -> os.time() last spoken
+local queue = nil    -- texts to speak this tick (computed in is_active)
+
+-- Fade-out ghost: opacity drops to 0 while visibility flags lag.
+local function faded(h)
+    local ok, op = pcall(function() return h:GetRenderOpacity() end)
+    return ok and type(op) == "number" and op < 0.05
+end
 
 local function node_text(host, member)
     local t
@@ -57,27 +72,38 @@ end
 
 function Card.is_active()
     tick = tick + 1
-    pending = nil
-    local host = Core.first_on_screen("Info_Name_C", tick)
-    if not host or not Core.pane_live(host) then
-        seen = nil
-        return false
+    queue = nil
+    local cur = {}
+    for _, host in ipairs(Core.cached_all("Info_Name_C", tick)) do
+        if Core.valid(host) and Core.on_screen(host) and not faded(host) then
+            local t = card_text(host)
+            if t then cur[t] = true end
+        end
     end
-    local t = card_text(host)
-    if not t or t == seen then return false end
-    pending = t
+    local now = os.time()
+    for t in pairs(cur) do
+        -- Stable (seen last tick too) and not spoken recently.
+        if prev[t] and (not recent[t] or now - recent[t] >= RECENT_S) then
+            queue = queue or {}
+            queue[#queue + 1] = t
+        end
+    end
+    prev = cur
     -- Active only while there is something new to say; released right after (notice
     -- pattern — the card must never hold the screen).
-    return true
+    return queue ~= nil
 end
 
 function Card.reset() end
 
 function Card.update()
-    if not pending then return end
-    seen = pending
-    Speech.say(pending, false)   -- queued: never cuts a subtitle line
-    pending = nil
+    if not queue then return end
+    local now = os.time()
+    for _, t in ipairs(queue) do
+        recent[t] = now
+        Speech.say(t, false)   -- queued: never cuts a subtitle line
+    end
+    queue = nil
 end
 
 return Card

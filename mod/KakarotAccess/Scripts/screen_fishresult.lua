@@ -16,7 +16,11 @@
 --
 -- Notice pattern: each line speaks ONCE per appearance (queued, never interrupting)
 -- and the dispatcher tick is released immediately, so any real menu outranks it.
--- pane_live-gated: a parked pooled sheet keeps stale text (user directive 2026-07-15).
+-- Liveness gate is OPACITY-ONLY: the full pane_live demands GetVisibility()==0
+-- (Visible), but passive overlays in this game render as HitTestInvisible (the
+-- Xcmn_Subtitles precedent) — the strict gate held this sheet silent until the
+-- "Siguiente" press flipped states (user bug 2026-07-17). on_screen already drops
+-- Collapsed/Hidden; the opacity check still drops the fading close-anim ghost.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -35,6 +39,12 @@ local ROW_MAX = 10   -- Xlist_Bar02_00.. probe cap (census showed _00; rows cont
 local tick = 0
 local spoken = {}    -- line -> true while the sheet stays up (cleared on close)
 local queue = nil    -- lines to speak this tick (computed in is_active)
+
+-- Close-animation ghost: opacity fades to 0 while visibility flags lag.
+local function faded(h)
+    local ok, op = pcall(function() return h:GetRenderOpacity() end)
+    return ok and type(op) == "number" and op < 0.05
+end
 
 -- First readable text among the given member names (native vs BP tree spelling).
 local function node_text(owner, ...)
@@ -98,7 +108,7 @@ function FishResult.is_active()
     tick = tick + 1
     queue = nil
     local host = Core.first_on_screen("Mgame_Result_C", tick)
-    if not host or not Core.pane_live(host) then
+    if not host or faded(host) then
         spoken = {}
         return false
     end
