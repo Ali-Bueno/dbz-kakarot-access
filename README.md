@@ -11,6 +11,11 @@ changing how the game plays for everyone else.
 > controller, and the game itself plays far better with one. Keyboard shortcuts exist as extra
 > conveniences, but they are **not** a full substitute. Plug in a controller before you play.
 
+> ### ⚠️ Launch the **normal** version on Steam
+> When you start the game, Steam asks which version to play — **DRAGON BALL Z: KAKAROT HD** and the
+> normal version. The mod only works with the **normal** version, so always choose that one. Tick
+> **"Do not ask again"** in the chooser so Steam launches straight into it every time.
+
 - **Screen-reader output** via **PRISM** (works with NVDA, JAWS and Windows SAPI).
 - **Audio navigation radar** with a directional beacon and arrival cues.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
@@ -114,7 +119,10 @@ If something you need isn't listed, let me know (see the links at the bottom).
 | **L3 + R3** | Open / close the **config menu** |
 | **D-pad ↑↓ / ←→** (config menu) | Move between options / change a value |
 | **D-pad ↓ / ↑** (status sheet) | Step through the stat blocks |
-| **D-pad ↑ / ↓** (world map) | Choose a fast-travel destination |
+| **Select + Y** (world map) | Open zone travel (Y = Triangle) |
+| **D-pad ↑ / ↓** (world map) | Move between zones |
+| **X** (world map) | Travel to the selected zone (X = A on Xbox) |
+| **Left stick** (Community board) | Move around (d-pad support planned, like the map) |
 
 ### Keyboard (optional extras)
 

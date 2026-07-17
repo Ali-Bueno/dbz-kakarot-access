@@ -133,6 +133,10 @@ Set-Content -Path (Join-Path $StageScripts 'build_flags.lua') `
 # 5) version.txt (the installer reads this to know what's installed).
 Set-Content -Path (Join-Path $StageModDir 'version.txt') -Value $Version -Encoding utf8 -NoNewline
 
+# 6) In-mod user manual (ships at Mods\KakarotAccess\README.txt).
+$ReadmeSrc = Join-Path $PSScriptRoot 'mod\KakarotAccess\README.txt'
+if (Test-Path $ReadmeSrc) { Copy-Item $ReadmeSrc (Join-Path $StageModDir 'README.txt') }
+
 # --- zip it --------------------------------------------------------------------
 # Fixed asset name (no version) so /releases/latest/download/KakarotAccess.zip is
 # a stable manual-download link. The version lives in the tag + version.txt.
