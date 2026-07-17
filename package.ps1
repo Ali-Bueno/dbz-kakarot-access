@@ -134,7 +134,9 @@ Set-Content -Path (Join-Path $StageScripts 'build_flags.lua') `
 Set-Content -Path (Join-Path $StageModDir 'version.txt') -Value $Version -Encoding utf8 -NoNewline
 
 # --- zip it --------------------------------------------------------------------
-$Zip = Join-Path $OutDir "$ModName-$Version.zip"
+# Fixed asset name (no version) so /releases/latest/download/KakarotAccess.zip is
+# a stable manual-download link. The version lives in the tag + version.txt.
+$Zip = Join-Path $OutDir "$ModName.zip"
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path (Join-Path $Stage '*') -DestinationPath $Zip -CompressionLevel Optimal
 Remove-Item $Stage -Recurse -Force
