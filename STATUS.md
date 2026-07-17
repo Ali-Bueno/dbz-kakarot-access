@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-16
+**Last updated:** 2026-07-17 (late night — cinematics-perf saga, session ended mid-verify)
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -20,9 +20,9 @@
 | Speech pipeline (PRISM) | done | Logs chosen backend on boot |
 | Overworld main menu (native selection) | done | `screen_field.lua`, reads via `UAT_UIStartTop` offsets |
 | Battle-pause menu (native selection) | done | `screen_pause.lua`, `UAT_UIXCmnPause +0x43C` |
-| Dialog / message / confirm popups | done | `screen_dialog.lua`. VERIFIED 2026-07-16 night after the 21-round saga: per-NODE composition (rendered state via node_rt first, recent-set novelty second, help requires rendered title), row-filtered content folds on titled notices, latched per-appearance choice prompts, transition-epoch clear, emblem reward via the window's own WL_TextCmuCtn. See the Next step closure + git log for the derivation |
+| Dialog / message / confirm popups | done | `screen_dialog.lua`. VERIFIED 2026-07-16 night after the 21-round saga: per-NODE composition (rendered state via node_rt first, recent-set novelty second, help requires rendered title), row-filtered content folds on titled notices, latched per-appearance choice prompts, transition-epoch clear, emblem reward via the window's own WL_TextCmuCtn. See the Next step closure + git log for the derivation. 2026-07-16 night: verbatim-repeat rewards (Milk emblem) rescued by fresh CONTENT ROWS within ~3s of the appearance edge — pending verify |
 | Tutorial guidance line | done | `guide_watch.lua` — the pinned instruction box, read from the RICH side (`Txt_Detail/Txt_Help/Txt_Work` ExMainTxt; plain keeps stale text), every registry tick, F1 repeats. VERIFIED 2026-07-16 night ("oprime Confirmar para…" — abstract Decide glyph spoken as the action) |
-| NPC subtitles / dialogue | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` now gated on the game's OWN subtitles option — `ATSaveSystem.Option.EnableSubtitle` (reflected property read, FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. Pending re-verify with the option off |
+| NPC subtitles / dialogue | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` gated on the game's OWN subtitles option (FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. 2026-07-16 night: the gate read a DEAD TEMPLATE — the object array holds several ATSaveSystem instances (_0/_1 pristine EnableSubtitle=1, _4 = the user's real settings) and first-non-CDO picked _0, so it always read 1. Now resolved through the game's own pointer `UATSaveManager.SaveSystem` @0x108 (AT.hpp:29391), manager cached, pointer re-read per query. Pending verify with the option off |
 | Difficulty / choice lists | done | `screen_choicelist.lua`, `screen_choice.lua` |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua` |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
@@ -44,6 +44,7 @@
 | Radar categories 2.0 (sites/enemies/collectibles) | done | Verified in-game 2026-07-15 (user: "funciona perfecto") |
 | R3 radar target picker (modal) | done | Verified in-game 2026-07-15 together with the categories batch (bind is R3 — early docs said "hold R2", stale) |
 | Battle monitor | wip | `battle_monitor.lua` present |
+| Cinematics / transition fluidity | wip | 2026-07-16 pass, PENDING in-game verify. (1) ui_core QUIET MODE (`Core.set_quiet`, published by ui_registry from the committed adapter's `scan_quiet` flag — set on `screen_dialogue`): steady-state backoff-expiry scans (~65ms each) defer while subtitles/talk own the screen; boost- and watch-driven scans still run. (2) ui_registry IDLE THROTTLE: with no active adapter the ~33-adapter sweep now runs every SWEEP_EVERY (300ms) instead of every tick, except inside a ~1s HOT window after any pad press or screen commit (menu-open latency unchanged). (3) pad_boost no longer opens boost windows while quiet (mashing A through dialogue was a steady scan drip). (4) pad_poll RELAX: 20ms dispatcher drops to every 5th tick (100ms) while `_G.__KakarotPadRelax` (quiet or map transition). (5) nav_tracker's two raw FindAllOf refreshes (navi icons / AT_Character) defer while quiet. (6) screen_loading content() pool walk throttled to ~300ms wall clock. (7) game INI: `HookAActorTick=0`, `HookBeginPlay=0` (mod registers no hooks; needs game RESTART). Verify: cutscenes + menu↔cinematic flips feel smoother; menus still read instantly; subtitles unaffected |
 
 ## Derived facts (so we never re-RE them)
 | Fact | Value | Source |
@@ -67,6 +68,216 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**▶ RESUME HERE (2026-07-17, user went to sleep mid-verify). ALL of tonight's code is ON DISK,
+luac-validated, NOT COMMITTED (user gate: verify first). Rounds 1-13 below are the full story;
+this block is all tomorrow needs.**
+
+**State:** the cinematics-lag saga took the mod from 20% avg game-thread / 2.3 scans/s down to
+~3ms avg / ~0 expected scans. Verified by the user so far: subtitles-OFF stays silent,
+subtitles-ON reads again, Milk-emblem reward reads, big hitches gone. The LAST two fixes
+(round 13) are coded but UNTESTED: (a) emblem-watch gameplay-recency guard (`last_roam_t`,
+30s) — should kill the 3-4s audio mini-cuts; (b) loading-screen regression (recap/tips
+unread) — `Loading_C`/`Xcmn_MultiLineText_C` in QUIET_EXEMPT.
+
+**Tomorrow's checklist (Ctrl+Shift+R is enough — no restart needed):**
+1. Cutscene + the two-Ctrl+F5 ritual (F5 at scene start, ~60s, F5 again): expect
+   `findall scans` ≈ 0 in the second window and NO audio mini-cuts.
+2. A loading screen: story recap + tips must read again.
+3. If mini-cuts persist at scans=0: they're per-spoken-line → NVDA audio ducking
+   (`NVDA+Shift+D`), not the mod.
+4. Regression sweep (all should still work): menus open/read instantly; battle → results
+   announce at battle end; return-to-title → title menu + boot notices read; emblems menu
+   first visit still reads in ~1s (its watch now needs free-roam <30s + a press — the normal
+   flow always satisfies both).
+5. On user OK: turn OFF `SUB_TRACE` (screen_dialogue.lua), then COMMIT the whole batch
+   (quiet mode + world predicate, boost/hot fixes, watch guards, subtitle gate via
+   gi→SaveManager→SaveSystem chain, Milk rows-freshness fix, loading throttle+exemption,
+   pad relax, UE4SS ini hooks off). Suggested commit message: "Make cinematics smooth:
+   engine-state quiet mode, scan-lane guards, live save-system subtitle gate".
+   Still-open items from before tonight (results "222", d-pad board nav) are unchanged.
+**2026-07-17 (round 13): TWO fixes. (a) The watch STILL armed (16 scans ≈ the user's felt
+3-4s audio mini-cuts; log 01:03 shows a FRESH BOOT straight into the cinematic): the
+load-confirm / line-advance presses open hot windows INSIDE the scene and the story level's
+own board widgets read as a handoff — quiet+hot guards passed those arms. New third guard:
+**gameplay recency** — `last_roam_t` (set in Commu.is_active via Core.free_roam) must be
+<30s old to fresh-arm; the emblems menu is only reachable from gameplay, and a
+boot-into-cinematic session has NEVER roamed. (b) LOADING-SCREEN REGRESSION (user: recap/tips
+unread): post-transition state (mm reachable, no minimap, no adapter, no presses) IS the
+quiet state and the transition flush empties the pools — nothing could scan, the loading
+adapter never claimed, quiet never lifted. `Loading_C` + `Xcmn_MultiLineText_C` added to
+QUIET_EXEMPT (nothing-live refinement keeps them free mid-scene). If mini-cuts persist at
+scans=0: next suspect is NVDA audio ducking (per-line game-audio dips are NVDA-side).**
+
+**2026-07-17 (round 12): the exempt-refresh fix held (narrative classes gone from the clean
+window) but the emblem watch STILL armed (19/19 scans): in the line gaps the PARKED community
+board claims the screen (adapter active ⇒ quiet off), so the quiet-only arm guard passed and
+its stale mode-10 read armed the lane. FIX: fresh arms now also require **`Registry.hot()`**
+(new accessor: inside the ~1s press/commit window) — every legit entry signal is press-driven;
+a cutscene has no presses. WATCH ITEM: the parked board CLAIMING mid-cutscene is itself latent
+(could speak board text into a scene — no user report yet; if it happens, gate the commu claim
+on quiet/world state). Expected next clean window: scans = 0.**
+
+**2026-07-17 (round 11): the CLEAN two-dump window (post-world-predicate) measured 27
+scans/62s, all attributed: 20 = TWO SPURIOUS community watch arms mid-cinematic; 7 = the
+QUIET_EXEMPT narrative classes' 30s ALIVE-pool refreshes. Fixes: `watch_grid()` refuses a
+FRESH arm while `Core.scan_quiet()` (every legit entry signal rides a press whose hot window
+lifts quiet); exempt classes bypass quiet ONLY while their pool holds nothing live (an alive
+pool serves detection from cache; its refresh waits out the scene). Subs-ON re-read
+VERIFIED in the log (00:44 lines). Expected next clean window: scans ≈ 0. Then SUB_TRACE
+off + commit. NOTE the residual floor after this: the registry sweep's walk cost (~3.5ms
+avg step) + one exempt scan only when a narrative pool is genuinely dead/absent.**
+
+**2026-07-17 (round 10): SUBTITLES-OFF GATE VERIFIED by the user (reader silent, big hitches
+gone; subs-ON re-read still unverified) — and the 21:37 dump exposed the LAST hole: 666
+scans/109s again, because silencing the dialogue adapter KILLED the dialogue-grace signal the
+cutscene-quiet relied on, and free-roam-seen never arms on the user's load-into-cinematic
+saves. FINAL DESIGN — no session-history heuristics: quiet (no-adapter branch) =
+`Dir.root_ok("mm")` (new ui_directory accessor: the gameplay GameMode's MenuManager root
+exists ONLY in playable worlds, never at boot/title) AND no battle HUD AND no minimap AND not
+hot. Plus a BATTLE-END hot window (battle_hud_live falling edge → 3s of scans) so the
+event-less results screens still read on their own. seen_free_roam / DIALOGUE_GRACE_S
+removed. VERIFY: cutscene → F5 → scans ≈0 (only QUIET_EXEMPT strays), mini-hitches gone;
+menus snappy; battle → results still announce; title screen still reads after
+return-to-title; subs ON → lines read again. Then SUB_TRACE off + commit the whole batch.**
+
+**2026-07-17 (round 9): THE 00:28 DUMP ANSWERED EVERYTHING — two fixes, pending verify.**
+(1) SUBTITLES-OFF: lines confirmed from `Xcmn_Subtitles_C` (vis=3 HitTestInvisible, pane_live
+false — NOT a usable discriminator since that's likely its normal rendered state) and the probe
+showed TWO SaveManagers (_0 → template ATSaveSystem_1 with defaults, _2 → the real _4): every
+"first instance" pick is a trap. Gate now walks the game's OWN chain, pure pointer reads:
+**gi root → `UAT_GameInstance.SaveManager` @0x1EA0 (AT.hpp:30078) → `.SaveSystem` @0x108 →
+`Option.EnableSubtitle`** via `Dir.peek("gi","SaveManager")`, re-resolved per query, fail-open.
+(2) STUTTER RESIDUE: 14 scans/12s DURING the scene — cutscene-quiet never armed because the
+user's save loads DIRECTLY into a paused cinematic (free roam never seen); the gaps between
+lines ran backoff scans. The user's "smooth second after Ctrl+F5" nailed it: the dump's own
+census FindAllOfs serve every backoff → ~4s scan-free. FIX: `DIALOGUE_GRACE_S=10` — a gap
+within 10s of a scan_quiet adapter inherits quiet (cleared on transition). Loops all measured
+innocent now (battle 0.21ms, quest 0.20ms, nav 0.04ms, speech 0.5ms avg). VERIFY (Ctrl+Shift+R):
+subs-off cutscene → NO subtitle speech (no `line src=` lines in the log), smooth scene, F5
+during it shows scans ≈ 0. Then: SUB_TRACE off, commit. If subs ON: lines must still read.**
+
+**2026-07-17 (round 8): the manager-resolved gate STILL reads EnableSubtitle=1 (log 00:22)
+while instance _4 holds the user's real 0 — and the user still feels the cinematic stutter.
+INSTRUMENTED THE FINAL BLIND SPOTS (all hot-reloadable): (1) `SUB_TRACE` in screen_dialogue —
+one log line per NEW spoken line: source surface (Xcmn_Subtitles_C = gate broken vs
+Field_Talk_Win_C = never gated by design), instance name, vis/opacity/pane_live — decides
+both the right gate and whether pane_live discriminates option-off; TURN OFF after. (2) F5
+probe now prints every ATSaveManager → which ATSaveSystem it points to, and every
+Xcmn_Subtitles_C instance's render state. (3) battle_monitor + quest_objective step timing
+(__KakarotBattleStats/__KakarotQuestStats, printed by the dump) — the last unmeasured
+game-thread loops. NEXT DUMP during a subs-off cutscene answers: who speaks the lines, the
+correct save-system chain (else Ghidra/opus: who READS Option+0x1C in the subtitle path), and
+whether any loop still costs. If the trace shows Field_Talk_Win_C carrying CUTSCENE lines,
+the fix is gating that surface too during cutscene states (respecting its never-gate role in
+normal NPC talk).**
+
+**2026-07-16 (night, round 7): BOOST-STORM FIX VERIFIED BY NUMBERS (scans 6.4/s → 0.13/s,
+avg step 3.71ms) — and the SUBTITLES-OFF bug SOLVED by the probe.** The 21:17 dump showed
+THREE ATSaveSystem instances: _0/_1 pristine templates (EnableSubtitle=1, volumes 10) and _4
+with the user's REAL settings (EnableSubtitle=0, VolumeBgm=6) — the gate's first-non-CDO pick
+read the dead template forever. FIX: resolve through `UATSaveManager.SaveSystem` @0x108
+(AT.hpp:29391, the game's own pointer; manager cached, pointer re-read per query, fail-open
+kept). With the option off the reader goes INERT in cutscenes (no lines → no commits → pure
+quiet → NVDA silent), which is also the remaining felt-stutter fix for this user. Remaining
+scan residue in the window: Xcmn_Win00_Choice_C/Xcmn_Win01_List_C n=14 each (alive-pool 30s
+refreshes, outside quiet moments) + QTE n=4 — small. IF stutter persists with subs off and
+scans ≈0: instrument battle_monitor/quest_objective loops next (still unmeasured), then
+re-run the mods.txt A/B against the CURRENT code. gamestate Subtitles/InMenuSubtitles probe
+read null — GameState route discarded.**
+
+**2026-07-16 (night, round 6): THE CINEMATIC STUTTER, FOUND AND FIXED (pending verify) — it
+was the COMMIT-BOOST STORM, and speech is CLEARED.** The in-cinematic dump (21:11): speech
+calls n=43 total 10ms (hypothesis dead); `findall scans n=572/90s, avg step 34ms` — quiet was
+not acting because the subtitles adapter commits IN on every line and OUT in every gap, and
+EVERY commit called `Core.boost_missing()` → fresh boost generation → one scan per absent
+class (~15) every ~2s, and boost bypasses quiet BY DESIGN. FIX: a commit whose two sides are
+nil-or-`scan_quiet` (dialogue cadence, not menu navigation) no longer boosts nor sets the hot
+window. Also: the registry's own `battle_hud_live` probe was scanning the absent HUD class
+every backoff (n=24) — new scan-free `Core.peek_all` (directory-or-cached-pool, never scans).
+SUBTITLES-OFF BUG (user: option off, lines still read; gate logs EnableSubtitle=1): probe
+added to the Ctrl+F5 dump — every ATSaveSystem's Option slice (volumes cross-check a shifted
+layout) + AATGameState.Subtitles/InMenuSubtitles (0x590/0x598, AT.hpp:14685) render state.
+VERIFY: cutscene with subs off → Ctrl+F5 → expect scans ≈0, and the savesys/gamestate lines
+pick the correct gate. Menu flips (dialogue→pause, nil→menu) still boost — check menus stay
+snappy.**
+
+**2026-07-16 (night, round 5): THE A/B VERDICT — `KakarotAccess : 0` = "súper fluidas" (user).
+So the residual cinematic stutter IS this mod — yet the registry step measures only ~5% of the
+game thread, meaning the cost lives OUTSIDE what Ctrl+F5 measured. Prime suspect (unique to
+cinematics being speech-dense): every `prism.say` runs SYNCHRONOUSLY ON THE GAME THREAD
+(speech.lua → prism_bridge → NVDA IPC/SAPI) — a slow backend call = one hitch per subtitle
+line, invisible to scan/step stats (say happens inside the step, but its cost was never
+attributed). INSTRUMENTED, not yet fixed: `timed_say` in speech.lua (`__KakarotSpeechStats`) and
+the nav loop's own step timing (`__KakarotNavStats`), both printed by the Ctrl+F5 dump
+("speech calls: …" / "nav step ms: …"). speech.lua does NOT hot-reload → needs the full restart
+the user must do anyway (mods.txt back to 1). NEXT: user plays a cutscene → Ctrl+F5 → if
+`speech calls` shows max/avg in the tens of ms, the fix is making prism_bridge ASYNC internally
+(C-side worker thread queue: speak() copies the string and returns; the worker calls PRISM) —
+a DLL rebuild + restart. If speech is cheap, instrument battle/quest loops + audio_bridge next.**
+
+**2026-07-16 (night, round 4): WHOLE-CUTSCENE QUIET — CODED, pending verify. Milk fix
+VERIFIED by the user ("ya se lee"). The round-3 residue was named by the per-class dump
+(~0.4 scans/s during the cinematic: AT_UIQteMashAlert n=12, Map_World_Icon_C, the community
+trio, AT_UIStartDragonBallMenu, Gametitle_C, choice windows — all MENU classes that cannot
+appear in a cutscene without a press). Change: quiet now also engages with NO active adapter
+when free roam has been seen since the last transition AND the minimap is hidden AND the
+battle HUD (directory-mapped, pointer reads) is not live. Guards: any fresh press lifts it
+for the ~1s hot window (skip confirm, results advance); `QUIET_EXEMPT` in ui_core keeps the
+auto-appearing narrative classes on the normal net (Xcmn_Subtitles_C, Field_Talk_Win_C,
+Quest_Main_Telop_C, Xcmn_Win01_C); `seen_free_roam` resets on transition so boot/title and
+travel→cutscene sequences keep their scans. Expected next dump during a cutscene: scans ≈ 0.
+Verify also: battle results still read at battle end (press A advances them anyway), boot
+notices still read.**
+
+**2026-07-16 (night, round 3): MEASURED AFTER THE FIXES — `ui step ms: max=175 avg=3.72 over
+3529 ticks`, `findall scans: n=59 total_ms=4569` (~6 min incl. a cutscene, after Ctrl+Shift+R).
+avg 20.0→3.72 ms (5.4×), scans 2.3/s→0.17/s (14×). The per-class list is just the post-reload
+cache rebuild (n=1 per class) + AT_UIQteMashAlert n=3 — no steady offender left. Remaining
+residue: one ~70-100ms hitch per scan tick, worst tick 175ms (a 2-scan tick, SCANS_PER_TICK=2 —
+left alone, the "NOT 1" note predates the directory but stays respected until a longer session
+argues otherwise). User verdict: "algo mejor". NEXT: (a) A/B — `KakarotAccess : 0` in mods.txt
+for one cutscene: if it still stutters, the residue is UE4SS/game baseline, not us; (b) a LONGER
+session Ctrl+F5 for a real top-offenders list before touching anything else.**
+
+**2026-07-16 (night, round 2): THE Ctrl+F5 NUMBERS — the mod is still heavy, and now it's
+measured.** User's dump (24-min session): `ui step ms: max=518 avg=20.00 over 14226 ticks`
+(≈20% of the game thread steady, half-second spikes) and `findall scans: n=3310
+total_ms=225612 avg=68.2` (≈2.3 scans/s sustained — ~90 were the community watch bursts,
+the other ~3200 are SILENT absent-class backoff scans). Three changes shipped tonight:
+(1) **community watch storm fixed** — `maintain_wait` renewed for up to 30s in states with
+no minimap and no battle HUD, i.e. straight through cutscenes (the 23:44 log storm);
+now also cancels when the active adapter is the subtitles/cutscene one (`scan_quiet`) and
+`WAIT_RENEW_S` 30→15. (2) **Per-class scan attribution** in `timed_findall`
+(`__KakarotScanStats.by`) + the Ctrl+F5 dump prints the top-12 classes by total ms.
+(3) The Ctrl+F5 census nullptr in the log (nav_tracker:2732) is the dump's own pcall'd
+probe — harmless noise, ignore. **NEXT SESSION: play ~10 min incl. a cutscene, Ctrl+F5,
+read the `scan <class> n= ms=` lines — then directory-map (or slow the backoff of) the top
+offenders. That list is the path to getting avg step ms into single digits.** All hot-reloadable.
+
+**2026-07-16 (night): MILK-EMBLEM SILENT REWARD — FIXED, pending in-game verify.** User: the
+Milk soul-emblem reward notice never read (everything else fine). Cause (structural, no trace
+needed): a SECOND emblem reward in the same notice epoch repeats Txt_Title AND Txt_Help
+VERBATIM ("Emblemas de alma recibidos" / "Recibiste los siguientes…") — both recently marked,
+so `fresh_notice` returned nil and the notice never activated; the only NEW text (the emblem
+row: "Milk, nivel de comunidad N") lives in the CONTENT ROWS, which never counted as freshness.
+FIX in screen_dialog: for ~3s after the window's APPEARANCE EDGE (off→on, tracked via
+`was_on`/`appear_t`; never on the parked steady state — the rows walk isn't free), a rendered
+title + any fresh plates()/emblems_received() row makes the notice fresh (composed = the stale
+title; update() folds the fresh rows, recently-spoken rows still drop). The fold latch
+(notice_msg/notice_full) clears on the appearance edge so two consecutive rows-only rewards
+can't reuse a stale fold. Verify: receive two emblems without a map travel between them — both
+read title + emblem name. Session log also showed the community WAIT_RENEW watch bursts
+(pairs of 65ms scans every ~350ms for 3-5s per burst, bounded by design) — known cost, left alone.
+
+**2026-07-16 (later): CINEMATICS-LAG PASS — CODED, pending in-game verify.** See the new
+"Cinematics / transition fluidity" row for the seven changes (quiet mode, idle sweep throttle,
+no boost while quiet, pad relax, nav rescan deferral, loading throttle, UE4SS ini hooks off).
+All Lua is luac-validated and hot-reloadable EXCEPT the INI change (full game restart).
+Verify: play a story cutscene (subtitles keep reading, no stutter), skip-confirm still reads,
+menus still open/read instantly after a press, radar resumes after dialogue ends.
+
+
 **2026-07-16 NIGHT: the whole dialog saga (rounds 1-21 below) is VERIFIED by the user and
 COMMITTED — "el resto funcionó perfectamente".** What shipped, in one breath: notices/prompts on
 the pooled Xcmn windows are composed by PER-NODE liveness — rendered state (node_rt/on_screen)

@@ -51,6 +51,23 @@ local function speak_seconds(text)
     return math.min(6.0, 0.5 + #tostring(text) / 14)
 end
 
+-- Cost telemetry (2026-07-16 night: mods.txt A/B proved the residual cinematic stutter
+-- IS this mod, while the registry step measures only ~5% — something unmeasured). Every
+-- prism_bridge call runs ON THE GAME THREAD, and cinematics are the densest speech
+-- state: if the backend (NVDA IPC / SAPI) blocks for tens of ms per call, every
+-- subtitle line is a felt hitch. This times each call into _G.__KakarotSpeechStats
+-- (printed by the Ctrl+F5 dump) so the next dump confirms or clears it with data.
+local function timed_say(text, interrupt)
+    local t0 = os.clock()
+    prism.say(text, interrupt)
+    local dt = (os.clock() - t0) * 1000
+    local s = _G.__KakarotSpeechStats
+    if not s then s = { n = 0, ms = 0, max = 0 } _G.__KakarotSpeechStats = s end
+    s.n = s.n + 1
+    s.ms = s.ms + dt
+    if dt > s.max then s.max = dt end
+end
+
 -- Queued (interrupt=false) lines the backend may not have FINISHED speaking yet. An
 -- interrupt=true say clears the reader's whole queue — which silently killed pickup
 -- toasts ("Hierba x 1", orbs) whenever a subtitle line landed at the same time (user
@@ -77,7 +94,7 @@ function Speech.say(text, interrupt)
     interrupt = interrupt ~= false
     if DEBUG_LOG then log_say(text, interrupt) end
     if not interrupt then
-        prism.say(text, false)
+        timed_say(text, false)
         pending[#pending + 1] = { text = text, until_ = os.clock() + speak_seconds(text),
                                   requeues = 0 }
         return
@@ -85,12 +102,12 @@ function Speech.say(text, interrupt)
     prune_pending()
     local cut = pending
     pending = {}
-    prism.say(text, true)
+    timed_say(text, true)
     local base = os.clock() + speak_seconds(text)
     for _, p in ipairs(cut) do
         if p.requeues < REQUEUE_MAX and p.text ~= text then
             if DEBUG_LOG then log_say("(requeue) " .. p.text, false) end
-            prism.say(p.text, false)
+            timed_say(p.text, false)
             p.requeues = p.requeues + 1
             p.until_ = base + speak_seconds(p.text)
             pending[#pending + 1] = p

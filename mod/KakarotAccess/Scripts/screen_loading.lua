@@ -47,6 +47,7 @@ end
 -- the log names the state we must gate on instead.
 local LOAD_DEBUG = false
 local last_active = false
+local next_content = 0   -- wall-clock throttle for the pool walk in content()
 local function trace(active)
     if not LOAD_DEBUG or active == last_active then return end
     last_active = active
@@ -66,7 +67,15 @@ function Loading.is_active()
     -- non-Visible ESlateVisibility, which pane_live rejects by design. The trace stays
     -- to characterize the pane's states if it ever misbehaves.
     if not Core.on_screen(loadC) then cached = nil trace(false) return false end
-    cached = content()
+    -- content() walks the WHOLE Xcmn_MultiLineText_C pool (GetFullName per on-screen
+    -- entry) and used to run per poll for the entire load — exactly while the game
+    -- thread is streaming a level. The recap/tip text changes on the order of
+    -- seconds, so re-reading every ~300ms (wall clock: the poll cadence varies with
+    -- the idle throttle) loses nothing (cinematics-lag pass, 2026-07-16).
+    if os.clock() >= next_content then
+        cached = content()
+        next_content = os.clock() + 0.3
+    end
     trace(cached ~= nil)
     return cached ~= nil
 end

@@ -165,6 +165,14 @@ local function timed_findall(cls_name)
     s.n = s.n + 1
     s.ms = s.ms + dt
     if dt > s.max then s.max = dt end
+    -- Per-class attribution (2026-07-16: a Ctrl+F5 measured 3310 scans / 225s total in
+    -- one session with no way to tell WHICH classes drained it). The dump prints the
+    -- top offenders so they get directory-mapped or re-tuned with data, not guesses.
+    if not s.by then s.by = {} end
+    local b = s.by[cls_name]
+    if not b then b = { n = 0, ms = 0 } s.by[cls_name] = b end
+    b.n = b.n + 1
+    b.ms = b.ms + dt
     return r
 end
 
@@ -250,6 +258,38 @@ local function scan_allowed()
     scan_budget = scan_budget - 1
     return true
 end
+
+-- Cinematic quiet mode (ui_registry sets it each tick from the committed adapter):
+-- while a passive overlay that coexists with heavy engine work owns the screen
+-- (cutscene subtitles, the NPC talk window), STEADY-STATE scans are deferred — a
+-- backoff expiring mid-cutscene must not cost a ~65ms FindAllOf exactly when the
+-- game thread is busiest (the cinematics-lag pass, 2026-07-16). Event-driven scans
+-- keep running: the boost window (a press/commit means a real screen may be
+-- appearing) and the watch lane (an armed entry signal). Deferred classes simply
+-- retry when quiet lifts — no backoff is written, so nothing is pushed out.
+local quiet_mode = false
+function Core.set_quiet(q) quiet_mode = q and true or false end
+function Core.scan_quiet() return quiet_mode end
+
+-- Auto-appearing NARRATIVE surfaces stay outside quiet mode: they open with no user
+-- press (a cutscene's first subtitle, an NPC talk window, an area telop, a notice),
+-- so quiet deferral would silence exactly what a cinematic must keep reading. Their
+-- cost is bounded: pooled-alive after first sight (30s refresh), absent only right
+-- after a transition. Every other class CAN wait for a press (the hot window lifts
+-- quiet) or an entry-signal watch.
+local QUIET_EXEMPT = {
+    ["Xcmn_Subtitles_C"]     = true, -- cutscene/voice subtitles (screen_dialogue)
+    ["Field_Talk_Win_C"]     = true, -- NPC talk window (screen_dialogue)
+    ["Quest_Main_Telop_C"]   = true, -- area/quest telop banners (screen_telop)
+    ["Xcmn_Win01_C"]         = true, -- notice window (boot notices, rewards — screen_dialog)
+    -- Loading screens: the post-transition state (mm reachable, no minimap, no
+    -- adapter, no presses) IS the quiet state, and the transition flush empties
+    -- these pools — without the exemption nothing could scan, the loading adapter
+    -- never claimed, and the story recap/tips went UNREAD (user regression,
+    -- 2026-07-17). Nothing-live refinement keeps them free during cutscenes.
+    ["Loading_C"]            = true, -- the loading/recap host (screen_loading)
+    ["Xcmn_MultiLineText_C"] = true, -- the text pool its content() reads
+}
 
 -- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from
 -- the same per-tick budget as FindAllOf — one shared cap on scan work per tick.
@@ -457,6 +497,11 @@ function Core.cached_live(cls_name, tick)
         end
         boosted = true
     end
+    -- Quiet mode: a plain backoff-expiry scan waits for quiet to lift; a boost-window
+    -- scan (user action) keeps its claim, and the narrative classes are exempt.
+    -- Deferred = retry next tick, like a budget miss.
+    if quiet_mode and not QUIET_EXEMPT[cls_name] and not boosted
+        and tick >= boost_until then return nil end
     if not scan_allowed() then return nil end   -- budget spent: defer, retry next tick
                                                 -- (boost credit NOT consumed yet)
     if boosted then boosted_gen[cls_name] = boost_gen end
@@ -602,7 +647,17 @@ function Core.cached_all(cls_name, tick)
         -- Honour the per-tick scan budget (see Core.cached_live): if it's spent, reuse
         -- the stale list (or {} on first sight) and try the refresh on a later tick.
         -- Callers already validity/visibility-check every entry, so stale is harmless.
-        if scan_allowed() then
+        -- Quiet mode defers plain backoff-expiry scans the same way; boost- and
+        -- watch-driven scans (user action / entry signal) keep their claim. An
+        -- EXEMPT class bypasses quiet ONLY while its pool holds nothing live:
+        -- first detection must never wait, but an ALIVE pool already serves
+        -- detection from cache, and its 30s refresh can wait out the scene (those
+        -- refreshes were the residual cutscene hitches — Subtitles/Talk/Telop at
+        -- ~75ms each in the 2026-07-17 clean dump).
+        local exempt_due = QUIET_EXEMPT[cls_name] and not (c and any_valid(c))
+        local allowed = boost_due or watch_due or not quiet_mode
+            or exempt_due or tick < boost_until
+        if allowed and scan_allowed() then
             if boost_due then boosted_gen[cls_name] = boost_gen end
             if watching then watch_next[cls_name] = tick + WATCH_EVERY end
             c = timed_findall(cls_name)
@@ -647,6 +702,17 @@ function Core.cached_all(cls_name, tick)
         end
     end
     return c
+end
+
+-- Scan-free peek: the directory list if the class is mapped and its root reachable,
+-- else whatever the cached pool holds — NEVER triggers a scan or touches backoffs.
+-- For per-tick predicates (the registry's cutscene gate) that must not cost anything:
+-- a probe that scans would defeat the very quiet it computes (the Battle_Hud_P_Main_C
+-- n=24 lesson, dump 2026-07-16 21:11).
+function Core.peek_all(cls_name)
+    local d = directory_list(cls_name)
+    if d then return d end
+    return all_cache[cls_name] or {}
 end
 
 -- REMOVED (2026-07-14): the event-driven cache feed (NotifyOnNewObject → stash → drain).

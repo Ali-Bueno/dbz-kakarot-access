@@ -328,6 +328,17 @@ function Directory.peek(root_key, field)
     return prop(g(), field)
 end
 
+-- Is a root currently reachable? The `mm` root (the gameplay GameMode's MenuManager)
+-- exists ONLY in playable worlds — never at boot/title — which makes it the honest
+-- "this is a gameplay world" predicate for the registry's cutscene-quiet gate
+-- (2026-07-17: every session-history heuristic — free-roam-seen, dialogue grace —
+-- broke on saves that load DIRECTLY into a cinematic).
+function Directory.root_ok(root_key)
+    local g = getters[root_key]
+    if not g then return false end
+    return Core.valid(g())
+end
+
 -- Map switch: the PlayerController, HUD and MenuManager die with the level. Drop
 -- everything (the GameInstance root survives but one re-find after a load is cheap).
 Transition.on_begin("ui_directory", function()

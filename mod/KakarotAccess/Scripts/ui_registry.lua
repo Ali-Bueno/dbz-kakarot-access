@@ -34,6 +34,49 @@ local pending, pending_n = nil, 0
 local SWEEP_EVERY = 3
 local tick_n = 0
 
+-- Idle-sweep hot window (cinematics-lag pass, 2026-07-16). With nothing active the
+-- sweep used to run EVERY tick — free-roam paid the full ~33-adapter probe at 100ms,
+-- and so did every camera cutscene (no adapter active while the game thread is at its
+-- busiest). Now the idle sweep also runs every SWEEP_EVERY ticks, EXCEPT inside a hot
+-- window (~1s after any fresh pad press, or after a screen commit): those are the only
+-- instants a user-opened menu can be appearing, so open latency is unchanged. Only
+-- event-less appearances (a dialog the game opens on its own) can detect up to ~200ms
+-- later — within the reader's existing CONFIRM_TICKS envelope.
+local HOT_TICKS = 10
+local hot_until = 0
+
+-- Whole-cutscene quiet (2026-07-16 night, the per-class Ctrl+F5 dump): the classes
+-- still scanning through a cinematic were all MENU screens that cannot appear there
+-- without a press (community trio, dragon-ball menu, map icons, title, choice
+-- windows) — one ~73ms hitch every ~2.5s. A camera cutscene shows no active adapter,
+-- no minimap and no battle HUD: treat that whole state as quiet. Guards: any fresh
+-- press lifts it for the hot window (skip confirms), ui_core exempts the
+-- auto-appearing narrative classes (subtitles/talk/telop/notice), and it engages
+-- ONLY in a gameplay world — `Dir.root_ok("mm")`, the gameplay GameMode's own
+-- MenuManager root, unreachable at boot/title — so title/boot detection keeps its
+-- scans. (2026-07-17: this world predicate replaced two broken session-history
+-- heuristics, free-roam-seen and a dialogue grace: neither armed on saves that load
+-- DIRECTLY into a paused cinematic — the 666-scans/109s dump — and the grace
+-- additionally died the moment the subtitles-off gate silenced the very dialogue
+-- adapter it keyed on.)
+local Dir = require("ui_directory")
+
+-- Battle-end hot window: the results screens appear EVENT-LESS right as the battle
+-- HUD leaves (no press, no minimap yet) — exactly when quiet would engage. The
+-- falling edge opens a scan window so they read on their own.
+local prev_battle = false
+
+-- Scan-free on purpose (Core.peek_all): this runs per tick while no adapter is
+-- active, and its cached_all form was itself scanning the absent HUD class every
+-- backoff through the cinematic (n=24 in the 21:11 dump) — a probe must never cost
+-- what it exists to prevent. In a real battle the directory ({"bm"}) serves the HUD.
+local function battle_hud_live()
+    for _, w in ipairs(Core.peek_all("Battle_Hud_P_Main_C")) do
+        if Core.valid(w) and Core.on_screen(w) then return true end
+    end
+    return false
+end
+
 -- Menu-open boost from the PAD. The registry's commit boost cannot see ring→submenu:
 -- the ring/pause stays visible (and active) under the submenu, so no screen change ever
 -- commits and a scan-path submenu waits out its full backoff (the "items/emblems take
@@ -63,7 +106,14 @@ local function pad_boost()
     if not snap then return end
     local fresh = snap.buttons & ~prev_btn
     prev_btn = snap.buttons
-    if active ~= nil and (fresh & BOOST_BTNS) ~= 0 and tick_n >= boost_cool then
+    if fresh ~= 0 then hot_until = tick_n + HOT_TICKS end
+    -- No boost while a quiet overlay owns the screen (subtitles): mashing A through
+    -- dialogue is "advance the line", not "open a menu" — each press used to open a
+    -- boost window and re-scan every missing pool once per window, a steady scan
+    -- drip exactly during cutscenes. The windows a dialogue CAN open (skip confirm,
+    -- choices) live on pooled, already-cached widgets — no scan needed to see them.
+    if active ~= nil and not active.scan_quiet
+        and (fresh & BOOST_BTNS) ~= 0 and tick_n >= boost_cool then
         boost_cool = tick_n + BOOST_COOLDOWN
         Core.boost_missing()
     end
@@ -88,6 +138,9 @@ local function step()
         if active and active.reset then active.reset() end
         active, pending, pending_n = nil, nil, 0
         KeyhelpWatch.screen_changed(nil)
+        -- Map load in progress: the game thread is at its busiest — relax the 20ms
+        -- pad dispatcher too (pad_poll reads this global at its own cadence).
+        _G.__KakarotPadRelax = true
         return
     end
 
@@ -98,6 +151,12 @@ local function step()
         -- Sticky fast path: the active screen is still up → keep it, poll nobody else.
         -- The moment it stops being active, fall through to a full sweep THIS tick.
         cur = active.is_active() and active or sweep()
+    elseif active == nil and pending == nil and tick_n > hot_until
+        and tick_n % SWEEP_EVERY ~= 0 then
+        -- Idle throttle (see HOT_TICKS): nothing active, no switch being confirmed,
+        -- no recent press — skip the sweep this tick. cur == active (nil), so the
+        -- commit logic below is a no-op and GuideWatch still runs.
+        cur = nil
     else
         cur = sweep()
     end
@@ -114,6 +173,7 @@ local function step()
         if pending_n < need then return end
         -- Context change confirmed: reset both so nothing leaks across the switch and the
         -- newly focused screen announces its current control fresh.
+        local prev = active
         if active and active.reset then active.reset() end
         if cur and cur.reset then cur.reset() end
         active, pending, pending_n = cur, nil, 0
@@ -137,10 +197,39 @@ local function step()
         -- A screen just opened or closed — the one moment a not-yet-cached submenu may be
         -- appearing (ring → items, items → detail, close → reopen). Let missing pools skip
         -- their backoff for a short window so the new screen reads at once (ui_core).
-        Core.boost_missing()
+        -- EXCEPT quiet flips (2026-07-16 night, THE cinematic stutter): the subtitles
+        -- adapter commits IN on every line and OUT in every gap, and each commit
+        -- re-armed a fresh boost generation — one scan per absent class every ~2s for
+        -- the whole cinematic (measured: 572 scans/90s, avg step 34ms, dump 21:11).
+        -- A flip between nil and a scan_quiet adapter (either direction) is dialogue
+        -- cadence, not menu navigation — no boost, no hot window. Real menu flips
+        -- (dialogue → pause, nil → menu) keep the boost.
+        local flip_quiet = (prev == nil or prev.scan_quiet == true)
+            and (cur == nil or cur.scan_quiet == true)
+        if not flip_quiet then
+            Core.boost_missing()
+            hot_until = tick_n + HOT_TICKS   -- a follow-up screen may appear right after
+        end
     else
         pending, pending_n = nil, 0
     end
+
+    -- Cinematic quiet gate: while the committed adapter is a passive overlay that
+    -- rides on top of heavy engine work (subtitles/talk window sets scan_quiet) —
+    -- or the whole camera-cutscene state (see the world predicate above) — ui_core
+    -- defers steady-state scans and the 20ms pad dispatcher relaxes.
+    local quiet = (active ~= nil and active.scan_quiet == true) or false
+    if not quiet and active == nil then
+        local battle = battle_hud_live()
+        if battle ~= prev_battle then
+            prev_battle = battle
+            if not battle then hot_until = tick_n + HOT_TICKS * 3 end
+        end
+        quiet = Dir.root_ok("mm") and not battle and tick_n > hot_until
+            and not Core.free_roam(tick_n)
+    end
+    Core.set_quiet(quiet)
+    _G.__KakarotPadRelax = quiet
 
     if active then
         active.update()
@@ -162,6 +251,8 @@ end
 function Registry.stop()
     enabled = false
     KeyhelpWatch.screen_changed(nil)   -- reader off: nothing pending, nothing remembered
+    Core.set_quiet(false)              -- never leave the scan/pad throttles latched on
+    _G.__KakarotPadRelax = false
 end
 
 function Registry.is_enabled() return enabled end
@@ -169,6 +260,13 @@ function Registry.is_enabled() return enabled end
 -- The currently active screen adapter (nil while free-roaming). The nav tracker
 -- gates its audio cues on this: a menu/dialog owning the screen silences the radar.
 function Registry.active_adapter() return active end
+
+-- Inside the hot window (~1s after a fresh pad press or a screen commit)? Every
+-- legit "a screen is being opened right now" signal rides one — entry-signal watch
+-- arms require this, so a stale pointer read mid-cutscene can never arm a scan lane
+-- (the 21:57 clean dump: a parked community board claiming the line gaps armed the
+-- emblem watch twice per scene with no press anywhere).
+function Registry.hot() return tick_n <= hot_until end
 
 -- Registration-order index of the active adapter (nil if none) — for diagnostics
 -- (adapters are anonymous tables; the index maps back to the app.lua register order).

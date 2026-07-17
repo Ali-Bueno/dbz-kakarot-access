@@ -129,10 +129,19 @@ function Battle.start()
             busy = true
             ExecuteInGameThread(function()
                 busy = false   -- cleared on ENTRY (see ui_core.loop rationale)
+                local t0 = os.clock()
                 local ok, err = pcall(step)
                 if not ok then
                     print("[KakarotAccess] battle monitor error: " .. tostring(err) .. "\n")
                 end
+                -- Cost telemetry (own loop, outside the registry step — printed by
+                -- the Ctrl+F5 dump; the last unmeasured game-thread work).
+                local dt = (os.clock() - t0) * 1000
+                local st = _G.__KakarotBattleStats
+                if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotBattleStats = st end
+                st.n = st.n + 1
+                st.ms = st.ms + dt
+                if dt > st.max then st.max = dt end
             end)
         end
         return false

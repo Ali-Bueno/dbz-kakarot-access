@@ -29,6 +29,12 @@ Dialogue.nav_mute = false
 -- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
 Dialogue.keyhelp_auto = false
 
+-- Cutscenes/dialogue own the screen for minutes while the game thread is at its
+-- busiest (sequencer, streaming): ui_registry reads this flag to defer steady-state
+-- scans (ui_core quiet mode) and relax the 20ms pad dispatcher. Everything a
+-- dialogue can open (skip confirm, choices) lives on pooled, already-cached widgets.
+Dialogue.scan_quiet = true
+
 local ann = Core.make_announcer()
 local tick = 0
 local cached = nil   -- current "Speaker: line" computed in is_active, reused by update
@@ -42,8 +48,7 @@ local cached = nil   -- current "Speaker: line" computed in is_active, reused by
 -- FAIL-OPEN: while it can't be found/read, lines keep speaking — a lookup failure must
 -- never silence the story for a blind player. Only Xcmn_Subtitles_C is gated: the NPC
 -- talk window (Field_Talk_Win_C) is a dialogue box every player sees regardless.
-local savesys = nil
-local savesys_next = 0   -- next tick allowed to retry the lookup (~10 s backoff)
+local Dir = require("ui_directory")
 local sub_logged = nil   -- last logged option value / "miss" (log on CHANGE, never per tick)
 
 local function sub_log(what)
@@ -53,27 +58,23 @@ local function sub_log(what)
 end
 
 local function subtitles_on()
+    -- The LIVE option comes through the game's OWN ownership chain, pure pointer
+    -- reads: GameInstance.SaveManager (UAT_GameInstance @0x1EA0, AT.hpp:30078) →
+    -- SaveSystem (@0x108) → Option.EnableSubtitle. Any "first instance found" pick
+    -- is a trap on this game: the object array holds SEVERAL managers AND several
+    -- save systems (probe 2026-07-17 00:28 — manager _0 → template _1 with pristine
+    -- defaults/EnableSubtitle=1, manager _2 → the real _4 with the user's settings),
+    -- which is why both prior FindAllOf-based gates read 1 forever. The gi root is
+    -- served by the screen directory (no scans); re-resolved every query so a
+    -- save/load repoint is followed automatically. FAIL-OPEN as always.
+    local savesys
+    local mgr = Dir and Dir.peek("gi", "SaveManager")
+    if Core.valid(mgr) then
+        pcall(function() savesys = mgr.SaveSystem end)
+    end
     if not Core.valid(savesys) then
-        savesys = nil
-        if tick < savesys_next then return true end
-        savesys_next = tick + 100
-        if not Core.take_scan_slot() then return true end
-        local all
-        if pcall(function() all = FindAllOf("ATSaveSystem") end) and all then
-            for _, o in pairs(all) do
-                if Core.valid(o) then
-                    local ok, fn = pcall(function() return o:GetFullName() end)
-                    if ok and type(fn) == "string" and not fn:find("Default__", 1, true) then
-                        savesys = o
-                        break
-                    end
-                end
-            end
-        end
-        if not Core.valid(savesys) then
-            sub_log("ATSaveSystem not found (fail-open, subtitles keep reading)")
-            return true
-        end
+        sub_log("GameInstance.SaveManager.SaveSystem unreachable (fail-open)")
+        return true
     end
     local v
     if not pcall(function() v = savesys.Option.EnableSubtitle end) then
@@ -131,10 +132,28 @@ local function line_from_any(cls, name_prop, body_prop)
     for _, w in ipairs(Core.cached_all(cls, tick)) do
         if Core.valid(w) then
             local line = line_from(w, name_prop, body_prop)
-            if line then return line end
+            if line then return line, w end
         end
     end
     return nil
+end
+
+-- TEMP trace (2026-07-17): one log line per NEW spoken line naming the SOURCE surface,
+-- its render state (vis/opacity/pane_live) and the widget instance — the data to close
+-- the "subtitles read though the game option is OFF" bug: it says whether the lines
+-- come from Xcmn_Subtitles_C (gate broken) or Field_Talk_Win_C (never gated, by
+-- design), and whether pane_live discriminates the option-off state. Turn OFF after.
+local SUB_TRACE = true
+local trace_last = nil
+local function trace_line(src, w, line)
+    if not SUB_TRACE or line == trace_last then return end
+    trace_last = line
+    local wn, vis, op = "?", "?", "?"
+    pcall(function() wn = w:GetFName():ToString() end)
+    pcall(function() vis = tostring(w:GetVisibility()) end)
+    pcall(function() op = string.format("%.2f", w:GetRenderOpacity()) end)
+    print(string.format("[KakarotAccess] line src=%s(%s) vis=%s op=%s live=%s: %s\n",
+        src, wn, vis, op, tostring(Core.pane_live(w)), line:sub(1, 40)))
 end
 
 function Dialogue.is_active()
@@ -147,8 +166,17 @@ function Dialogue.is_active()
     local hdr = Core.cached_live("Xcmn_Header_C", tick)
     if Core.on_screen(hdr) then cached = nil return false end
 
-    cached = (subtitles_on() and line_from_any("Xcmn_Subtitles_C", "Txt_Name", "Txt_Selif") or nil)
-        or line_from_any("Field_Talk_Win_C", "Txt_Speaker", "Txt_Msg")
+    local line, w, src
+    if subtitles_on() then
+        line, w = line_from_any("Xcmn_Subtitles_C", "Txt_Name", "Txt_Selif")
+        if line then src = "Xcmn_Subtitles_C" end
+    end
+    if not line then
+        line, w = line_from_any("Field_Talk_Win_C", "Txt_Speaker", "Txt_Msg")
+        if line then src = "Field_Talk_Win_C" end
+    end
+    if line and w then trace_line(src, w, line) end
+    cached = line
     return cached ~= nil
 end
 

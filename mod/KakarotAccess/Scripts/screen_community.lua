@@ -479,8 +479,22 @@ local GRID_CLASSES = { "AT_UICommunityStart", "Start_Commu_Emb_C" }
 local WATCH_STAGGER = 4
 local wait_clock = nil   -- os.clock of the last FRESH arm; anchors renewals + their cap
 
+-- Gameplay recency: the emblems menu can ONLY be reached from gameplay (the field
+-- ring or the board), so an arm with no free roam seen for ROAM_RECENT_S is a stale
+-- pointer read, not a user flow. This closed the last cutscene leak (2026-07-17
+-- ~01:03 log): a fresh boot loads STRAIGHT into a cinematic, the load-confirm /
+-- line-advance presses open hot windows inside it, and the story level's own board
+-- widgets read as a handoff — quiet+hot guards alone kept passing those arms.
+local ROAM_RECENT_S = 30
+local last_roam_t = -1e9
+
 -- FRESH arm (ring close / ghost board): starts the wait window renewals extend.
 local function watch_grid()
+    -- A fresh arm requires: NOT quiet (cutscene state), a RECENT USER PRESS
+    -- (Registry.hot — every legit entry signal is press-driven and detected within
+    -- the ~1s hot window), and RECENT GAMEPLAY (see ROAM_RECENT_S above).
+    if Core.scan_quiet() or not Registry.hot() then return end
+    if os.clock() - last_roam_t > ROAM_RECENT_S then return end
     wait_clock = os.clock()
     if ENTRY_DEBUG then entry_t0, entry_gates = os.clock(), nil end
     for i, cls in ipairs(GRID_CLASSES) do
@@ -573,7 +587,11 @@ end
 -- moment gameplay is confirmed: free roam (minimap back) OR combat (battle HUD up — the
 -- minimap hides in battle and no registry adapter is active there, so without this a
 -- back-out arm kept scanning through COMBAT, the user's stutter report 2026-07-16).
-local WAIT_RENEW_S = 30
+local WAIT_RENEW_S = 15   -- was 30: run-2 constructions measured 5-13s, and a 30s wait
+                          -- that nothing cancelled ran paired 65ms scans through a whole
+                          -- CUTSCENE (the 23:44 log storm, 2026-07-16 night) — in a
+                          -- cutscene there is no minimap and no battle HUD, so neither
+                          -- cancel ever fired
 
 -- Combat probe: the battle HUD class is directory-mapped ({"bm","BattleHudPlayer"}) —
 -- pointer reads, never a scan, so this is safe to consult per tick while waiting.
@@ -586,12 +604,18 @@ end
 
 local function maintain_wait()
     if not wait_clock then return end
+    local a = Registry.active_adapter()
     if os.clock() - wait_clock > WAIT_RENEW_S then
         wait_clock = nil
-    elseif Core.free_roam(tick) or battle_hud_up() then
+    elseif Core.free_roam(tick) or battle_hud_up() or (a and a.scan_quiet) then
+        -- Positive evidence the user is NOT waiting for the emblems grid: free roam
+        -- (minimap back), combat (battle HUD up) — or a CUTSCENE/dialogue claiming
+        -- the screen (the subtitles adapter sets scan_quiet): the 23:44 storm ran
+        -- through a cutscene precisely because that state shows neither minimap nor
+        -- battle HUD and nothing cancelled the lane.
         unwatch_grid()
         wait_clock = nil
-    elseif mode == nil and Registry.active_adapter() == nil then
+    elseif mode == nil and a == nil then
         renew_grid()
     end
 end
@@ -609,6 +633,7 @@ local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true, [13] = true,
 function Commu.is_active()
     tick = tick + 1
     grid_slots, grid_byai = nil, nil
+    if Core.free_roam(tick) then last_roam_t = os.clock() end
     menu_entry_signal()
     maintain_wait()
     local ghost_board = false

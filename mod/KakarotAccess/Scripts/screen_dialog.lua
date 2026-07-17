@@ -430,6 +430,16 @@ end
 -- much later not re-announcing is the accepted trade.
 local spoken = nil        -- last spoken notice (kept only for the DLG_TRACE line)
 local notice_msg = nil    -- msg whose folded title+content is cached in notice_full
+
+-- Appearance edge of the window (off-screen → on-screen). For a short window after it,
+-- fresh CONTENT ROWS may prove a notice fresh even when title+help repeat verbatim (the
+-- Milk-emblem hole, 2026-07-16: a SECOND emblem reward in the same epoch repeats both
+-- word-for-word — the recent-set correctly saw nothing fresh and the whole reward went
+-- SILENT; the only new text was the row with the emblem's name). Bounded to the edge so
+-- the rows walk never runs on the parked steady state (the 20-min parked window).
+local ROWS_FRESH_S = 3.0
+local appear_t = -1e9
+local was_on = false
 local notice_full = nil
 local notice_extra = nil  -- folded row texts of notice_full, marked recent after speaking
 local choice_marked = nil -- last choice prompt whose window nodes were marked recent
@@ -472,8 +482,10 @@ end
 --   * otherwise ⇒ UNTITLED notice: the untitled members that are fresh.
 -- Returns composed, titled?, parts (the node texts to mark as recent after speaking).
 -- A verbatim repeat re-reads only after RECENT_MAX marks evict it — the trade the
--- recent-set already made.
-local function fresh_notice(w)
+-- recent-set already made. EXCEPTION (rows_ok, see appear_t): fresh content rows
+-- rescue a verbatim-repeated titled notice — a new reward carries its news in the
+-- rows, not in the boilerplate title/help.
+local function fresh_notice(w, rows_ok)
     if not Core.valid(w) then return nil end
     -- Title/help via node_rt — gated on their OWN rendered state (round 19): the
     -- recent-set alone couldn't stop a stale title from re-composing once the FIFO
@@ -504,7 +516,23 @@ local function fresh_notice(w)
     if title and help and not was_recent(help) then
         parts[#parts + 1] = help
     end
-    if #parts == 0 then return nil end
+    if #parts == 0 then
+        -- Verbatim-repeat reward: nothing above is fresh, but a rendered title plus a
+        -- fresh content row (item plate / received-emblem row) means a NEW notice that
+        -- reuses the previous one's exact wording. Re-speak the stale title as the
+        -- header; update() folds the fresh rows in (its notice_extra pass drops the
+        -- recently-spoken ones, so only the news reads). Gated on rows_ok — only for
+        -- a few seconds after the window's appearance edge, never per-tick on the
+        -- parked window.
+        if rows_ok and title then
+            for _, list in ipairs({ plates(w), emblems_received(w) }) do
+                for _, t in ipairs(list) do
+                    if not was_recent(t) then return title, true, {} end
+                end
+            end
+        end
+        return nil
+    end
     return table.concat(parts, ", "), title_fresh, parts
 end
 
@@ -537,7 +565,16 @@ function Dialog.is_active()
     if not Core.on_screen(win) then acquire() end   -- acquire is now cheap (cached refs)
     if not Core.on_screen(win) then
         window_gone()
+        was_on = false
         return false
+    end
+    if not was_on then
+        was_on = true
+        appear_t = os.clock()
+        -- A fresh appearance may be a NEW notice whose composed text equals the
+        -- previous one (rows-only rewards) — drop the fold latch so update()
+        -- rebuilds. Safe on blinks: update() only runs when something is fresh.
+        notice_msg, notice_full = nil, nil
     end
     local msg = message(win)
     local labels, sel, items = choices()
@@ -546,7 +583,8 @@ function Dialog.is_active()
     -- count, whether the guide-yield fires, and the current latch — names exactly why
     -- a window is skipped. Turn OFF (DLG_TRACE=false) once the flow reads right.
     local fresh
-    if #labels == 0 then fresh = fresh_notice(win) end
+    local rows_ok = (os.clock() - appear_t) < ROWS_FRESH_S
+    if #labels == 0 then fresh = fresh_notice(win, rows_ok) end
     if DLG_TRACE then
         local wn = "?"
         pcall(function() wn = win:GetFullName():match("([%w_]+_C)_%d+") or "?" end)
@@ -639,7 +677,8 @@ function Dialog.update()
         -- STALE frame (round 10). fresh_notice picks the live layout by per-node
         -- novelty (see its note) — nothing fresh means the flicker landed on stale
         -- content this tick, so say nothing and wait.
-        local composed, titled, node_texts = fresh_notice(win)
+        local composed, titled, node_texts =
+            fresh_notice(win, (os.clock() - appear_t) < ROWS_FRESH_S)
         if not composed then return end
         if composed ~= notice_msg then
             -- Build the folded text FIRST and latch LAST: the WL_LvTextList fixed-array
@@ -695,6 +734,7 @@ Transition.on_begin("screen_dialog", function()
     spoken, notice_msg, notice_full, notice_extra = nil, nil, nil, nil
     choice_prompt, choice_key, choice_marked = nil, nil, nil
     dlg_last, enum_last, state, win = nil, nil, nil, nil
+    was_on, appear_t = false, -1e9
 end)
 
 return Dialog

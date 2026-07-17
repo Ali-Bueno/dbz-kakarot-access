@@ -14,6 +14,12 @@
 local Poll = {}
 
 local TICK_MS = 20
+local RELAX_EVERY = 5  -- during cutscene subtitles / map loads (ui_registry publishes
+                       -- _G.__KakarotPadRelax) dispatch only every 5th tick (100ms):
+                       -- every 20ms consumer is inert there (R3 picker closed, no menu
+                       -- d-pad), and 50 queued game-thread callbacks/s are pressure
+                       -- exactly when the game thread is busiest.
+local relax_n = 0
 local steppers = {}   -- name -> { fn = step_fn, on_error = cleanup_fn | nil }
 local running = false
 
@@ -43,6 +49,13 @@ function Poll.start()
         -- game thread refills it), and the steppers are session-permanent anyway. Only
         -- the generation bump above (reload) ends this loop.
         if next(steppers) == nil then return false end
+        -- Relax gate (a plain global read, same worker-side access class as the
+        -- generation guard above): skip most dispatches while the reader says the
+        -- pad has nothing time-critical to serve.
+        if _G.__KakarotPadRelax then
+            relax_n = relax_n + 1
+            if relax_n % RELAX_EVERY ~= 0 then return false end
+        end
         if not busy then
             busy = true
             ExecuteInGameThread(function()

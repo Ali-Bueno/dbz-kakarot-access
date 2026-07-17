@@ -488,7 +488,10 @@ end
 --   (never shops/fishing/etc.). No visibility requirement: a quest giver beyond
 --   minimap range still counts.
 local function best_candidate(px, py, pz)
-    if navi_icons == nil or tick >= navi_next then
+    -- The refresh is a raw full-array FindAllOf (~65ms): never spend it while a
+    -- cutscene/dialogue overlay owns the screen (Core.scan_quiet) — the stale list
+    -- keeps serving (entries are re-validated below) and the refresh lands after.
+    if navi_icons == nil or (tick >= navi_next and not Core.scan_quiet()) then
         navi_icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
         navi_next = tick + RESCAN_CLASSES
     end
@@ -994,7 +997,8 @@ end
 -- The live field-enemy list { {actor, noun}, ... } (cached; entries re-validated by
 -- every user). Player/companions are excluded by the playable-base check.
 local function enemies_list()
-    if enemy_cache == nil or tick >= enemy_next then
+    -- Same quiet-mode deferral as best_candidate: no raw FindAllOf during subtitles.
+    if enemy_cache == nil or (tick >= enemy_next and not Core.scan_quiet()) then
         enemy_cache = {}
         enemy_next = tick + RESCAN_CLASSES
         -- Distance-cap the scan: a level loads its ENTIRE enemy roster parked/inactive at a
@@ -1735,12 +1739,23 @@ function Nav.start()
                 -- must not leave the guard stuck and the radar silent for the session
                 -- (see ui_core.loop for the full rationale).
                 busy = false
+                -- Cost telemetry (like ui_core.loop's step stats): this loop runs
+                -- OUTSIDE the registry step, so its game-thread cost was invisible to
+                -- the Ctrl+F5 numbers until the 2026-07-16 mods.txt A/B forced the
+                -- question "what else is unmeasured?".
+                local t0 = os.clock()
                 local ok, err = pcall(step)
                 if not ok then print("[KakarotAccess] nav step error: " .. tostring(err) .. "\n") end
                 -- Passive explore radar runs in its OWN pcall so an error here can never
                 -- take down the beacon tick (or vice versa).
                 local ok2, err2 = pcall(explore_tick)
                 if not ok2 then print("[KakarotAccess] nav explore error: " .. tostring(err2) .. "\n") end
+                local dt = (os.clock() - t0) * 1000
+                local st = _G.__KakarotNavStats
+                if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotNavStats = st end
+                st.n = st.n + 1
+                st.ms = st.ms + dt
+                if dt > st.max then st.max = dt end
             end)
         end
         return false
@@ -2674,8 +2689,115 @@ function Nav.dump()
         if sc and sc.n > 0 then
             f:write(string.format("findall scans: n=%d total_ms=%.0f max_ms=%.1f avg_ms=%.1f\n",
                 sc.n, sc.ms, sc.max, sc.ms / sc.n))
+            -- Per-class attribution (ui_core.timed_findall): the classes draining the
+            -- scan budget, worst first — the shortlist for directory mapping.
+            local rows = {}
+            for cls, b in pairs(sc.by or {}) do rows[#rows + 1] = { cls, b.n, b.ms } end
+            table.sort(rows, function(x, y) return x[3] > y[3] end)
+            for i = 1, math.min(#rows, 12) do
+                f:write(string.format("  scan %-40s n=%d ms=%.0f\n",
+                    rows[i][1], rows[i][2], rows[i][3]))
+            end
             _G.__KakarotScanStats = nil
         end
+        -- Speech-backend cost (speech.lua timed_say): each prism call runs on the game
+        -- thread — cinematics are the densest speech state, so a slow backend shows
+        -- here as a per-line hitch the scan stats can never see. Resets per dump.
+        local sp = _G.__KakarotSpeechStats
+        if sp and sp.n > 0 then
+            f:write(string.format("speech calls: n=%d total_ms=%.0f max_ms=%.1f avg_ms=%.1f\n",
+                sp.n, sp.ms, sp.max, sp.ms / sp.n))
+            _G.__KakarotSpeechStats = nil
+        end
+        -- Nav-loop cost (nav_tracker's own 100ms loop — outside the registry step).
+        local nv = _G.__KakarotNavStats
+        if nv and nv.n > 0 then
+            f:write(string.format("nav step ms: max=%.1f avg=%.2f over %d ticks\n",
+                nv.max, nv.ms / nv.n, nv.n))
+            _G.__KakarotNavStats = nil
+        end
+        -- Battle/quest loop cost (their own 250/300ms loops — same reason).
+        for _, e in ipairs({ { "battle", "__KakarotBattleStats" },
+                             { "quest", "__KakarotQuestStats" } }) do
+            local s = _G[e[2]]
+            if s and s.n > 0 then
+                f:write(string.format("%s step ms: max=%.1f avg=%.2f over %d ticks\n",
+                    e[1], s.max, s.ms / s.n, s.n))
+                _G[e[2]] = nil
+            end
+        end
+        -- Subtitles-option probe (2026-07-16: user has subtitles OFF in the game
+        -- options yet lines still read — the gate reads EnableSubtitle=1). Prints
+        -- every non-CDO ATSaveSystem with a cross-checkable slice of Option (the
+        -- user knows their real volume/vibration settings, so a SHIFTED layout
+        -- names itself), plus the GameState's own subtitle-widget pointers
+        -- (AT.hpp:14685 Subtitles 0x590 / InMenuSubtitles 0x598) and their render
+        -- state — the data to pick the right gate. Take the dump DURING a cutscene
+        -- with the option off.
+        pcall(function()
+            for _, o in pairs(FindAllOf("ATSaveSystem") or {}) do
+                if Core.valid(o) then
+                    local fn = "?"
+                    pcall(function() fn = o:GetFullName() end)
+                    local vals = {}
+                    for _, k in ipairs({ "EnableSubtitle", "LanguageVoice", "VolumeBgm",
+                                         "VolumeSe", "VolumeVoice", "VolumeMovie",
+                                         "PadVibration", "HiddenMinimap" }) do
+                        local v = "?"
+                        pcall(function() v = tostring(o.Option[k]) end)
+                        vals[#vals + 1] = k .. "=" .. v
+                    end
+                    f:write("savesys " .. fn .. "\n  " .. table.concat(vals, " ") .. "\n")
+                end
+            end
+            -- Which save system does each SaveManager point to? (2026-07-17: the
+            -- manager-resolved gate STILL read EnableSubtitle=1 while instance _4
+            -- held the user's real 0 — either several managers exist too, or the
+            -- pointer targets a template.)
+            for _, m in pairs(FindAllOf("ATSaveManager") or {}) do
+                if Core.valid(m) then
+                    local fn, tgt = "?", "?"
+                    pcall(function() fn = m:GetFullName() end)
+                    pcall(function()
+                        local s = m.SaveSystem
+                        tgt = Core.valid(s) and s:GetFullName() or "null"
+                    end)
+                    f:write("savemgr " .. fn .. " -> " .. tgt .. "\n")
+                end
+            end
+            -- Render state of every pooled subtitle widget (is pane_live the
+            -- discriminator for the option-off state?).
+            for _, w in pairs(FindAllOf("Xcmn_Subtitles_C") or {}) do
+                if Core.valid(w) then
+                    local wn, vis, op, onscr, lv = "?", "?", "?", "?", "?"
+                    pcall(function() wn = w:GetFName():ToString() end)
+                    pcall(function() vis = tostring(w:GetVisibility()) end)
+                    pcall(function() op = string.format("%.2f", w:GetRenderOpacity()) end)
+                    pcall(function() onscr = tostring(Core.on_screen(w)) end)
+                    pcall(function() lv = tostring(Core.pane_live(w)) end)
+                    f:write(string.format("subwidget %s vis=%s op=%s on=%s live=%s\n",
+                        wn, vis, op, onscr, lv))
+                end
+            end
+            local gs = FindFirstOf("ATGameState")
+            for _, fld in ipairs({ "Subtitles", "InMenuSubtitles" }) do
+                local line = fld .. "=unreadable"
+                pcall(function()
+                    local w = gs[fld]
+                    if Core.valid(w) then
+                        local wn, vis, op, onscr = "?", "?", "?", "?"
+                        pcall(function() wn = w:GetFullName() end)
+                        pcall(function() vis = tostring(w:GetVisibility()) end)
+                        pcall(function() op = string.format("%.2f", w:GetRenderOpacity()) end)
+                        pcall(function() onscr = tostring(Core.on_screen(w)) end)
+                        line = string.format("%s: %s vis=%s op=%s on=%s", fld, wn, vis, op, onscr)
+                    else
+                        line = fld .. "=null/invalid"
+                    end
+                end)
+                f:write("gamestate " .. line .. "\n")
+            end
+        end)
         -- Screen-directory trace (ui_directory): every mapped class, hop by hop. For a
         -- silent screen, open it FIRST and dump — the broken link names itself. Gated
         -- like the widget probes below: never during a transition.
