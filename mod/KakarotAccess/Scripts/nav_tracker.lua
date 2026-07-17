@@ -30,6 +30,7 @@ local I18n = require("i18n")
 local Registry = require("ui_registry")
 local Transition = require("transition")
 local Ray = require("raycast")
+local Mem = require("mem")
 
 local Nav = {}
 
@@ -78,7 +79,9 @@ local STEALTH_CONE = 0.34             -- |dot| above this = clearly front/behind
 local AIM_ALIGN_PAN = 0.12            -- |pan| below this = camera centered on the target
                                       -- (~±7°, matches the field Ki-blast reticle slack)
 local AIM_RANGE = 60 * M              -- aim cue only within Ki-blast range
-local ENEMY_ALERT_DIST = 50 * M       -- proximity radius for the spoken enemy warning
+local ENEMY_ALERT_DIST = 160 * M      -- proximity radius for the spoken enemy warning
+                                      -- (50m originally; raised to ~the game's own aim/lock
+                                      -- detection reach at the user's request, 2026-07-17)
 local ENEMY_CUE_MS = 8000             -- min gap between enemy warnings (anti-spam)
 local ENEMY_CLOSER_FACTOR = 0.5       -- re-announce the SAME enemy only when this much closer
 
@@ -96,8 +99,8 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
 local GROUP_ORDER = {
-    "quests", "collectibles", "npc", "enemies", "hunt", "sites", "fishing", "gathering",
-    "shops", "minigames", "dragonball", "other",
+    "quests", "collectibles", "npc", "companions", "enemies", "hunt", "sites", "fishing",
+    "gathering", "shops", "minigames", "dragonball", "other",
 }
 local ICON_GROUP = {
     -- quests (no distance limit)
@@ -184,13 +187,16 @@ end
 -- why the old hidden-only filter kept listing collected items — user 2026-07-06); a
 -- respawn puts it back to State_Wait, so filtering on Taken also re-lists respawns.
 local STATE_TAKEN = 11
-local RADAR_NPC_CAP = 300 * 100   -- distance limit for the NPC direct-scan (drops the far
-                                  -- parked-character pool ~2600 m away)
-local RADAR_MAP_CAP = 1000 * 100  -- cap for the game's OWN minimap icons: shows the LOCAL
-                                  -- area's gather/shop/minigame/fishing markers without
-                                  -- listing the regional ones 2-3 km away (clutter). A
-                                  -- hard 300 m was too tight; 5 km too loose. Quests: no
-                                  -- limit at all.
+-- One table (not two locals: the main chunk is at Lua's 200-local limit).
+local RADAR_CAP = {
+    npc = 300 * 100,   -- distance limit for the NPC direct-scan (drops the far
+                       -- parked-character pool ~2600 m away)
+    map = 1000 * 100,  -- cap for the game's OWN minimap icons: shows the LOCAL
+                       -- area's gather/shop/minigame/fishing markers without
+                       -- listing the regional ones 2-3 km away (clutter). A
+                       -- hard 300 m was too tight; 5 km too loose. Quests: no
+                       -- limit at all.
+}
 
 -- ---- state ---------------------------------------------------------------------
 local on = true                -- master switch (F3); radar auto-tracks while on
@@ -228,6 +234,25 @@ local WORLD_DROP_TICKS = 50    -- ~5 s hidden -> assume level change/battle, dro
 local function chainable(grp) return grp ~= nil and grp ~= "quests" end
 local chain_wait = nil         -- { actor, key, grp, stateful } while at the reached item
 local chain_seen = {}          -- keys already visited in this sweep (never re-targeted)
+
+-- Fresh-objective auto-track (user request 2026-07-17): when the quest HUD's objective
+-- TEXT changes (quest_objective.lua's signature diff — the game's own "new objective"
+-- event: talking to an NPC, grabbing a quest item, or a story battle all update it),
+-- the auto-scan may acquire the new quest marker even over a manual pick, a stop, or a
+-- pending battle-resume — so the player never needs the R3 menu for story progress.
+-- Whatever they were doing is stashed in `preempt.stash` (plain Lua data, survives
+-- battles and map switches; stale seen-keys never match a new level's actors,
+-- harmless) and B (stop_tracking) returns to it: nearest remaining item for chainable
+-- categories, the exact pick otherwise.
+-- One table (not separate locals: the main chunk is at Lua's 200-local limit).
+local preempt = {
+    TRIES = 10,    -- scans (~15 s of world time) to find the new marker — it can lag
+                   -- the HUD text by a few seconds; after that the signal is
+                   -- forgotten, never stealing a pick later
+    scans = 0,     -- >0: the next scans may preempt (counts down on misses)
+    pri = nil,     -- PRI_MAIN/PRI_SUB: prefer the changed quest kind's marker
+    stash = nil,   -- { key, grp, stateful, seen } — the interrupted pick/sweep
+}
 
 -- Battle interruption resume (user bug 2026-07-15): the world gate / a map switch
 -- DROPS a hand-picked target (the actor dies with the gate), and the auto-scan then
@@ -487,7 +512,10 @@ end
 --   minimap icon list, accepting ONLY actors whose map icon type is a quest type
 --   (never shops/fishing/etc.). No visibility requirement: a quest giver beyond
 --   minimap range still counts.
-local function best_candidate(px, py, pz)
+-- want_pri (optional, fresh-objective scans): prefer a marker of THAT quest class —
+-- when a SUB objective just advanced while a main arrow is also active, the sub marker
+-- must win even though main outranks it normally. Falls back to the overall best.
+local function best_candidate(px, py, pz, want_pri)
     -- The refresh is a raw full-array FindAllOf (~65ms): never spend it while a
     -- cutscene/dialogue overlay owns the screen (Core.scan_quiet) — the stale list
     -- keeps serving (entries are re-validated below) and the refresh lands after.
@@ -496,10 +524,14 @@ local function best_candidate(px, py, pz)
         navi_next = tick + RESCAN_CLASSES
     end
     local best, best_pri, best_d2 = nil, 0, math.huge
+    local want, want_d2 = nil, math.huge
     local function consider(ta, pri)
         local x, y, z = actor_pos(ta)
         if not x then return end
         local d2 = (x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2
+        if want_pri and pri == want_pri and d2 < want_d2 then
+            want, want_d2 = ta, d2
+        end
         if pri > best_pri or (pri == best_pri and d2 < best_d2) then
             best, best_pri, best_d2 = ta, pri, d2
         end
@@ -532,6 +564,10 @@ local function best_candidate(px, py, pz)
         end
     end
 
+    if want then
+        return { actor = want, key = tostring(want:GetAddress()), pri = want_pri,
+                 label = label_for(want_pri) }
+    end
     if best then
         return { actor = best, key = tostring(best:GetAddress()), pri = best_pri,
                  label = label_for(best_pri) }
@@ -874,6 +910,24 @@ local function remember_pick()
     end
 end
 
+-- Stash whatever the radar was doing (manual pick, mid-sweep wait, pending resume)
+-- right before a fresh quest objective preempts it — B (stop_tracking) restores it.
+-- See the `preempt` block comment for the lifecycle. (A field, not a local: the main
+-- chunk is at Lua's 200-local limit.)
+function preempt.stash_now()
+    if target and target.manual and target.grp then
+        preempt.stash = { key = target.key, grp = target.grp,
+                          stateful = target.stateful, seen = chain_seen }
+    elseif chain_wait then
+        preempt.stash = { key = chain_wait.key, grp = chain_wait.grp,
+                          stateful = chain_wait.stateful, seen = chain_seen }
+    elseif resume_pick then
+        preempt.stash = { key = resume_pick.key, grp = resume_pick.grp,
+                          stateful = resume_pick.stateful, seen = chain_seen }
+    end
+    chain_wait = nil
+end
+
 -- WORLD GATE — safety-critical. The minimap is the game's own "the world is alive
 -- and I'm free-roaming" signal; while it is missing/hidden (loading, LEVEL TEARDOWN,
 -- battle, cutscene, full-screen UI) the tracker must not touch ANY world actor:
@@ -984,6 +1038,18 @@ end
 
 -- True for the player and companions (they inherit AT_CharacterPlayableBase); those are
 -- the only AT_Characters we must NOT flag as enemies.
+-- Presence filter shared by the enemy and companion scans: the game parks preloaded
+-- future-story characters HIDDEN in the world (the "absence observer" — same reason
+-- QuestCharacters check bHidden/CurrentHiddenType). AT_Character does NOT declare
+-- CurrentHiddenType (AQuestCharacter-only, AT.hpp:17553 — reading it here would be the
+-- uncatchable abort), so bHidden (AActor-level, safe) is the whole check. Fixes the
+-- ghost enemies inside Goku's house at game start (user report 2026-07-17).
+local function char_visible(c)
+    local hidden = false
+    pcall(function() hidden = c.bHidden end)
+    return not (hidden == true or hidden == 1)
+end
+
 local function is_playable_char(c)
     if playable_cls == nil then
         local ok, k = pcall(function() return StaticFindObject("/Script/AT.AT_CharacterPlayableBase") end)
@@ -992,6 +1058,31 @@ local function is_playable_char(c)
     if not playable_cls then return false end
     local ok, r = pcall(function() return c:IsA(playable_cls) end)
     return ok and r == true
+end
+
+-- Live ENEMY level: reflected hops AAT_Character.AttributeComponent -> .StatusInstance,
+-- then the native int32 at statusInstance.level — ENEMY instances only (ATEnemyStatus);
+-- the player's instance keeps a POINTER in that slot (see native_offsets). Only ever call
+-- this on enemies_list members (non-playable AT_Characters), never the player/companions.
+-- nil when unreadable (mem_bridge missing, component gone, or an implausible misread).
+local function enemy_level(c)
+    local off = (require("native_offsets").statusInstance or {}).level
+    if not off or not Mem.is_loaded() then return nil end
+    local si
+    pcall(function()
+        local a = c.AttributeComponent
+        if a and a:IsValid() then
+            local s = a.StatusInstance
+            if s and s:IsValid() then si = s end
+        end
+    end)
+    if not si then return nil end
+    local lv = Mem.i32(si, off)
+    -- Plausibility guard, not a game rule: the getter's own floor is 1 (Ghidra); the top
+    -- bound only rejects garbage from a stale/foreign block (same band the dump filter used).
+    local LV_GUARD_MAX = 999
+    if lv and lv >= 1 and lv <= LV_GUARD_MAX then return lv end
+    return nil
 end
 
 -- The live field-enemy list { {actor, noun}, ... } (cached; entries re-validated by
@@ -1009,12 +1100,12 @@ local function enemies_list()
         local px, py, pz
         if pawn then px, py, pz = actor_pos(pawn) end
         for _, c in pairs(FindAllOf("AT_Character") or {}) do
-            if Core.valid(c) and not is_playable_char(c) then
+            if Core.valid(c) and not is_playable_char(c) and char_visible(c) then
                 local near = true
                 if px then
                     local x, y, z = actor_pos(c)
                     near = x ~= nil
-                        and ((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) <= RADAR_NPC_CAP ^ 2
+                        and ((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) <= RADAR_CAP.npc ^ 2
                 end
                 if near then
                     -- SpawnType 1/2/3 → specific noun; roaming enemies are SpawnType 0 → generic.
@@ -1022,7 +1113,15 @@ local function enemies_list()
                     -- The game's own display name (CharacterName id -> GetCharacterName),
                     -- so the radar says "Soldier X" instead of the generic "enemy".
                     local name = enemy_display_name and enemy_display_name(c) or nil
-                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun, name = name }
+                    -- disp = spoken label with the live level baked in ("Soldado, nivel 12");
+                    -- used by the proximity alert and the radar picker. Falls back to name/noun.
+                    local lvl = enemy_level(c)
+                    local disp
+                    if lvl then
+                        disp = string.format("%s, %s", name or I18n.t(noun),
+                            string.format(I18n.t("nav_level"), lvl))
+                    end
+                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun, name = name, disp = disp }
                 end
             end
         end
@@ -1202,7 +1301,8 @@ local function enemy_alert(px, py, pz)
             if x then
                 local d2 = (x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2
                 if d2 < best_d2 then
-                    best = { actor = e.actor, x = x, y = y, z = z, noun = e.noun, name = e.name }
+                    best = { actor = e.actor, x = x, y = y, z = z, noun = e.noun,
+                             name = e.disp or e.name }
                     best_d2 = d2
                 end
             end
@@ -1350,11 +1450,23 @@ local function step()
     -- tick would hammer reflection): picks up a fresh quest marker automatically
     -- (auto-track on accept), retargets when the current step is done, and drops
     -- the target when the game stops guiding. A MANUAL target (companion tracking,
-    -- Shift+F5) is never overridden by the auto-scan — nor is a pending resume.
-    if tick % SCAN_EVERY == 0 and not resume_pick and not auto_suppressed
-        and not (target and target.manual) then
-        local best = best_candidate(px, py, pz)
+    -- Shift+F5) is never overridden by the auto-scan — nor is a pending resume —
+    -- EXCEPT while a fresh-objective signal is armed (notify_objective_change):
+    -- the game just issued a NEW objective, and that preempts once, stashing the
+    -- interrupted pick so B brings it back.
+    local fresh = preempt.scans > 0
+    if tick % SCAN_EVERY == 0 and (fresh
+        or (not resume_pick and not auto_suppressed and not (target and target.manual))) then
+        local best = best_candidate(px, py, pz, fresh and preempt.pri or nil)
         if best then
+            if fresh then
+                preempt.scans, preempt.pri = 0, nil   -- consumed, whatever happens below
+                if not target or target.key ~= best.key then
+                    preempt.stash_now()
+                    auto_suppressed = false
+                    resume_pick = nil
+                end
+            end
             if not target or target.key ~= best.key then
                 local was = target and target.key
                 target = best
@@ -1371,7 +1483,11 @@ local function step()
             else
                 target_missing = 0
             end
-        elseif target then
+        elseif fresh then
+            -- No marker yet (it can lag the HUD text) — burn one try, touch nothing.
+            preempt.scans = preempt.scans - 1
+            if preempt.scans == 0 then preempt.pri = nil end
+        elseif target and not target.manual then
             target_missing = target_missing + 1
             if target_missing >= LOST_SCANS then drop_target() end
         end
@@ -1414,8 +1530,16 @@ local function step()
     end
 
     -- Arrival on TRUE 3D distance to the objective (not the route corner).
+    -- Manual picks use the tight interact radius — except GATHERING points: the
+    -- fruit/small-fish spots are spawner VOLUMES (ASpawner*Volume, CXX dump
+    -- 2026-07-17) whose actor origin can sit meters away from the orbs the player
+    -- actually collects, so the tight radius never fired, the sweep never armed, and
+    -- the radar never advanced to the next spot (user report 2026-07-17). The wide
+    -- auto radius arms the sweep from anywhere inside the patch; the walk-away
+    -- trigger (chain_step) then advances it.
     local d3 = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2 + (tz - pz) ^ 2)
-    local arrive_r = target.manual and ARRIVE_DIST_MANUAL or ARRIVE_DIST
+    local arrive_r = (target.manual and target.grp ~= "gathering")
+        and ARRIVE_DIST_MANUAL or ARRIVE_DIST
     if d3 <= arrive_r then
         if not arrived then
             arrived = true
@@ -1778,6 +1902,8 @@ function Nav.toggle()
         drop_target()
         chain_wait, chain_seen = nil, {}
         resume_pick = nil
+        preempt.stash = nil
+        preempt.scans, preempt.pri = 0, nil
         companion_idx = 0
         Speech.say(I18n.t("nav_off"), true)
     else
@@ -1804,7 +1930,8 @@ local function companions(px, py, pz)
         -- Exclude field ENEMIES (SpawnType != 0): Shift+F5 must cycle party members,
         -- not the mob you're about to fight (they're AT_Character too).
         if Core.valid(c) and tostring(c:GetAddress()) ~= me_key
-            and not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] then
+            and not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]
+            and char_visible(c) then
             local x, y, z = actor_pos(c)
             if x then
                 local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
@@ -2075,6 +2202,28 @@ function Nav.list_targets()
     local groups = {}
     local dropped = {}   -- per-group candidates cut by the distance cap (rescue below)
     local diag = RADAR_DEBUG and {} or nil
+    -- Does this actor's CLASS declare AAccessPointBase.InteractState? (CXX dump
+    -- 2026-07-17: the AccessPoint* family — ATreasureAccessPoint, AInsectAccessPoint,
+    -- AAccessPointItemBase… — plus AMineralMiningPointNormal/Rare and
+    -- APlacementObjectInfo all derive from AAccessPointBase. The fruit/small-fish
+    -- GATHERING spots do NOT: those are ASpawner*Volume spawners with no taken state
+    -- at all.) Matched by class NAME: reading a property a class doesn't declare is
+    -- the uncatchable abort, so never probe blindly — and the gathering/collect icons
+    -- reach the picker without a class scan.
+    local function access_point_class(actor)
+        local cn
+        pcall(function() cn = actor:GetClass():GetFName():ToString() end)
+        return cn ~= nil and (cn:find("AccessPoint", 1, true) ~= nil
+            or cn:find("MiningPoint", 1, true) ~= nil
+            or cn:find("PlacementObjectInfo", 1, true) ~= nil)
+    end
+    -- Collected filter for access-point actors (callers guarantee the class declares
+    -- InteractState — see access_point_class).
+    local function point_taken(a)
+        local st
+        pcall(function() st = tonumber(a.InteractState) end)
+        return st == STATE_TAKEN
+    end
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
     -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
     -- groups by max(global cap, range) — never tighter than the cap, so an already-shown
@@ -2094,7 +2243,7 @@ function Nav.list_targets()
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
             local cap = (src == "questchar" or src == "collectible" or src == "enemy")
-                and RADAR_NPC_CAP or math.max(RADAR_MAP_CAP, range or 0)
+                and RADAR_CAP.npc or math.max(RADAR_CAP.map, range or 0)
             if d > cap then kept = false end
         end
         if diag then
@@ -2137,7 +2286,15 @@ function Nav.list_targets()
         local grp = ICON_GROUP[t] or "other"
         local noun = ICON_NOUN[t] or ("radar_cat_" .. grp)
         local _, range = icon_info(actor)
-        add_target(actor, grp, noun, range, src)
+        -- Gathering/collect spots that are access-point actors (mining points, bug
+        -- nests, chests) DO carry the Taken state: mark them stateful so the chained
+        -- sweep advances the moment they're collected, and drop already-taken ones
+        -- from the list (a mined-out rock kept listing until respawn otherwise —
+        -- user report 2026-07-17).
+        local stateful = (grp == "gathering" or grp == "collectibles")
+            and access_point_class(actor) or nil
+        if stateful and point_taken(actor) then return end
+        add_target(actor, grp, noun, range, src, nil, stateful)
     end
 
     -- 1) active navi guidance (quest arrows) — always quest-classified
@@ -2288,15 +2445,10 @@ function Nav.list_targets()
             pcall(function() hidden = a.bHidden end)
             return not (hidden == true or hidden == 1)
         end
-        -- Collected filter for AAccessPointBase-derived actors (see STATE_TAKEN above).
-        -- InteractState is declared on AAccessPointBase ONLY — FieldActionPointActor is
-        -- a plain AActor, and reading a non-existent property is the uncatchable abort,
-        -- so the caller must only pass access-point classes here.
-        local function not_taken(a)
-            local st
-            pcall(function() st = tonumber(a.InteractState) end)
-            return st ~= STATE_TAKEN
-        end
+        -- Collected filter: point_taken (module level). InteractState is declared on
+        -- AAccessPointBase ONLY — FieldActionPointActor is a plain AActor, and reading
+        -- a non-existent property is the uncatchable abort, so only the access-point
+        -- classes in this scan list carry `state = true`.
         -- Spoken name for an action spot: the game's own ActionName (reflected FString
         -- on AFieldActionPointActor @0x340). nil when empty -> generic noun.
         local function action_name(a)
@@ -2344,7 +2496,7 @@ function Nav.list_targets()
         }) do
             for _, a in pairs(FindAllOf(c.cls) or {}) do
                 if Core.valid(a) and visible_actor(a)
-                    and (not c.state or not_taken(a)) then
+                    and (not c.state or not point_taken(a)) then
                     local cn = "?"
                     pcall(function() cn = a:GetClass():GetFName():ToString() end)
                     local is_memory = cn:find("Memories", 1, true) ~= nil
@@ -2415,7 +2567,7 @@ function Nav.list_targets()
     -- 5) field enemies: the direct SpawnType scan (enemies_list) — the minimap icon
     -- list does not carry the roaming enemies. Tight distance cap like NPCs.
     for _, e in ipairs(enemies_list()) do
-        add_target(e.actor, "enemies", e.noun, nil, "enemy", e.name)
+        add_target(e.actor, "enemies", e.noun, nil, "enemy", e.disp or e.name)
     end
     -- 5b) wild field animals (deer, wolves, dinosaurs, dragons…): the AT_MobAnimalBase subtree of
     -- AT_MobBase — a SEPARATE class tree from AT_Character (lineage probe 2026-07-06:
@@ -2441,6 +2593,15 @@ function Nav.list_targets()
                 end
             end
         end
+    end
+
+    -- 5c) field party members: the same collector Shift+F5 cycles (excludes the player,
+    -- SpawnType enemies and the far parked pool via COMPANION_MAX_DIST), so the two
+    -- features can never disagree on who counts as a companion. Named via the same
+    -- CharacterName resolver as enemies (companions are AT_Character too).
+    for _, c in ipairs(companions(px, py, pz)) do
+        add_target(c.actor, "companions", "cat_companion", nil, "companion",
+            enemy_display_name(c.actor))
     end
 
     -- SAFE navi-type diagnostic (NAVI_DEBUG): for each in-use quest arrow, the two
@@ -2598,13 +2759,58 @@ end
 -- next tick (that's the base radar), but a hand-picked target stays gone until
 -- re-picked. Does NOT turn the whole radar off (F3 does that).
 function Nav.stop_tracking()
+    preempt.scans, preempt.pri = 0, nil   -- an explicit B always disarms the fresh signal
+    -- A fresh quest objective PREEMPTED a hand-picked target/sweep: the first B
+    -- returns to that pick — nearest remaining item for a chainable category, the
+    -- exact one otherwise. B again (no stash left) stops for real.
+    if preempt.stash and target and not target.manual then
+        local p = preempt.stash
+        preempt.stash = nil
+        drop_target()
+        Audio.stop()
+        chain_wait, chain_seen = nil, p.seen or {}
+        auto_suppressed = true   -- the quest must not re-grab; a successful re-target
+                                 -- clears this again (set_manual_target)
+        if chainable(p.grp) then
+            chain_to_next(p.grp)   -- announces the re-target (or the sweep-done phrase)
+        else
+            local found
+            for _, c in ipairs(Nav.list_targets()) do
+                if c.key == p.grp then
+                    for _, it in ipairs(c.items) do
+                        if it.key == p.key then found = it break end
+                    end
+                    break
+                end
+            end
+            if found then
+                Nav.set_manual_target(found.actor, found.key, Nav.item_label(found),
+                    found.grp, found.stateful, true)
+            else
+                Speech.say(I18n.t("nav_stopped"), true)
+            end
+        end
+        return
+    end
     local had = target ~= nil or chain_wait ~= nil or resume_pick ~= nil
     drop_target()
     chain_wait, chain_seen = nil, {}   -- also ends a pending sweep
     resume_pick = nil        -- an explicit stop also forgets the battle-interrupted pick
+    preempt.stash = nil
     auto_suppressed = true   -- stay quiet until re-pick / F3 (don't auto-grab a quest)
     Audio.stop()
     if had then Speech.say(I18n.t("nav_stopped"), true) end
+end
+
+-- Objective-advanced signal (quest_objective.lua, wired in app.lua): the quest HUD's
+-- objective text genuinely changed. Arm the auto-scan's one-shot preemption (see the
+-- `preempt` block for the whole design). kind = "main" | "sub" biases the
+-- marker search toward that quest class. Cheap flag set — safe from any thread the
+-- quest loop runs on (it's the game thread anyway).
+function Nav.notify_objective_change(kind)
+    if not on then return end   -- F3 off = the radar is fully off; respect it
+    preempt.scans = preempt.TRIES
+    preempt.pri = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
 end
 
 -- Commit a picker choice: track this actor as a MANUAL target (auto-scan won't steal
@@ -2621,7 +2827,11 @@ function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
     gated_prev = false
     companion_idx = 0
     chain_wait = nil          -- an explicit pick replaces any pending sweep wait
-    if not keep_sweep then chain_seen = {} end
+    if not keep_sweep then
+        chain_seen = {}
+        preempt.stash = nil                    -- a player pick replaces the stashed one
+        preempt.scans, preempt.pri = 0, nil    -- and disarms a pending fresh signal
+    end
     target = { actor = actor, key = key or tostring(actor:GetAddress()),
                pri = PRI_OTHER, label = label, manual = true,
                grp = grp, stateful = stateful }
@@ -2642,6 +2852,204 @@ function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
         Speech.say(string.format(I18n.t("nav_tracking"), label, 0), true)
     end
     return true
+end
+
+-- Ctrl+Shift+F5 (dev, ONE capture round): pin the native LEVEL member. Ghidra
+-- (2026-07-17, code/decompiled/manual_140f8aba0.c + _ufunc_GetPowerCompareRank.c)
+-- proved the live level is served virtually — AttributeComponent (char+0x8E8)
+-- vtable[0x3E8]() -> int32, minimum 1 — but the member it reads is unreachable
+-- statically (RTTI-stripped binary, ~200 candidate vtables). Hypothesis A: a cached
+-- int in the component's unreflected tail (reflected members end at StatusInstance
+-- @0x100; window below). Hypothesis B: the StatusInstance body (UATStatusInstanceBase
+-- 0x390 / enemy subclass 0x3A0 — reflects NOTHING). Dump both windows for the PLAYER
+-- (level always known from the menu) + the nearby enemies; the offset matching every
+-- displayed "Lv N" goes to native_offsets.lua. All reads SEH-guarded via mem_bridge.
+function Nav.dump_levels()
+    -- Constants live INSIDE the function: the file-level chunk is at Lua's 200-local cap.
+    local ATTR_TAIL_FROM, ATTR_TAIL_TO = 0x104, 0x140  -- component tail after StatusInstance @0x100
+    local SI_BODY_SIZE = 0x3A0                         -- UATEnemyStatus instance size (CXX dump)
+    local LV_MIN, LV_MAX = 1, 999                      -- dump plausibility filter only (getter's
+                                                       -- own default is 1; NOT a game rule)
+    Speech.say("level dump v2", true)   -- version beacon: hearing "v2" proves this code runs
+    ExecuteInGameThread(function()
+        local src = debug.getinfo(1, "S").source:sub(2)
+        local dir = src:match("^(.*)[/\\]") or "."
+        local f = io.open(dir .. "\\dumps\\dump_enemy_level.txt", "a")
+        if not f then Speech.say("level dump: cannot open file", true) return end
+        pcall(function() f:setvbuf("no") end)   -- see Nav.dump: survive a mid-dump abort
+        f:write(string.format("\n== level dump v2 @ %s ==\n", os.date("%H:%M:%S")))
+        if not Mem.is_loaded() then f:write("mem_bridge NOT loaded\n") f:close() return end
+        -- vtable[LEVEL_SLOT] on the AttributeComponent = the game's level getter (Ghidra
+        -- 2026-07-17, manual_140f8aba0.c: level = attrib->vtable[0x3E8]()). Statically the
+        -- concrete vtable was unreachable (RTTI stripped); at RUNTIME it's two pointer
+        -- reads, and its RVA hands Ghidra the exact function to decompile.
+        -- Engine-free info FIRST, engine lookups pcall'd with progress markers: the
+        -- 11:23 captures died silently between the header and the first engine call
+        -- (header-only dumps), so every step now leaves a trace.
+        local LEVEL_SLOT = 0x3E8
+        -- exe base, three ways: the mem.lua wrapper (nil after a hot reload — the boot
+        -- snapshot restores the OLD mem.lua without it), the boot-time C module directly
+        -- (its table always has module_base — the DLL predates the wrapper), and as a
+        -- last resort an MZ scan downward from a code VA (SEH-guarded reads, 64K steps).
+        local exe_base = (Mem.module_base and Mem.module_base()) or 0
+        if exe_base == 0 then
+            local mb = package.loaded and package.loaded["mem_bridge"]
+            if mb and mb.module_base then exe_base = mb.module_base() or 0 end
+        end
+        local function mz_scan(code_va)
+            local probe = code_va - (code_va % 0x10000)
+            for _ = 1, 8192 do   -- up to 512 MB below the code address
+                local sig = Mem.at_bytes(probe, 0, 2)
+                if sig == "MZ" then return probe end
+                probe = probe - 0x10000
+                if probe <= 0 then break end
+            end
+            return 0
+        end
+        f:write(string.format("exe base (pre-scan): %X (ghidra addr = 0x140000000 + rva)\n", exe_base))
+        -- Raw opcode bytes of a function: a trivial getter (mov eax,[rcx+imm]; ret)
+        -- exposes its member offset right in the hex, no decompiler needed.
+        local function code_hex(va, n)
+            local raw = va and Mem.at_bytes(va, 0, n)
+            if not raw then return "?" end
+            local out = {}
+            for i = 1, #raw do out[#out + 1] = string.format("%02X", raw:byte(i)) end
+            return table.concat(out, " ")
+        end
+        local pawn, px, py, pz
+        local okp, errp = pcall(function() pawn = player_pawn() end)
+        if not okp then f:write("player_pawn ERROR: " .. tostring(errp) .. "\n") end
+        if pawn then
+            local oka, erra = pcall(function() px, py, pz = actor_pos(pawn) end)
+            if not oka then f:write("actor_pos(player) ERROR: " .. tostring(erra) .. "\n") end
+        else
+            f:write("no player pawn\n")
+        end
+        local function cls_name(o)
+            local s = "?"
+            pcall(function() s = o:GetClass():GetFName():ToString() end)
+            return s
+        end
+        -- Follow the virtual getter chain LIVE, decoding the idioms seen in this exe
+        -- (2026-07-17 capture): forwarder `mov rcx,[rcx+i32]; mov rax,[rcx]; jmp [rax+i32]`
+        -- (48 8B 89 .. / 48 8B 01 / 48 FF A0 ..) and leaf loads `mov eax,[rcx+disp]; ret`
+        -- (8B 81/8B 41) or `movss xmm0,[rcx+disp]; ret` (F3 0F 10 81). Returns the hop
+        -- trail plus, when a leaf is reached, the final holder VA + member offset + type.
+        local function follow_getter(obj_addr, slot)
+            local hops = {}
+            local function i32at(s, i)
+                local b1, b2, b3, b4 = s:byte(i, i + 3)
+                local v = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+                if v >= 2 ^ 31 then v = v - 2 ^ 32 end
+                return v
+            end
+            for _ = 1, 4 do
+                local vt = Mem.at_ptr(obj_addr, 0)
+                local fn = vt and Mem.at_ptr(vt, slot)
+                local b = fn and Mem.at_bytes(fn, 0, 24)
+                if not b then return hops end
+                hops[#hops + 1] = string.format("obj=%X slot=0x%X fn=%X rva=%X",
+                    obj_addr, slot, fn, exe_base ~= 0 and (fn - exe_base) or 0)
+                if b:byte(1) == 0x8B and b:byte(2) == 0x81 and b:byte(7) == 0xC3 then
+                    return hops, obj_addr, i32at(b, 3), "i32"
+                elseif b:byte(1) == 0x8B and b:byte(2) == 0x41 and b:byte(4) == 0xC3 then
+                    return hops, obj_addr, b:byte(3), "i32"
+                elseif b:byte(1) == 0xF3 and b:byte(2) == 0x0F and b:byte(3) == 0x10
+                    and b:byte(4) == 0x81 and b:byte(9) == 0xC3 then
+                    return hops, obj_addr, i32at(b, 5), "f32"
+                elseif b:byte(1) == 0x48 and b:byte(2) == 0x8B and b:byte(3) == 0x89
+                    and b:byte(8) == 0x48 and b:byte(9) == 0x8B and b:byte(10) == 0x01
+                    and b:byte(11) == 0x48 and b:byte(12) == 0xFF and b:byte(13) == 0xA0 then
+                    local next_obj = Mem.at_ptr(obj_addr, i32at(b, 4))
+                    if not next_obj or next_obj == 0 then return hops end
+                    obj_addr, slot = next_obj, i32at(b, 14)
+                else
+                    hops[#hops + 1] = "unknown idiom: " .. code_hex(fn, 24)
+                    return hops
+                end
+            end
+            return hops
+        end
+        local function dump_char(tag, c)
+            local attrib
+            pcall(function()
+                local a = c.AttributeComponent
+                if a and a:IsValid() then attrib = a end
+            end)
+            if not attrib then f:write(tag .. ": no AttributeComponent\n") return end
+            f:write(string.format("%s  attrib=%s @%X\n", tag, cls_name(attrib), Mem.addr(attrib) or 0))
+            local a_addr = Mem.addr(attrib)
+            local vt = a_addr and Mem.at_ptr(a_addr, 0)
+            local getter = vt and Mem.at_ptr(vt, LEVEL_SLOT)
+            if getter and exe_base == 0 then exe_base = mz_scan(getter) end
+            f:write(string.format("  vtable=%X level_getter_va=%X exe_base=%X rva=%X\n",
+                vt or 0, getter or 0, exe_base,
+                (getter and exe_base ~= 0) and (getter - exe_base) or 0))
+            if getter then f:write("  getter code: " .. code_hex(getter, 64) .. "\n") end
+            if a_addr then
+                local hops, holder, memb, ty = follow_getter(a_addr, LEVEL_SLOT)
+                for _, h in ipairs(hops) do f:write("  hop: " .. h .. "\n") end
+                if holder and memb then
+                    local vi = Mem.at_i32(holder, memb)
+                    local vf
+                    if ty == "f32" then
+                        local raw = Mem.at_bytes(holder, memb, 4)
+                        if raw and #raw == 4 then vf = string.unpack("<f", raw) end
+                    end
+                    f:write(string.format("  LEVEL RESOLVED: holder=%X member=+0x%X type=%s i32=%s f32=%s\n",
+                        holder, memb, ty, tostring(vi), tostring(vf)))
+                end
+            end
+            local tail = {}
+            for off = ATTR_TAIL_FROM, ATTR_TAIL_TO - 4, 4 do
+                local v = Mem.i32(attrib, off)
+                if v then tail[#tail + 1] = string.format("0x%X=%d", off, v) end
+            end
+            f:write("  attrib tail i32: " .. table.concat(tail, " ") .. "\n")
+            local si
+            pcall(function()
+                local s = attrib.StatusInstance
+                if s and s:IsValid() then si = s end
+            end)
+            if not si then f:write("  no StatusInstance\n") return end
+            f:write(string.format("  si=%s @%X, slots with i32 in %d..%d:\n",
+                cls_name(si), Mem.addr(si) or 0, LV_MIN, LV_MAX))
+            local ints, floats = {}, {}
+            for off = 0, SI_BODY_SIZE - 4, 4 do
+                local v = Mem.i32(si, off)
+                if v and v >= LV_MIN and v <= LV_MAX then
+                    ints[#ints + 1] = string.format("0x%X=%d", off, v)
+                end
+                local fv = Mem.float(si, off)
+                if fv and fv >= LV_MIN and fv <= LV_MAX and fv == math.floor(fv) then
+                    floats[#floats + 1] = string.format("0x%X=%.0f", off, fv)
+                end
+            end
+            f:write("    i32: " .. table.concat(ints, " ") .. "\n")
+            f:write("    f32(whole): " .. table.concat(floats, " ") .. "\n")
+        end
+        if pawn then
+            local ok, err = pcall(dump_char, "PLAYER", pawn)
+            if not ok then f:write("PLAYER dump ERROR: " .. tostring(err) .. "\n") end
+        end
+        local n = 0
+        local oke, erre = pcall(function()
+            for _, e in ipairs(enemies_list()) do
+                if n >= 6 then break end
+                n = n + 1
+                local d = "?"
+                local x, y, z = actor_pos(e.actor)
+                if x and px then
+                    d = string.format("%.0fm", math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) / M)
+                end
+                dump_char(string.format("ENEMY %d (%s, %s)", n, e.name or I18n.t(e.noun), d), e.actor)
+            end
+        end)
+        if not oke then f:write("enemy dump ERROR: " .. tostring(erre) .. "\n") end
+        if n == 0 then f:write("no enemies in range\n") end
+        f:close()
+        Speech.say("level dump done", true)
+    end)
 end
 
 -- Ctrl+F5 (dev): dump every guidance candidate + a NavMesh probe to

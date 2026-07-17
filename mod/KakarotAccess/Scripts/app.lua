@@ -139,6 +139,12 @@ Registry.register(require("screen_battleresult"))
 Registry.register(require("screen_toasts"))
 Registry.register(require("screen_title"))
 
+-- Objective-advanced wiring: when the quest HUD's objective text genuinely changes
+-- (quest_objective's signature diff), the radar auto-tracks the new quest marker —
+-- even over a manual pick, which it stashes so B in the R3 menu restores it. Wired
+-- here so neither module requires the other (both stay hot-reloadable).
+QuestObjective.set_on_change(function(kind) Nav.notify_objective_change(kind) end)
+
 local App = {}
 
 function App.start()
@@ -179,6 +185,7 @@ function App.nav_route_toggle() Nav.toggle_route() end
 function App.nav_where() Nav.where() end
 function App.nav_companion() Nav.cycle_companion() end
 function App.nav_dump() Nav.dump() end
+function App.nav_dump_levels() Nav.dump_levels() end
 
 -- F10: read the current quest objective text on demand (kept here so quest_objective
 -- stays hot-reloadable; the keybind in main.lua only delegates).

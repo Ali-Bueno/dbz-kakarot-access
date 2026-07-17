@@ -46,6 +46,20 @@ local running = false
 local last = nil             -- last announced objective string (diff gate)
 local tick = 0              -- monotonic tick for Core's cache/back-off bookkeeping
 
+-- "Objective advanced" signal for the radar (wired in app.lua -> Nav). Each quest
+-- group keeps a SIGNATURE — title + objective lines WITHOUT the counters — and the
+-- callback fires when a non-nil signature differs from the last non-nil one:
+--  * counters ("2/5") tick without moving the marker, so they are excluded;
+--  * the HUD hiding in battle/menus reads nil and must NOT look like a change
+--    (stored signatures survive nil reads), so the same objective re-appearing
+--    after a fight stays silent here;
+--  * the very first observation of a session only seeds (nothing "changed" yet).
+-- The kind ("main"/"sub") tells the radar which quest class advanced, so it can
+-- prefer that marker when both a main and a sub arrow are active.
+local last_sig = { main = nil, sub = nil }
+local sig_seeded = false
+local on_change = nil        -- fn(kind) set via Quest.set_on_change
+
 -- First readable text among a host's candidate member names (blueprint members that
 -- may be absent read as nil — safe).
 local function first_text(host, names)
@@ -60,14 +74,15 @@ local function first_text(host, names)
 end
 
 -- One objective row's spoken line: the objective text plus its counter, or nil if the
--- row is absent/collapsed/blank.
+-- row is absent/collapsed/blank. Second return: the bare objective text (no counter),
+-- the row's contribution to the change signature.
 local function row_line(host, member)
     local row
     if not pcall(function() row = host[member] end) or not Core.valid(row) then return nil end
     if not Core.on_screen(row) then return nil end
     local obj = read_clean(row.Txt_List_00)
     if not obj then return nil end
-    return Core.phrase(obj, read_clean(row.Txt_List_01))
+    return Core.phrase(obj, read_clean(row.Txt_List_01)), obj
 end
 
 -- The whole current objective as one string (title + each visible objective line for
@@ -78,25 +93,49 @@ end
 -- M/S row hidden (valid, on_screen=false, empty) — the rows are the sub-task checklist
 -- ("0/3" lines) and only populate for multi-step objectives. So a group must speak
 -- when EITHER the title or the rows carry text; requiring rows muted the whole reader.
+-- Returns the spoken text, plus the main/sub change SIGNATURES (see last_sig above).
 local function objective_text()
     local host = Core.first_on_screen(HOST_CLASS, tick)
     if not host then return nil end
-    local parts = {}
-    local function group(title_names, rows)
-        local lines = {}
+    local parts, sigs = {}, {}
+    local function group(gkey, title_names, rows)
+        local lines, sig = {}, {}
         for _, m in ipairs(rows) do
-            local l = row_line(host, m)
+            local l, raw = row_line(host, m)
             if l then lines[#lines + 1] = l end
+            if raw then sig[#sig + 1] = raw end
         end
         local title = first_text(host, title_names)
         if not title and #lines == 0 then return end
         parts[#parts + 1] = Core.phrase(title,
             #lines > 0 and table.concat(lines, ", ") or nil)
+        sigs[gkey] = (title or "") .. "|" .. table.concat(sig, "|")
     end
-    group(MAIN_TITLE, MAIN_ROWS)
-    group(SUB_TITLE, SUB_ROWS)
+    group("main", MAIN_TITLE, MAIN_ROWS)
+    group("sub", SUB_TITLE, SUB_ROWS)
     if #parts == 0 then return nil end
-    return table.concat(parts, ". ")
+    return table.concat(parts, ". "), sigs.main, sigs.sub
+end
+
+-- Diff one group's signature against its last non-nil value; returns the group key
+-- when it genuinely changed (see the last_sig comment for the nil/seed rules).
+local function sig_changed(gkey, sig, was_seeded)
+    if not sig then return nil end
+    local prev = last_sig[gkey]
+    last_sig[gkey] = sig
+    if sig ~= prev and (prev ~= nil or was_seeded) then return gkey end
+    return nil
+end
+
+local function signal_check(sig_main, sig_sub)
+    local was = sig_seeded
+    if sig_main or sig_sub then sig_seeded = true end
+    -- Evaluate BOTH groups (no short-circuit): each must update its stored signature
+    -- every pass. Main outranks sub when both changed in the same pass.
+    local cm = sig_changed("main", sig_main, was)
+    local cs = sig_changed("sub", sig_sub, was)
+    local kind = cm or cs
+    if kind and on_change then pcall(on_change, kind) end
 end
 
 -- Poll step: announce the objective only when it changes, and only when no menu is
@@ -114,10 +153,17 @@ local function step()
     -- no budget left and never locate the HUD host.
     tick = tick + 1
     Core.begin_scan_tick()
-    local text = objective_text()
+    local text, sig_main, sig_sub = objective_text()
+    signal_check(sig_main, sig_sub)
     if text == last then return end
     last = text
     if text then Speech.say(text, true) end
+end
+
+-- Radar wiring (app.lua): fn(kind) fires once per genuine objective change,
+-- kind = "main" | "sub". Runs on the game thread, inside this loop's pcall.
+function Quest.set_on_change(fn)
+    on_change = fn
 end
 
 function Quest.start()
