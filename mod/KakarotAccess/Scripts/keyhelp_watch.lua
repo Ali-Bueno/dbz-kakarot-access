@@ -31,6 +31,19 @@ local POLL_EVERY = 5     -- ticks (Core.POLL_MS = 100 ms) between bar probes: a 
 local STABLE_POLLS = 2   -- a new set must survive one more poll before it's spoken: a menu
                          -- animates in, so the first frames of its bar can be half-built
 
+-- Same-phrase cooldown (user request, 2026-07-17: the prompts repeated within seconds).
+-- The per-screen diff gate below forgets everything on a screen change — and the
+-- dispatcher flips screens far more often than the player perceives a context change
+-- (pooled panes, boot dialogs), so an identical bar re-announced on every flip. And
+-- WITHIN a screen, a cursor move whose bar alternates between two phrases re-spoke each
+-- on every move (only the last phrase was remembered). So: a phrase that was actually
+-- spoken less than this many seconds ago is skipped, wherever it shows up — repetition
+-- is fine, machine-gun repetition is not. New phrases still speak at once, and the
+-- on-demand F2 read never passes through here.
+local REPEAT_COOLDOWN_S = 30
+local recent = {}        -- phrase -> os.clock() when last spoken; deliberately NOT
+                         -- cleared on screen changes (they are the repeat source)
+
 local enabled = true
 local armed = false      -- the active screen wants the automatic read
 local spoken_sig = nil   -- label signature of the last bar announced (nil = announce the next)
@@ -72,7 +85,16 @@ function W.update()
     local phrase = Keyhelp.phrase(Keyhelp.actions(tick))
     if phrase and phrase ~= spoken_phrase then
         spoken_phrase = phrase
-        Speech.say(phrase, false)
+        local now = os.clock()
+        if recent[phrase] == nil or now - recent[phrase] >= REPEAT_COOLDOWN_S then
+            -- Prune on the same pass: a suppressed phrase keeps its OLD stamp (so it
+            -- does repeat once the cooldown runs out), and expired entries don't pile up.
+            for p, t in pairs(recent) do
+                if now - t >= REPEAT_COOLDOWN_S then recent[p] = nil end
+            end
+            recent[phrase] = now
+            Speech.say(phrase, false)
+        end
     end
 end
 
