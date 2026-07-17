@@ -51,9 +51,9 @@ local function faded(h)
     return ok and type(op) == "number" and op < 0.05
 end
 
--- TEMP TRACE (round 6 verification): one log line per state change. Turn OFF
--- once the user confirms the cards read correctly.
-local TRACE = true
+-- Diagnosis trace (one log line per state change). OFF since the user verified
+-- the full flow in-game 2026-07-17 (three cards, one read each, no repeats).
+local TRACE = false
 local last_trace = nil
 
 local function trace(line)
