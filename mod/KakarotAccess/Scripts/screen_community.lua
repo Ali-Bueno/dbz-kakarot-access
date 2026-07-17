@@ -122,14 +122,20 @@ local CHAR_TOKENS = {
     Gok = "Goku", Ghn = "Gohan", Gtn = "Goten", Vgt = "Vegeta", Trk = "Trunks",
     Pcl = "Piccolo", Krn = "Krillin", Ymc = "Yamcha", Tsh = "Tien",
     Coz = "Chiaotzu", Chi = "Chi-Chi", Brm = "Bulma", Vdl = "Videl",
-    Mrs = "Mr. Satan", Mbo = "Majin Buu", Dbl = "Dabura", Bbd = "Babidi",
+    -- Mrs/Mst were SWAPPED until 2026-07-17 (user report: Roshi's emblem spoke
+    -- "Mr. Satan" on both board and menu). Pak scan: Ev_Mrs00/01, Ev_Mst00 and
+    -- Ev_Msn00 all exist; the token scheme is romaji (Tpp = Tao Pai Pai, Mbo =
+    -- Majin Boo), so Mrs = Muten RoShi and Mst = MiSuTā Satan. Msn is a third,
+    -- still-unidentified character — left unmapped ON PURPOSE so it speaks raw
+    -- and tells us who it is.
+    Mrs = "Master Roshi", Mbo = "Majin Buu", Dbl = "Dabura", Bbd = "Babidi",
     Spp = "Spopovich", Ymu = "Yamu", Ers = "Erasa",
     Frz = "Frieza", Mfr = "Mecha Frieza", Kcl = "King Cold",
     Cel = "Cell", Cej = "Cell Jr.", Rdt = "Raditz", Npa = "Nappa", Sbm = "Saibaman",
     Gny = "Ginyu", Rcm = "Recoome", Brt = "Burter", Jes = "Jeice", Gld = "Guldo",
     Cui = "Cui", Ddr = "Dodoria", Zbn = "Zarbon", Apr = "Appule",
     Dnd = "Dende", Nil = "Nail", Kbt = "Kibito", Kki = "King Kai", Kym = "King Yemma",
-    Mpp = "Mr. Popo", Mst = "Master Roshi", Okg = "Ox-King", Oln = "Oolong",
+    Mpp = "Mr. Popo", Mst = "Mr. Satan", Okg = "Ox-King", Oln = "Oolong",
     Lnc = "Launch", Yjr = "Yajirobe", Krr = "Korin", Upa = "Upa", Mrn = "Marron",
     Plf = "Pilaf", Mai = "Mai", Shu = "Shu", Bee = "Bee", Bbl = "Bubbles",
     Geg = "Gregory", Srn = "Shenron", Tpp = "Mercenary Tao", Pui = "Pui Pui",

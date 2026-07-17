@@ -1,11 +1,16 @@
--- Notice reader: gameplay TOASTS — the item/quest log (Info_Log_C) and the level-up
--- banner (Info_Log_Level_C).
+-- Notice reader: gameplay TOASTS — the item/quest log (Info_Log_C) and the
+-- level-up / important-notice banner (Info_Log02_C).
 --
 -- Structures (blueprint headers + F7 dumps):
 --   * Info_Log_C : UAT_UIInfoLog — bars Info_Log_Bar00..04, each with Txt00
 --     ("Herb x 1", "Rainbow orb x 2", quest-update lines). Multi-instance pool.
---   * Info_Log_Level_C : UAT_UIInfoLevelUp — the "X reached level N!" toast:
---     native InfomationText + blueprint Txt00/Txt00_Num/Txt01/Txt01_Num/Txt02.
+--   * Info_Log02_C : UAT_UIInfoLog02 — the highlighted log ("¡Gohan alcanzó el
+--     nvl. 7!", skill-tree unlocks — it carries a LevelUpColor + skill-tree icon):
+--     bars Info_Log_Bar_00..04 (Info_Log02.hpp — note the extra underscore), text
+--     on the bar's native TextBox (AT_UIInfoLog02Bar 0x3C0), BP twin Txt00.
+--     (The old Info_Log_Level_C loop is gone: that class exists NOWHERE in the
+--     ObjectDump, so level-ups were never announced — user bug 2026-07-17; the
+--     real banner was pinned by the F7 census dump_1784302864_002.)
 --
 -- NOTICE-RELEASE with a recency dedup: each toast line is spoken ONCE (queued, never
 -- interrupting) and the dispatcher tick is released immediately; the same line can
@@ -27,7 +32,7 @@ Toasts.nav_mute = false
 Toasts.keyhelp_auto = false
 
 local RECENT_S = 8     -- seconds before an identical toast line may re-announce
-local BAR_COUNT = 5    -- Info_Log_Bar00..04 (Info_Log.hpp)
+local BAR_COUNT = 5    -- Info_Log_Bar00..04 / Info_Log_Bar_00..04 (Info_Log.hpp, Info_Log02.hpp)
 
 local tick = 0
 local recent = {}      -- content -> os.time() last spoken
@@ -56,19 +61,16 @@ local function lines()
             end
         end
     end
-    for _, host in ipairs(Core.cached_all("Info_Log_Level_C", tick)) do
+    for _, host in ipairs(Core.cached_all("Info_Log02_C", tick)) do
         if Core.valid(host) and Core.on_screen(host) then
-            local parts = {}
-            for _, m in ipairs({ "InfomationText", "Txt00", "Txt00_Num",
-                                 "Txt01", "Txt01_Num", "Txt02" }) do
-                local node
-                pcall(function() node = host[m] end)
-                if Core.valid(node) and Core.is_visible(node) then
-                    local t = node_text(node)
-                    if t then parts[#parts + 1] = t end
+            for i = 0, BAR_COUNT - 1 do
+                local bar
+                pcall(function() bar = host["Info_Log_Bar_" .. string.format("%02d", i)] end)
+                if Core.valid(bar) and Core.on_screen(bar) then
+                    local t = node_text(bar.TextBox) or node_text(bar.Txt00)
+                    if t then out[#out + 1] = t end
                 end
             end
-            if #parts > 0 then out[#out + 1] = table.concat(parts, ", ") end
         end
     end
     return out

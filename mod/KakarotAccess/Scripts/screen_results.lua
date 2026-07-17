@@ -36,9 +36,13 @@ local queue = {}     -- { {key=, text=}, ... } computed in is_active
 -- value while labels and ranks are right — the digit images likely all share ONE
 -- atlas texture whose name ends in a digit (texture-name parsing can't work then; the
 -- real value would live in the row's unreflected tail, AT.hpp: Detail 0x3C0..0x418).
--- While ON, each detail row's Image_PercentageList is dumped once (visibility + brush
--- texture full name + widget path) to dumps/dump_results.txt during a real results
--- screen. Turn OFF once the value source is fixed and re-verified.
+-- ROUND 2 (2026-07-17): the user's dump confirmed it — every digit image carries the
+-- SAME material (Ins_Num_Result02), some as the shared MaterialInstanceConstant and
+-- some as a per-widget MaterialInstanceDynamic. A per-widget MID + shared atlas means
+-- the digit is selected by a MATERIAL PARAMETER, so the dump now also captures each
+-- brush material's Scalar/Vector parameter values (+ parent). The next real results
+-- screen tells us the parameter name/encoding; the reader fix follows.
+-- Turn OFF once the value source is fixed and re-verified.
 local DEBUG = true
 local dumped = {}    -- detail KEY -> true (reset with `spoken` when the screen closes)
 
@@ -62,11 +66,44 @@ local function debug_dump_detail(d, key, label)
                 local vis, full, tex = "?", "?", "(none)"
                 pcall(function() vis = tostring(Core.is_visible(img)) end)
                 pcall(function() full = img:GetFullName() end)
+                local params = ""
                 pcall(function()
                     local ro = img.Brush.ResourceObject
-                    if ro and ro:IsValid() then tex = ro:GetFullName() end
+                    if ro and ro:IsValid() then
+                        tex = ro:GetFullName()
+                        -- The digit is presumably a material parameter on the MID
+                        -- (all images share one atlas material — round-1 dump).
+                        local sv, sn = Core.array_of(ro, "ScalarParameterValues")
+                        if sv then
+                            for k = 1, sn do
+                                local nm, val = "?", "?"
+                                pcall(function() nm = sv[k].ParameterInfo.Name:ToString() end)
+                                pcall(function() val = tostring(sv[k].ParameterValue) end)
+                                params = params .. string.format(" S:%s=%s", nm, val)
+                            end
+                        end
+                        local vv, vn = Core.array_of(ro, "VectorParameterValues")
+                        if vv then
+                            for k = 1, vn do
+                                local nm, val = "?", "?"
+                                pcall(function() nm = vv[k].ParameterInfo.Name:ToString() end)
+                                pcall(function()
+                                    local c = vv[k].ParameterValue
+                                    val = string.format("(%.3f,%.3f,%.3f,%.3f)", c.R, c.G, c.B, c.A)
+                                end)
+                                params = params .. string.format(" V:%s=%s", nm, val)
+                            end
+                        end
+                        pcall(function()
+                            local p = ro.Parent
+                            if p and p:IsValid() then
+                                params = params .. " parent=" .. p:GetFullName()
+                            end
+                        end)
+                    end
                 end)
-                f:write(string.format("  [%d] vis=%s tex=%s\n      widget=%s\n", i, vis, tex, full))
+                f:write(string.format("  [%d] vis=%s tex=%s\n      params=%s\n      widget=%s\n",
+                    i, vis, tex, params, full))
             end
         end)
     else

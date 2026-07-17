@@ -289,6 +289,8 @@ local QUIET_EXEMPT = {
     -- 2026-07-17). Nothing-live refinement keeps them free during cutscenes.
     ["Loading_C"]            = true, -- the loading/recap host (screen_loading)
     ["Xcmn_MultiLineText_C"] = true, -- the text pool its content() reads
+    ["Info_Name_C"]          = true, -- cinematic character-intro cards (screen_infoname)
+    ["Mgame_Result_C"]       = true, -- minigame "¡BRAVO!" result sheet (screen_fishresult)
 }
 
 -- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from

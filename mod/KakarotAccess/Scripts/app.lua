@@ -59,6 +59,9 @@ Registry.register(require("screen_telop"))
 -- Episode title cards (fm.QuestMainStart) — same banner family as the telop: below
 -- dialogue, speaks once per appearance, queued.
 Registry.register(require("screen_questcard"))
+-- Cinematic character-introduction cards ("Gohan — hijo de Goku"): same banner
+-- family — below dialogue, speaks once per appearance, queued.
+Registry.register(require("screen_infoname"))
 Registry.register(require("screen_tips"))
 Registry.register(require("screen_loading"))
 local Tutorial = require("screen_tutorial")
@@ -136,6 +139,7 @@ Registry.register(require("screen_field"))
 -- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
 -- level-ups). Any real menu above outranks them.
 Registry.register(require("screen_battleresult"))
+Registry.register(require("screen_fishresult"))   -- fishing/minigame "¡BRAVO!" sheet
 Registry.register(require("screen_toasts"))
 Registry.register(require("screen_title"))
 
