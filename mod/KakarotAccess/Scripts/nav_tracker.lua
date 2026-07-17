@@ -2811,6 +2811,20 @@ function Nav.notify_objective_change(kind)
     if not on then return end   -- F3 off = the radar is fully off; respect it
     preempt.scans = preempt.TRIES
     preempt.pri = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
+    -- IDLE radar (no hand-picked target, no battle-interrupted resume pending): a
+    -- freshly activated objective must be tracked and KEEP being tracked even if its
+    -- marker lags past the ~15 s preempt window — the classic case is waiting for an
+    -- NPC to trigger the step (Gohan finds the apples) so the marker spawns seconds
+    -- after the HUD text changes. The preempt alone bypasses auto_suppressed only for
+    -- its TRIES scans; here we also lift the post-B / post-arrival silence so the base
+    -- auto-scan (step) owns the objective persistently. A MANUAL pick is left alone: it
+    -- goes through the preempt-and-stash path so B still brings it back.
+    if not (target and target.manual) and not resume_pick then
+        if auto_suppressed then
+            print("[KakarotAccess] objective change while idle: re-arming auto-track\n")
+        end
+        auto_suppressed = false
+    end
 end
 
 -- Commit a picker choice: track this actor as a MANUAL target (auto-scan won't steal
