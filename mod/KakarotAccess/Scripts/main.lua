@@ -12,6 +12,7 @@ local Speech = require("speech")
 local Mem = require("mem")
 local Audio = require("audio")
 local Input = require("input")
+local Settings = require("settings")
 
 local MOD = "KakarotAccess"
 print("[" .. MOD .. "] Lua loading...\n")
@@ -28,6 +29,11 @@ Audio.init()
 -- the R3 radar target picker. Installed once (the IAT hook must NOT be reinstalled
 -- on a reload), so it lives before the protected snapshot like the other bridges.
 Input.init()
+-- User config (settings.lua → Scripts/config.txt): audio-cue master switch + volume,
+-- radar auto-activation, language override. Loaded here (before the protected snapshot)
+-- so the in-memory values survive a Ctrl+Shift+R reload; the config menu writes changes
+-- straight to disk. app.start() re-applies the language override to the (reloaded) i18n.
+Settings.init()
 
 -- Snapshot everything loaded so far (stdlib + speech + prism_bridge + mem_bridge). These must
 -- survive a reload; anything required AFTER this point is our own logic and is

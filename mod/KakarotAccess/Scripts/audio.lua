@@ -9,10 +9,18 @@
 -- Loaded once from main.lua (before the protected snapshot) so, like the speech
 -- and memory bridges, it survives a Ctrl+Shift+R hot reload.
 
+local Settings = require("settings")
+
 local Audio = {}
 
 local bridge = nil
 local loaded = false
+
+-- The mod config (settings.lua) master-switches every cue and scales its volume, in this
+-- one place, so nothing else needs to know about it. Before Settings.init() the defaults
+-- (cues on, full volume) apply, so cues work during boot too.
+local function cues_off() return not Settings.cues_enabled() end
+local function gain() return Settings.cue_gain() end
 
 function Audio.init()
     local ok, mod = pcall(require, "audio_bridge")
@@ -38,24 +46,27 @@ end
 -- One radar ping. pan -1..1 (left..right), volume 0..1, pitch 0.5..2 (1 = normal).
 -- The CALLER controls the cadence (how often pings fire); each call retriggers.
 function Audio.ping(pan, volume, pitch)
-    if loaded then bridge.ping(pan, volume, pitch) end
+    if loaded and not cues_off() then bridge.ping(pan, volume * gain(), pitch) end
 end
 
 -- Objective reached: cuts the beacon and plays the arrival cue centered.
 function Audio.arrival()
-    if loaded then bridge.arrival() end
+    if loaded and not cues_off() then bridge.arrival() end
 end
 
 -- Play a named category cue (explore radar): "item", "enemy", ... pan -1..1,
 -- volume 0..1, pitch 0.5..2. Unknown/unloaded names are a silent no-op.
 function Audio.cue(name, pan, volume, pitch)
-    if loaded and bridge.cue then bridge.cue(name, pan, volume, pitch) end
+    if loaded and bridge.cue and not cues_off() then bridge.cue(name, pan, volume * gain(), pitch) end
 end
 
 -- Continuous soft sine tone (seamless loop): call repeatedly to reshape volume 0..1
 -- and pitch 0.5..2 (110..440 Hz) — no retrigger, gentle on the ears. Stop when done.
+-- Cues disabled → make sure any running tone is silenced rather than left looping.
 function Audio.tone(volume, pitch)
-    if loaded and bridge.tone then bridge.tone(volume, pitch) end
+    if not loaded or not bridge.tone then return end
+    if cues_off() then if bridge.tone_stop then bridge.tone_stop() end return end
+    bridge.tone(volume * gain(), pitch)
 end
 
 function Audio.tone_stop()

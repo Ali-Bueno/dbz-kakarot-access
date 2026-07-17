@@ -37,7 +37,13 @@ local Menu = {}
 -- frame so the game barely sees it before we block (the opening click could otherwise
 -- leak a frame to R3's field action).
 local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
-local DOUBLE_TAP_TICKS = 14   -- ~280 ms at the 20ms pad tick: window for a 2nd R3 tap (= explore toggle)
+local DOUBLE_TAP_TICKS = 20   -- ~400 ms at the 20ms pad tick: window for a 2nd R3 tap (= explore toggle)
+-- A stick double-click is stiff and easily slower than the window above; when the 2nd tap
+-- lands just after the picker already auto-opened, we still treat it as the toggle (see the
+-- open branch) as long as it arrives within this grace of the FIRST tap and the player did
+-- not navigate the picker in between. Without this the slow 2nd tap only cancelled the
+-- accidentally-opened picker and the explore toggle never fired (never turned OFF).
+local DOUBLE_RESCUE_TICKS = 34   -- ~680 ms from tap 1: the slow-double rescue window
 
 local running = false
 local open = false        -- menu currently open (and pad blocked)
@@ -77,6 +83,7 @@ local function do_open()
     Input.block(true)
     blocked = true
     open = true
+    _G.__KakarotPadModal = "radar"   -- claim the pad (mutex with config_menu)
     cats = list
     ci, ii = 1, 1
     if #cats == 0 then
@@ -124,6 +131,7 @@ local function step()
         cats = {}
         prev_btn = 0
         last_r3_tk, pending_open_tk = nil, nil
+        if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         return
     end
 
@@ -133,6 +141,16 @@ local function step()
         if blocked then Input.block(false) end
         blocked, open, draining = false, false, false
         prev_btn = 0
+        last_r3_tk, pending_open_tk = nil, nil
+        if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
+        return
+    end
+
+    -- Another overlay (the config menu) owns the pad — stay out of its way, and drop any
+    -- half-formed R3 tap so nothing fires when control returns.
+    local modal = _G.__KakarotPadModal
+    if modal and modal ~= "radar" then
+        prev_btn = snap.buttons
         last_r3_tk, pending_open_tk = nil, nil
         return
     end
@@ -144,6 +162,7 @@ local function step()
     if draining then
         if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH then
             Input.block(false); blocked = false; draining = false
+            if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         end
         prev_btn = snap.buttons
         return
@@ -154,7 +173,9 @@ local function step()
         -- explore radar. We hold the open ~280 ms to see if a 2nd tap arrives (the menu
         -- is the fallback now, so the small delay is fine); the R3 leak to the game in
         -- that window is harmless (R3 = ki-sense, as when opening).
-        if pressed(B.RIGHT_THUMB) and Nav.field_ready() then
+        -- L3 held? this is the config-menu chord (config_menu.lua) — ignore R3 entirely
+        -- so it neither opens the picker nor starts an explore double-tap.
+        if pressed(B.RIGHT_THUMB) and not Input.down(snap, B.LEFT_THUMB) and Nav.field_ready() then
             if last_r3_tk and (tk - last_r3_tk) <= DOUBLE_TAP_TICKS then
                 last_r3_tk, pending_open_tk = nil, nil
                 Nav.toggle_explore()
@@ -177,21 +198,34 @@ local function step()
     end
 
     if pressed(B.A) then                        -- A / Cross -> select + track
+        last_r3_tk, pending_open_tk = nil, nil
         do_close("select")
+    elseif pressed(B.RIGHT_THUMB) and last_r3_tk and (tk - last_r3_tk) <= DOUBLE_RESCUE_TICKS then
+        -- Slow explore double-tap: tap 1 auto-opened the picker; this tap 2 completes the
+        -- toggle instead of merely cancelling the (unwanted) picker. Only when the player
+        -- did NOT navigate the picker in between (navigation clears last_r3_tk below).
+        last_r3_tk, pending_open_tk = nil, nil
+        do_close("cancel")
+        Nav.toggle_explore()
     elseif pressed(B.RIGHT_THUMB) or pressed(B.B) then   -- R3 again / B -> close
+        last_r3_tk, pending_open_tk = nil, nil
         do_close(pressed(B.B) and "stop" or "cancel")
     elseif #cats > 0 then
         local n = #cats
         if pressed(B.RIGHT_SHOULDER) then      -- R1 -> next category
+            last_r3_tk = nil                   -- real picker session: a later R3 = cancel
             ci = ci % n + 1; ii = 1; announce_item(true)
         elseif pressed(B.LEFT_SHOULDER) then   -- L1 -> previous category
+            last_r3_tk = nil
             ci = (ci - 2) % n + 1; ii = 1; announce_item(true)
         else
             local m = #cats[ci].items
             if m > 0 then
                 if pressed(B.DPAD_DOWN) then
+                    last_r3_tk = nil
                     ii = ii % m + 1; announce_item(false)
                 elseif pressed(B.DPAD_UP) then
+                    last_r3_tk = nil
                     ii = (ii - 2) % m + 1; announce_item(false)
                 end
             end
@@ -215,6 +249,7 @@ function Menu.start()
         -- never strand the pad in a blocked state on an error
         if blocked then Input.block(false) end
         blocked, open, draining = false, false, false
+        if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
     end)
 end
 
@@ -224,6 +259,7 @@ function Menu.stop()
     if blocked then Input.block(false) end
     blocked, open, draining = false, false, false
     cats = {}
+    if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
 end
 
 return Menu

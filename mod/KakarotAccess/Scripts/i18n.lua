@@ -15,6 +15,19 @@ local I18n = {}
 
 local DEFAULT = "en"
 local lang = nil -- cached base code ("es", "en", …) once resolved
+local forced = nil -- explicit override from the mod config (nil = follow the game)
+
+-- The languages the game itself ships (ELanguageType, CFramework_enums.hpp) collapsed to
+-- their base code — es_ES/es_MX→es, zh_CN/zh_TW→zh. This is the set a lang/<code>.txt may
+-- exist for and the config menu can force. Order = the config menu's cycle order. Names
+-- are endonyms (spoken in their own script if the reader has the voice; the code is
+-- appended so selecting is always unambiguous by ear).
+I18n.LANGS = { "auto", "en", "es", "fr", "de", "it", "pt", "ru", "pl", "ja", "ko", "zh", "ar", "th" }
+I18n.LANG_NAMES = {
+    en = "English", es = "Español", fr = "Français", de = "Deutsch", it = "Italiano",
+    pt = "Português", ru = "Русский", pl = "Polski", ja = "日本語", ko = "한국어",
+    zh = "中文", ar = "العربية", th = "ไทย",
+}
 
 -- ---- language detection ----------------------------------------------------
 
@@ -33,14 +46,77 @@ local function detect()
     return path and path:match("/Message/[%w_]+/(%a%a)_%u%u") or nil
 end
 
--- Active base language (cached; retries detection until the GameInstance is ready).
+-- Active base language: the config override wins; otherwise follow the game (cached;
+-- retries detection until the GameInstance is ready).
 function I18n.language()
+    if forced then return forced end
     if not lang then lang = detect() end
     return lang or DEFAULT
 end
 
+-- Force a language from the mod config ("auto"/nil/"" = follow the game). Re-applied by
+-- app.lua on every reload (this module reloads and loses the override).
+function I18n.force_language(code)
+    if code == nil or code == "" or code == "auto" then forced = nil else forced = code end
+end
+
 -- Drop the cached language so the next lookup re-detects (call after a language change).
 function I18n.refresh() lang = nil end
+
+-- ---- external string files (lang/<code>.txt) -------------------------------
+-- Users can override any string by dropping an editable text file next to the mod. A
+-- line is `key = value`; '#' starts a comment; blank lines ignored. Nested tables use a
+-- dotted prefix: `buttons.A`, `keyhelp.Btn_L1`, `header.7`, `startlist.2` (header/startlist
+-- indices are numbers). `\n` in a value becomes a newline. Missing file or missing key →
+-- the built-in table → English → the key. The file wins over the built-in table, so the
+-- shipped lang/es.txt and lang/en.txt are the editable source of truth for those two.
+
+local EXT = {}   -- code -> parsed table, or false when there is no file (cached either way)
+
+local function ext_dir()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    return (src:match("^(.*)[/\\]") or ".") .. "\\lang\\"
+end
+
+local NESTED_NUM = { header = true, startlist = true }
+local NESTED_STR = { buttons = true, keyhelp = true }
+
+local function load_ext(code)
+    local t
+    pcall(function()
+        local f = io.open(ext_dir() .. code .. ".txt", "r")
+        if not f then return end
+        t = {}
+        local first = true
+        for line in f:lines() do
+            if first then line = line:gsub("^\239\187\191", ""); first = false end
+            -- key = value, skipping '#' comments and blank lines. Key may hold a dot.
+            local key, val = line:match("^%s*([^#=%s][^=]-)%s*=%s*(.-)%s*$")
+            if key then
+                -- Edge whitespace is trimmed above (so a sloppy edit can't add stray
+                -- spaces); a value that NEEDS a leading/trailing space encodes it as \s
+                -- (e.g. combo_join = \smás\s). \n likewise becomes a newline.
+                val = val:gsub("\\n", "\n"):gsub("\\s", " ")
+                local pfx, sub = key:match("^(%a+)%.(.+)$")
+                if pfx and NESTED_NUM[pfx] then
+                    t[pfx] = t[pfx] or {}; t[pfx][tonumber(sub)] = val
+                elseif pfx and NESTED_STR[pfx] then
+                    t[pfx] = t[pfx] or {}; t[pfx][sub] = val
+                else
+                    t[key] = val
+                end
+            end
+        end
+        f:close()
+    end)
+    return t
+end
+
+-- External overlay for a language code (loaded lazily, cached; false = no file).
+local function ext(code)
+    if EXT[code] == nil then EXT[code] = load_ext(code) or false end
+    return EXT[code] or nil
+end
 
 -- ---- string tables ---------------------------------------------------------
 -- Keys are stable ids; add a language by adding a table. Missing key → English → key.
@@ -136,6 +212,18 @@ local S = {
         nav_level = "a nivel",
         explore_on = "explorar activado",
         explore_off = "explorar desactivado",
+        -- Mod config menu (config_menu.lua), opened with L3 + R3 in the overworld.
+        cfg_title = "Configuración del mod",
+        cfg_hint = "Cruceta arriba y abajo para moverte, izquierda y derecha para cambiar, B para cerrar",
+        cfg_closed = "Configuración cerrada",
+        cfg_on = "activado",
+        cfg_off = "desactivado",
+        cfg_pct = "%d por ciento",
+        cfg_audio_cues = "Pistas de audio",
+        cfg_cue_volume = "Volumen de pistas",
+        cfg_radar_autotrack = "Radar automático",
+        cfg_language = "Idioma",
+        cfg_lang_auto = "automático, idioma del juego",
         nav_ahead = "adelante",
         nav_behind = "detrás",
         nav_left = "izquierda",
@@ -359,6 +447,18 @@ local S = {
         nav_level = "level",
         explore_on = "explore on",
         explore_off = "explore off",
+        -- Mod config menu (config_menu.lua), opened with L3 + R3 in the overworld.
+        cfg_title = "Mod settings",
+        cfg_hint = "D-pad up and down to move, left and right to change, B to close",
+        cfg_closed = "Settings closed",
+        cfg_on = "on",
+        cfg_off = "off",
+        cfg_pct = "%d percent",
+        cfg_audio_cues = "Audio cues",
+        cfg_cue_volume = "Cue volume",
+        cfg_radar_autotrack = "Automatic radar",
+        cfg_language = "Language",
+        cfg_lang_auto = "automatic, game language",
         nav_ahead = "ahead",
         nav_behind = "behind",
         nav_left = "left",
@@ -495,42 +595,53 @@ local S = {
     },
 }
 
-local function tbl() return S[I18n.language()] or S[DEFAULT] end
-
 -- ---- accessors -------------------------------------------------------------
+-- Resolution order everywhere: external file → built-in language table → English → nil/key.
 
 -- A plain localized string by key (falls back to English, then the key itself).
 function I18n.t(key)
-    local t = tbl()
-    local v = t[key]
-    if v ~= nil then return v end
-    local e = S[DEFAULT][key]
-    if e ~= nil then return e end
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e[key] ~= nil then return e[key] end
+    local t = S[L]
+    if t and t[key] ~= nil then return t[key] end
+    local d = S[DEFAULT][key]
+    if d ~= nil then return d end
     return key
 end
 
 -- Localized controller-button name for a canonical token (A, LB, L3, …). Unknown
 -- tokens use the language's "%s" fallback template so nothing is dropped.
 function I18n.button(token)
-    local t = tbl()
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e.buttons and e.buttons[token] then return e.buttons[token] end
+    local t = S[L] or S[DEFAULT]
     local b = t.buttons and t.buttons[token]
     if b then return b end
-    return string.format(t.button_fallback or "%s", token)
+    local fb = (e and e.button_fallback) or t.button_fallback or S[DEFAULT].button_fallback or "%s"
+    return string.format(fb, token)
 end
 
 -- Localized keyhelp glyph name for a texture token (Btn_L1, Btn_Options, …), or nil
 -- if the token has no descriptive name in any table.
 function I18n.keyhelp(token)
-    local t = tbl()
-    return (t.keyhelp and t.keyhelp[token])
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e.keyhelp and e.keyhelp[token] then return e.keyhelp[token] end
+    local t = S[L]
+    return (t and t.keyhelp and t.keyhelp[token])
         or (S[DEFAULT].keyhelp and S[DEFAULT].keyhelp[token]) or nil
 end
 
 -- Spoken name for an overworld menu section by EXCmnHeaderFontType enum value, or nil if
 -- the value has no mapped name (then the reader stays silent rather than guessing).
 function I18n.header(ft)
-    local t = tbl()
-    return (t.header and t.header[ft])
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e.header and e.header[ft] then return e.header[ft] end
+    local t = S[L]
+    return (t and t.header and t.header[ft])
         or (S[DEFAULT].header and S[DEFAULT].header[ft]) or nil
 end
 
@@ -558,9 +669,20 @@ end
 -- Spoken name for an overworld main-menu entry by its START_TOP_LIST_ID (each ring/list item's
 -- 0x404 byte), or nil if unmapped. This is the game's main-menu item id, NOT EXCmnHeaderFontType.
 function I18n.startlist(id)
-    local t = tbl()
-    return (t.startlist and t.startlist[id])
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e.startlist and e.startlist[id] then return e.startlist[id] end
+    local t = S[L]
+    return (t and t.startlist and t.startlist[id])
         or (S[DEFAULT].startlist and S[DEFAULT].startlist[id]) or nil
+end
+
+-- Endonym (+ code) for a language code, for the config menu's language option. "auto"
+-- returns the localized "automatic" label. Unknown codes echo the code.
+function I18n.lang_name(code)
+    if code == "auto" then return I18n.t("cfg_lang_auto") end
+    local n = I18n.LANG_NAMES[code]
+    return n and (n .. " (" .. code .. ")") or code
 end
 
 return I18n

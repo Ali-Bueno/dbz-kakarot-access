@@ -1455,7 +1455,12 @@ local function step()
     -- the game just issued a NEW objective, and that preempts once, stashing the
     -- interrupted pick so B brings it back.
     local fresh = preempt.scans > 0
-    if tick % SCAN_EVERY == 0 and (fresh
+    -- Mod config: "radar automático" off → the radar never auto-activates an objective;
+    -- only manual R3 picks track. Read live from the settings store (no new local — this
+    -- chunk is at Lua's 200-local cap). Absent store = default on.
+    local cfg = _G.__KakarotSettings
+    local autotrack = (cfg == nil) or cfg.autotrack_enabled()
+    if autotrack and tick % SCAN_EVERY == 0 and (fresh
         or (not resume_pick and not auto_suppressed and not (target and target.manual))) then
         local best = best_candidate(px, py, pz, fresh and preempt.pri or nil)
         if best then
@@ -2809,6 +2814,9 @@ end
 -- quest loop runs on (it's the game thread anyway).
 function Nav.notify_objective_change(kind)
     if not on then return end   -- F3 off = the radar is fully off; respect it
+    -- Mod config: "radar automático" off → don't auto-activate or disturb the manual pick.
+    local cfg = _G.__KakarotSettings
+    if cfg and not cfg.autotrack_enabled() then return end
     preempt.scans = preempt.TRIES
     preempt.pri = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
     -- IDLE radar (no hand-picked target, no battle-interrupted resume pending): a

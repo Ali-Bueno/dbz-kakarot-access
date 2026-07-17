@@ -21,6 +21,9 @@ libs/lua54/luac.exe
 libs/prism/bin/
 libs/prism/lib/
 
+# User mod config (auto-generated at runtime by settings.lua / the in-game config menu)
+mod/KakarotAccess/Scripts/config.txt
+
 # Dev discovery dumps (written at runtime by discover.lua / dev tools)
 mod/KakarotAccess/Scripts/dump.txt
 mod/KakarotAccess/Scripts/probe.txt

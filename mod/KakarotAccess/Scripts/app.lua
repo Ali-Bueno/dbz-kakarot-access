@@ -16,6 +16,8 @@ local Speech = require("speech")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
 local RadarMenu = require("radar_menu")
+local ConfigMenu = require("config_menu")
+local Settings = require("settings")
 local Battle = require("battle_monitor")
 local QuestObjective = require("quest_objective")
 
@@ -156,9 +158,13 @@ QuestObjective.set_on_change(function(kind) Nav.notify_objective_change(kind) en
 local App = {}
 
 function App.start()
+    -- Re-apply the language override to the freshly-(re)loaded i18n (Settings survives a
+    -- reload in the protected snapshot; i18n does not, so it loses the override each time).
+    I18n.force_language(Settings.language())
     Registry.start()
     Nav.start()
     RadarMenu.start()
+    ConfigMenu.start()
     Battle.start()
     MapScreen.start()
     StatusScreen.start()
@@ -169,6 +175,7 @@ function App.stop()
     Registry.stop()
     Nav.stop()
     RadarMenu.stop()
+    ConfigMenu.stop()
     Battle.stop()
     MapScreen.stop()
     StatusScreen.stop()
