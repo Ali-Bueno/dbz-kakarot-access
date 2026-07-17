@@ -126,7 +126,10 @@ function Card.update()
     for _, t in ipairs(queue) do
         if seen[t] then seen[t].spoken = true end
         if TRACE then print("[KakarotAccess] cards SPOKE " .. t .. "\n") end
-        Speech.say(t, false)   -- queued: never cuts a subtitle line
+        -- Queued + no_requeue: never cuts a subtitle line, and a subtitle cutting
+        -- US must NOT re-append the card (the 2-3x repeats the user heard — each
+        -- neighboring subtitle interrupt re-queued the unfinished card line).
+        Speech.say(t, false, true)
     end
     queue = nil
 end

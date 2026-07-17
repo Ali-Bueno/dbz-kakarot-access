@@ -88,15 +88,20 @@ local function prune_pending()
 end
 
 -- Speak text. interrupt=true (default) cuts off current speech (use on context changes).
-function Speech.say(text, interrupt)
+-- no_requeue=true (queued lines only): if an interrupt cuts this line, it is NOT
+-- re-appended. For ephemeral overlays (the cinematic intro cards) a repeat is worse
+-- than a lost tail — the requeue feature exists for pickup toasts (2026-07-17).
+function Speech.say(text, interrupt, no_requeue)
     if not loaded or not text or text == "" then return end
     text = tostring(text)
     interrupt = interrupt ~= false
     if DEBUG_LOG then log_say(text, interrupt) end
     if not interrupt then
         timed_say(text, false)
-        pending[#pending + 1] = { text = text, until_ = os.clock() + speak_seconds(text),
-                                  requeues = 0 }
+        if not no_requeue then
+            pending[#pending + 1] = { text = text, until_ = os.clock() + speak_seconds(text),
+                                      requeues = 0 }
+        end
         return
     end
     prune_pending()
