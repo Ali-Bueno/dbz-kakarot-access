@@ -32,3 +32,6 @@ mod/KakarotAccess/Scripts/dev_probe.txt
 
 # Scratch
 *.log
+
+# Release packages built by package.ps1
+/dist/
