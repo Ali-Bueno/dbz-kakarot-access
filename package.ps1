@@ -156,4 +156,13 @@ Write-Host ""
 Write-Host "Built $Zip ($sizeMB MB)" -ForegroundColor Green
 Write-Host ""
 Write-Host "To publish (run yourself when ready):" -ForegroundColor Cyan
-Write-Host "  gh release create $Version `"$Zip`" --repo Ali-Bueno/dbz-kakarot-access --title `"$ModName $Version`" --notes `"...`""
+Write-Host "  gh release create $Version `"$Zip`" --repo Ali-Bueno/dbz-kakarot-access --title `"$ModName $Version`" --notes-file CHANGELOG-section.md"
+Write-Host ""
+Write-Host "Do NOT forget the installer (README.md tells users to download it from the" -ForegroundColor Yellow
+Write-Host "release, and the mod-installer repo is PRIVATE - a link to it 404s for them):" -ForegroundColor Yellow
+Write-Host "  cd D:\code\tools\mod-installer; cargo build --release       # MOD_CONFIG=kakarot is the default"
+Write-Host "  copy target\release\installer.exe `"$OutDir\${ModName}Installer.exe`""
+Write-Host "  gh release upload $Version `"$OutDir\${ModName}Installer.exe`" --repo Ali-Bueno/dbz-kakarot-access"
+Write-Host ""
+Write-Host "The installer shows the GitHub RELEASE BODY before updating, so paste the" -ForegroundColor Cyan
+Write-Host "CHANGELOG section for this version into the release notes."
