@@ -25,6 +25,20 @@ local TOOLTIP_WINDOW = 6   -- ticks to keep polling for a late-arriving tooltip
 
 function Core.valid(o) return o ~= nil and o:IsValid() == true end
 
+-- Guarded member fetch. `o.Name` is evaluated at the CALL SITE, so handing it
+-- straight to a helper (`read_text(bar.Txt00)`) leaves the fetch OUTSIDE every
+-- pcall: on a stale pooled widget, or on a class that doesn't have that member,
+-- that is the uncatchable abort — it crashed the game on 2026-07-17 (fishing) and
+-- it is the access-violation class in the two user crash reports of 2026-07-21
+-- (property __index on a dangling UObject, deep in the Lua VM, no traceback).
+-- Any code that can run while the world is being torn down fetches through here.
+function Core.member(o, name)
+    if not Core.valid(o) then return nil end
+    local v
+    if not pcall(function() v = o[name] end) then return nil end
+    return v
+end
+
 function Core.is_visible(o)
     if not Core.valid(o) then return false end
     local ok, v = pcall(function() return o:IsVisible() end)
@@ -106,7 +120,7 @@ end
 -- `mainTxt`). Empty string counts as nil (recycled rows keep stale hidden text).
 function Core.text_of(node)
     if not Core.valid(node) then return nil end
-    local m = node.mainTxt
+    local m = Core.member(node, "mainTxt")
     if not Core.valid(m) then return nil end
     local ok, s = pcall(function() return m.Text:ToString() end)
     if ok and s and s ~= "" then return s end

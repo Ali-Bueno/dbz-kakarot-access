@@ -29,7 +29,10 @@ local pending = nil   -- text to speak this tick (computed in is_active)
 -- invasión saiyan" — went unread; this reader has never been in-game verified and
 -- its on_screen gate may be blind to the display path, like the intro cards were).
 -- One log line per state change of BOTH fm cards. Turn OFF once diagnosed.
-local TRACE = true
+-- OFF since 2026-07-21: it shipped ON in the release and trace_state() ran on
+-- EVERY tick in EVERY state (two per-level fm pointer chains + widget probes),
+-- including during world teardown — crash surface for zero player value.
+local TRACE = false
 local last_trace = nil
 
 local function trace(line)

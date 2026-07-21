@@ -55,7 +55,13 @@ local function lines()
                 local bar
                 pcall(function() bar = host["Info_Log_Bar" .. string.format("%02d", i)] end)
                 if Core.valid(bar) and Core.on_screen(bar) then
-                    local t = node_text(bar.Txt00)
+                    -- Fetch INSIDE a pcall, never as a call argument: on a stale
+                    -- pooled bar a naked member fetch is the uncatchable AV class
+                    -- (the 2026-07-17 fishing crash — fixed then only in the
+                    -- Info_Log02_C loop below; this twin was left behind).
+                    local box
+                    pcall(function() box = bar.Txt00 end)
+                    local t = node_text(box)
                     if t then out[#out + 1] = t end
                 end
             end

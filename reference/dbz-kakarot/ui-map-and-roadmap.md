@@ -176,7 +176,16 @@ Master logic controller `UMenuManager` holds `m_xItemInventoryMenu`/`m_xQuestMen
 ---
 
 ## 4. Discovery method (reproduce)
-`Ctrl+H` (CXX headers) works with the GUI console OFF; set
-`[CXXHeaderGenerator] LoadAllAssetsBeforeGeneratingCXXHeaders = 1` first so lazily-loaded UI is included.
+`Ctrl+H` (CXX headers) works with the GUI console OFF.
+
+> **DO NOT set `LoadAllAssetsBefore*` = 1 on this game** (2026-07-21). The generic UE4SS advice is to
+> turn it on so lazily-loaded UI is included; here it is fatal. Force-loading every asset reaches
+> `AutoDebugMainUI_C`, a debug blueprint left in the paks whose parent class `AutoDebugUIBase` was
+> stripped from the shipping build → `LowLevelFatalError … Could not find SuperStruct AutoDebugUIBase`
+> in `FAsyncLoadingThread`. The abort happens DURING the load, so **no dump is written at all**
+> (UE4SS.log ends at "Loading all assets..."). Instead: get the game into the screens you care about
+> (their classes are then loaded) and press Ctrl+H / Ctrl+J with both flags at 0 — coverage is
+> whatever is loaded at that moment, so dump from the relevant menu rather than from the title.
+
 Then `grep "class U<Name> " AT.hpp` and read a ~40-line window; the `_C` blueprint is in its own
 `<Name>.hpp`. See `D:\code\modding projects\reference\engines\ue4ss\ue4ss-discovery-tools.md`.

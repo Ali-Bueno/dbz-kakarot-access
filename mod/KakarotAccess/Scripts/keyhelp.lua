@@ -77,7 +77,7 @@ end
 -- menu's per-item tooltip.
 function Keyhelp.helpmsg()
     local kh = Keyhelp.bar()
-    return kh and Core.text_of(kh.Txt_Helpmsg_Main) or nil
+    return kh and Core.text_of(Core.member(kh, "Txt_Helpmsg_Main")) or nil
 end
 
 -- The last path segment of a widget's brush texture: ".../Btn_L1.Btn_L1" -> "Btn_L1".

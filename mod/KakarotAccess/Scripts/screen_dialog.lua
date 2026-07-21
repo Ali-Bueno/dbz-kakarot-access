@@ -198,10 +198,10 @@ local function choices()
     for _, ch in pairs(Core.cached_all("Xcmn_Win00_Choice_C", tick)) do
         if Core.on_screen(ch)
            and ch:GetFullName():match("BP_ATGameInstance_C_%d+%.Xcmn_Win00_Choice_C_%d+$") then
-            local label = Core.text_of(ch.Txt_Choice)
+            local label = Core.text_of(Core.member(ch, "Txt_Choice"))
             if label then
                 labels[#labels + 1] = label
-                if Core.is_visible(ch.Img_Xwin01_List) then sel = label end
+                if Core.is_visible(Core.member(ch, "Img_Xwin01_List")) then sel = label end
             end
         end
     end

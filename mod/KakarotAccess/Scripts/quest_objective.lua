@@ -80,9 +80,9 @@ local function row_line(host, member)
     local row
     if not pcall(function() row = host[member] end) or not Core.valid(row) then return nil end
     if not Core.on_screen(row) then return nil end
-    local obj = read_clean(row.Txt_List_00)
+    local obj = read_clean(Core.member(row, "Txt_List_00"))
     if not obj then return nil end
-    return Core.phrase(obj, read_clean(row.Txt_List_01)), obj
+    return Core.phrase(obj, read_clean(Core.member(row, "Txt_List_01"))), obj
 end
 
 -- The whole current objective as one string (title + each visible objective line for

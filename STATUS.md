@@ -8,7 +8,7 @@
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
 - **Screen-reader transport:** PRISM (`prism.dll` + `prism_bridge.dll` in `Scripts/`, `tolk.dll` fallback backend).
 - **Build command:** per-bridge `src/<bridge>/build.ps1` (rebuild only the bridge you touched). Lua is not compiled; validate syntax with `libs/lua54/luac.exe -p <file>`.
-- **Game install path:** `D:\games\steam\steamapps\common\DRAGON BALL Z KAKAROT`. Exe + UE4SS at `…\AT\Binaries\Win64\`. RE dumps live there: **`CXXHeaderDump\`** (per-class `.hpp`, the authority on layouts/members — `AT.hpp` is the big one) and **`UE4SS_ObjectDump.txt`** (what Lua can actually reflect). Grep these instead of re-deriving.
+- **Game install path:** `D:\games\steam\steamapps\common\DRAGON BALL Z KAKAROT`. Exe + UE4SS at `…\AT\Binaries\Win64\`. RE dumps live there: **`CXXHeaderDump\`** (per-class `.hpp`, the authority on layouts/members — `AT.hpp` is the big one) and **`UE4SS_ObjectDump.txt`** (what Lua can actually reflect). Grep these instead of re-deriving. **Regenerating them (2026-07-21):** Ctrl+H = headers, Ctrl+J = object dump, and **both `LoadAllAssetsBefore*` MUST stay 0** — force-loading reaches the stripped debug blueprint `AutoDebugMainUI_C` and kills the game with `LowLevelFatalError … Could not find SuperStruct` before writing anything. Native classes (`AT.hpp`) are complete from the title screen regardless; only lazily-loaded BP `_C` classes need you to have visited their screen, and they accumulate over a session (one Ctrl+H at the end). **Third source, offline:** `D:\code\tools\repak\pak_index.txt` — all 348,382 pak asset paths, grep-able without running the game (see [ui-and-text-architecture.md](reference/dbz-kakarot/ui-and-text-architecture.md)).
 - **Mod install path:** junction `…\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\Mods\KakarotAccess\Scripts` → repo `mod/KakarotAccess/Scripts`; enabled in `mods.txt` (`KakarotAccess : 1`).
 - **Run / test:** launch the game with the mod enabled. `Ctrl+Shift+R` in-game reloads the Lua feature adapters + i18n; `main.lua` changes (keybinds, `Mem.init`, `Speech.init`) or a new/rebuilt DLL need a full game restart.
 
@@ -86,6 +86,26 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-21: TWO crashes reported by an END USER of the release — fixes applied, PENDING in-game
+verify.** Both stacks identical in the whole UE4SS portion (relative offsets) = ONE crash: property
+`__index` on a **dangling UObject**, raised from our tick running inside the `ExecuteInGameThread`
+flush in ProcessEvent (`AT+0x152134`, same frame in both, different callers below). Applied:
+(1) new **`Core.member(o, name)`** guarded fetch in `ui_core.lua` + migrated the always-on naked call
+sites — `Core.text_of`'s own `node.mainTxt` (the hottest path in the mod), `quest_objective.row_line`,
+`keyhelp.helpmsg`, `screen_dialog.choices`; (2) `screen_toasts.lua:58` naked `bar.Txt00` (the
+2026-07-17 crash pattern, fixed back then only in the `Info_Log02_C` twin); (3) `screen_questcard.lua`
+`TRACE = false` — it SHIPPED ON, resolving two per-level `fm` pointer chains every tick in every state.
+**NOT done (deliberate, next durable step):** the world-teardown hole itself. `transition.lua:27-32`
+claims no Lua tick runs between teardown and the gate arming — that is FALSE (LoadMap fires dozens of
+UFunctions through ProcessEvent, each draining our queue). And "harden `Dir.root_ok('mm')`" is
+CIRCULAR (root_ok = `IsValid()` on the dead level's MenuManager). The real fix is a **world epoch** off
+a persistent root (gi → LocalPlayer → PlayerController, nulled by the engine BEFORE CollectGarbage)
+stamped on every cache; measured as net-negative cost (it also removes `find_hud`'s FindAllOf).
+**Also found:** the RE dumps (`CXXHeaderDump\`, `UE4SS_ObjectDump.txt`) are GONE from the game folder
+that line 11 points at — regenerate with Ctrl+H / Ctrl+J after setting both `LoadAllAssetsBefore*` to 1
+(and back to 0 afterwards). **VERIFY:** normal play + return to title + map changes with no crash; ask
+the user for `UE4SS.log` BEFORE relaunching if a third one arrives.
 
 **2026-07-17 (pre-release batch): LOCALIZATION + CONFIG MENU + double-R3 fix — VERIFIED in-game by the
 user ("funcionó!") and COMMITTED (release NOT cut yet, per the user).** Four things wanted before the
