@@ -137,6 +137,12 @@ Set-Content -Path (Join-Path $StageModDir 'version.txt') -Value $Version -Encodi
 $ReadmeSrc = Join-Path $PSScriptRoot 'mod\KakarotAccess\README.txt'
 if (Test-Path $ReadmeSrc) { Copy-Item $ReadmeSrc (Join-Path $StageModDir 'README.txt') }
 
+# 7) Changelog, shipped as .txt so it opens in Notepad (ships at
+#    Mods\KakarotAccess\CHANGELOG.txt). The installer shows the GitHub release body,
+#    not this file, so paste the same section into the release notes when publishing.
+$ChangelogSrc = Join-Path $PSScriptRoot 'CHANGELOG.md'
+if (Test-Path $ChangelogSrc) { Copy-Item $ChangelogSrc (Join-Path $StageModDir 'CHANGELOG.txt') }
+
 # --- zip it --------------------------------------------------------------------
 # Fixed asset name (no version) so /releases/latest/download/KakarotAccess.zip is
 # a stable manual-download link. The version lives in the tag + version.txt.
