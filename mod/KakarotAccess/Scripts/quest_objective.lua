@@ -44,6 +44,15 @@ local SUB_TITLE  = { "Txt_Sub00", "WL_SubQuestListTitle" }
 
 local running = false
 local last = nil             -- last announced objective string (diff gate)
+local cand = nil             -- candidate text while it SETTLES (see step)
+local cand_hold = 0          -- consecutive polls `cand` has held unchanged
+local STABLE_TICKS = 2       -- polls the objective text must hold before it may speak:
+                             -- the HUD repopulates progressively (title first, then rows)
+                             -- and pools several Quest_Navi_C instances, so a single read
+                             -- flickers between partial strings — announcing each one gave
+                             -- the "objective spoken several times" + "re-narrated on map
+                             -- close" reports (user 2026-07-24). Settling first collapses
+                             -- those to one announce of the final text.
 local tick = 0              -- monotonic tick for Core's cache/back-off bookkeeping
 
 -- "Objective advanced" signal for the radar (wired in app.lua -> Nav). Each quest
@@ -155,9 +164,37 @@ local function step()
     Core.begin_scan_tick()
     local text, sig_main, sig_sub = objective_text()
     signal_check(sig_main, sig_sub)
+    -- The HUD hides in combat/menus/transitions and reads nil. Do NOT let that overwrite
+    -- `last`: if it did, the SAME objective re-appearing after a fight would look new and
+    -- be re-announced every time the player leaves battle (user 2026-07-24). Keep the gate
+    -- stale on a nil read (and drop any in-flight candidate) — only a genuine change speaks.
+    -- A completed quest simply leaves `last` at the old goal until a new one shows.
+    if not text then cand, cand_hold = nil, 0 return end
+    -- Settle: the text must hold unchanged for STABLE_TICKS polls before it may speak, so
+    -- the HUD's progressive fill / pooled-instance flicker doesn't announce each partial.
+    if text == cand then cand_hold = cand_hold + 1 else cand, cand_hold = text, 1 end
+    if cand_hold < STABLE_TICKS then return end
     if text == last then return end
     last = text
-    if text then Speech.say(text, true) end
+    Speech.say(text, true)
+end
+
+-- Re-announce the current objective on demand — called when the map opens, so the
+-- player can review the goal there instead of the HUD reader repeating it during
+-- free-roam (user 2026-07-24: the objective must speak only on change / first sight,
+-- and on the map when the player wants it again). Prefers the cached `last` because the
+-- quest HUD (Quest_Navi_C) is usually hidden on the map screen even though the objective
+-- is unchanged; falls back to a live read only when nothing has been announced yet.
+-- Runs on the game thread (the caller already runs inside the registry step). `interrupt`
+-- (default true) is passed to Speech: the map opener passes FALSE so the objective QUEUES
+-- after the map's own area/help readout instead of talking over it (user 2026-07-24).
+function Quest.reannounce(interrupt)
+    if interrupt == nil then interrupt = true end
+    if last then Speech.say(last, interrupt) return end
+    tick = tick + 1
+    Core.begin_scan_tick()
+    local text = objective_text()
+    if text then last = text Speech.say(text, interrupt) end
 end
 
 -- Radar wiring (app.lua): fn(kind) fires once per genuine objective change,
@@ -233,8 +270,8 @@ local function dump_state(text)
             local on = valid and Core.on_screen(row) or false
             local t0, t1
             if valid then
-                pcall(function() t0 = Core.read_text(row.Txt_List_00) end)
-                pcall(function() t1 = Core.read_text(row.Txt_List_01) end)
+                t0 = Core.read_text(Core.member(row, "Txt_List_00"))
+                t1 = Core.read_text(Core.member(row, "Txt_List_01"))
             end
             f:write(string.format("  %s valid=%s on_screen=%s txt0=%s txt1=%s\n",
                 m, tostring(valid), tostring(on), tostring(t0), tostring(t1)))

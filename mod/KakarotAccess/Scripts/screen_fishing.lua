@@ -144,7 +144,7 @@ local function diag_sample(f)
             for i = 1, ni do
                 if Core.is_visible(imgs[i]) then
                     local ro = imgs[i].Brush.ResourceObject
-                    if ro and ro:IsValid() then
+                    if Core.nonnull(ro) then                  -- never ro:IsValid(), see Core.nonnull
                         parts[#parts + 1] = "glyph=" .. (ro:GetFullName():match("([%w_]+)%.[%w_]+$") or "?")
                     end
                 end

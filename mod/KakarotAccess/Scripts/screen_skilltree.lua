@@ -67,7 +67,7 @@ local function zorbs()
     for i = 0, n - 1 do
         local z
         if pcall(function() z = arr[i + 1] end) and Core.valid(z) then
-            local num = tonumber((Core.read_text(z.Txt_Zorb_Num) or ""):match("%d+") or "")
+            local num = tonumber((Core.read_text(Core.member(z, "Txt_Zorb_Num")) or ""):match("%d+") or "")
             out[#out + 1] = { i = i, num = num, color = orb_color(i) }
         end
     end
@@ -144,14 +144,13 @@ end
 local locked_skills = {}
 
 local function cursor_padlock()
-    local locked = false
-    pcall(function()
-        local tree = host.UISkillTree
-        if Core.valid(tree) then
-            locked = Core.is_visible(tree.Skilltree_Cursor.WL_ImgIconMicon)
-        end
-    end)
-    return locked
+    -- Guard EVERY hop with Core.member: `tree.Skilltree_Cursor.WL_ImgIconMicon` was a naked
+    -- CHAIN — if Skilltree_Cursor is a null UObject, the trailing `.WL_ImgIconMicon` derefs
+    -- null+0x10 (UObject.ClassPrivate) straight THROUGH the pcall (the 2026-07-24 palette
+    -- crash class; a pcall can't catch a hardware AV). Core.member validates before each fetch.
+    local tree = Core.member(host, "UISkillTree")
+    local cur = Core.member(tree, "Skilltree_Cursor")
+    return Core.is_visible(Core.member(cur, "WL_ImgIconMicon"))
 end
 
 -- The tree names every level node of a skill with the SAME skill name, so the name is the key.

@@ -33,9 +33,9 @@ local cached = nil   -- item string computed in is_active, reused by update this
 local function items()
     local list = {}
     for i = 0, BAR_COUNT - 1 do
-        local bar = pause["List_Bar0" .. i]
+        local bar = Core.member(pause, "List_Bar0" .. i)
         if Core.on_screen(bar) then
-            local label = Core.text_of(bar.Txt_List)
+            local label = Core.text_of(Core.member(bar, "Txt_List"))
             if label then list[#list + 1] = label end
         end
     end
@@ -53,9 +53,9 @@ local function selected_label()
         local arr = pause.ListBarArray
         if arr then row = arr[idx + 1] end   -- UE4SS Lua arrays are 1-based
     end)
-    if not (ok and Core.valid(row)) then row = pause["List_Bar0" .. idx] end
+    if not (ok and Core.valid(row)) then row = Core.member(pause, "List_Bar0" .. idx) end
     if not Core.on_screen(row) then return nil end
-    return Core.text_of(row.Txt_List)
+    return Core.text_of(Core.member(row, "Txt_List"))
 end
 
 function Pause.is_active()

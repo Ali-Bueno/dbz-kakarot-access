@@ -75,7 +75,7 @@ end
 
 -- A bar is filled when its detail/title canvas is rendered (see panel-gate note above).
 local function bar_filled(bar)
-    return Core.is_visible(bar.Canvas_Detail) or Core.is_visible(bar.Canvas_Title)
+    return Core.is_visible(Core.member(bar, "Canvas_Detail")) or Core.is_visible(Core.member(bar, "Canvas_Title"))
 end
 
 -- The slot's spoken content. Empty and filled are BOTH read (an empty slot is real
@@ -87,19 +87,19 @@ end
 -- returns nil so the caller waits for the full row instead of speaking a half-built one.
 local function bar_text(bar)
     if not Core.valid(bar) then return nil end
-    if Core.is_visible(bar.Canvas_None) then
-        return Core.read_text(bar.Txt_Nodata) or Core.read_text(bar.TextBox_CaptionNone)
+    if Core.is_visible(Core.member(bar, "Canvas_None")) then
+        return Core.read_text(Core.member(bar, "Txt_Nodata")) or Core.read_text(Core.member(bar, "TextBox_CaptionNone"))
             or I18n.t("saveload_empty")
     end
     if bar_filled(bar) then
-        local title = Core.read_text(bar.TextBox_Title)
-        local name = Core.read_text(bar.TextBox_Name)
+        local title = Core.read_text(Core.member(bar, "TextBox_Title"))
+        local name = Core.read_text(Core.member(bar, "TextBox_Name"))
         if not title or not name then return nil end
         return Core.phrase(title, name,
-            Core.read_text(bar.TextBox_Level),
-            Core.read_text(bar.TextBox_Area),
-            Core.read_text(bar.TextBox_PlayTime),
-            Core.read_text(bar.TextBox_TimeStamp))
+            Core.read_text(Core.member(bar, "TextBox_Level")),
+            Core.read_text(Core.member(bar, "TextBox_Area")),
+            Core.read_text(Core.member(bar, "TextBox_PlayTime")),
+            Core.read_text(Core.member(bar, "TextBox_TimeStamp")))
     end
     return nil
 end

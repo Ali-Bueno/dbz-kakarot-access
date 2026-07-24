@@ -44,11 +44,17 @@ local function bucket_of(pct)
 end
 
 -- Current HP number of a HUD (its Txt_Num_Hp text), or nil while hidden/empty.
+-- Both text nodes are fetched through Core.member: the battle HUDs are POOLED and the
+-- game recycles them the instant a fight ends or an enemy falls, so `hud.Txt_Num_Hp`
+-- at the call site is a property __index on a possibly-dangling UObject — the
+-- uncatchable access violation (user crash mid-combat, 2026-07-24: AV reading
+-- 0x00000010 = ClassPrivate of a NULL UObject). This loop is the one that runs at
+-- 250ms THROUGH combat, so it is the most exposed caller in the mod.
 local function hud_hp(hud)
     if not (Core.valid(hud) and Core.on_screen(hud)) then return nil end
     local n
     pcall(function()
-        local t = Core.read_text(hud.Txt_Num_Hp)
+        local t = Core.read_text(Core.member(hud, "Txt_Num_Hp"))
         if t then n = tonumber((t:gsub("[^%d]", ""))) end
     end)
     return n
@@ -56,7 +62,7 @@ end
 
 local function hud_name(hud)
     local t
-    pcall(function() t = Core.read_text(hud.Txt_Name_Char) end)
+    pcall(function() t = Core.read_text(Core.member(hud, "Txt_Name_Char")) end)
     return t
 end
 

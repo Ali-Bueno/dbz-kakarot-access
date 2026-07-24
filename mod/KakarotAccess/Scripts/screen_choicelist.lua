@@ -28,7 +28,7 @@ local function options()
     local list = {}
     for _, it in pairs(Core.cached_all("Xcmn_Win01_List_C", tick)) do
         if it:GetFullName():find("/Engine/Transient", 1, true) and Core.on_screen(it) then
-            local label = Core.text_of(it.Txt_Item)
+            local label = Core.text_of(Core.member(it, "Txt_Item"))
             if label then list[#list + 1] = { it = it, label = label } end
         end
     end
@@ -38,7 +38,7 @@ end
 -- The selected option = the one whose highlight background is visible.
 local function selected(list)
     for _, e in ipairs(list) do
-        if Core.is_visible(e.it.Img_Xwin01_List) then return e.label end
+        if Core.is_visible(Core.member(e.it, "Img_Xwin01_List")) then return e.label end
     end
     return nil
 end
@@ -54,8 +54,8 @@ function Choice.reset() ann:reset() end
 
 function Choice.update()
     local name = selected(options())
-    local title = Core.text_of(win.Txt_Title)
-    local desc = A.markup_to_speech(Core.text_of(win.Txt_Help))
+    local title = Core.text_of(Core.member(win, "Txt_Title"))
+    local desc = A.markup_to_speech(Core.text_of(Core.member(win, "Txt_Help")))
     -- title spoken on entry; moving selection → new option + its description.
     ann:focus(title, nil, name, desc, nil)
 end

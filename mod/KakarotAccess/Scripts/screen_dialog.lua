@@ -218,17 +218,12 @@ local function choices()
             for i = 1, n do
                 local ch = arr[i]
                 if Core.valid(ch) and Core.on_screen(ch) then
-                    local label
-                    pcall(function() label = A.markup_to_speech(Core.read_text(ch.Txt_Choice)) end)
-                    if not label then
-                        pcall(function() label = A.markup_to_speech(Core.read_text(ch.ChoiceTxt)) end)
-                    end
+                    local label = A.markup_to_speech(Core.read_text(Core.member(ch, "Txt_Choice")))
+                        or A.markup_to_speech(Core.read_text(Core.member(ch, "ChoiceTxt")))
                     if label then
                         labels[#labels + 1] = label
-                        local hi = false
-                        pcall(function()
-                            hi = Core.is_visible(ch.Img_Xwin01_List) or Core.is_visible(ch.BasePlate)
-                        end)
+                        local hi = Core.is_visible(Core.member(ch, "Img_Xwin01_List"))
+                            or Core.is_visible(Core.member(ch, "BasePlate"))
                         if hi then sel = label end
                     end
                 end
@@ -248,15 +243,12 @@ local function choices()
             local row = iarr[i]
             if Core.valid(row) and Core.on_screen(row) then
                 local label = Core.phrase(
-                    A.markup_to_speech(Core.read_text(row.ItemName)),
-                    A.markup_to_speech(Core.read_text(row.ItemNum)))
+                    A.markup_to_speech(Core.read_text(Core.member(row, "ItemName"))),
+                    A.markup_to_speech(Core.read_text(Core.member(row, "ItemNum"))))
                 if label ~= "" then
                     ilabels[#ilabels + 1] = label
-                    local hi = false
-                    pcall(function() hi = Core.is_visible(row.ImgXwin01List) end)
-                    if not hi then
-                        pcall(function() hi = Core.is_visible(row.Img_Xwin01_List) end)
-                    end
+                    local hi = Core.is_visible(Core.member(row, "ImgXwin01List"))
+                        or Core.is_visible(Core.member(row, "Img_Xwin01_List"))
                     if hi then isel = label end
                 end
             end
@@ -391,16 +383,14 @@ local function dump_window(msg)
                     local cls = row:GetFullName():match("^(%S+)") or "?"
                     local texts = {}
                     for _, m in ipairs(ROW_TEXTS) do
-                        local t
-                        pcall(function() t = Core.read_text(row[m]) end)
+                        local t = Core.read_text(Core.member(row, m))
                         if t then texts[#texts + 1] = m .. "=" .. t end
                     end
                     local hi = ""
-                    pcall(function()
-                        if Core.is_visible(row.Img_Xwin01_List) or Core.is_visible(row.BasePlate) then
-                            hi = " HIGHLIGHT"
-                        end
-                    end)
+                    if Core.is_visible(Core.member(row, "Img_Xwin01_List"))
+                        or Core.is_visible(Core.member(row, "BasePlate")) then
+                        hi = " HIGHLIGHT"
+                    end
                     f:write(string.format("  %s[%d] %s %s%s\n", pool, i, cls,
                         table.concat(texts, " "), hi))
                 end
@@ -457,7 +447,18 @@ local choice_key = nil    -- signature (labels+msg) the latched prompt belongs t
 -- composed utterance (up to ~3 marks per notice), not one entry per notice.
 local RECENT_MAX = 24
 local recent, recent_set = {}, {}
-local function was_recent(m) return m ~= nil and recent_set[m] == true end
+-- PINNED notice texts: like recent_set but IMMUNE to the FIFO's RECENT_MAX eviction and to
+-- off-screen blinks — cleared only on a map transition (new epoch, below). The recent FIFO
+-- alone let a LONG-PARKED notice window (a skill-tree / super-attack unlock or a reward
+-- popup that stays on screen for many minutes) re-announce itself once ~24 other texts
+-- evicted its marks — the "desbloqueaste superataque" repeating on its own in free-roam
+-- (user 2026-07-24; the FIFO-eviction hole already noted at fresh_notice's node_rt comment).
+-- A text stays pinned for the whole epoch, so its parked window can never re-compose as
+-- "fresh" again; a genuinely NEW notice differs in text (or carries fresh content ROWS,
+-- checked separately from the pin) and still speaks.
+local pinned_set = {}
+local function was_recent(m) return m ~= nil and (recent_set[m] == true or pinned_set[m] == true) end
+local function pin(m) if m then pinned_set[m] = true end end
 local function mark_recent(m)
     if not m or recent_set[m] then return end
     recent_set[m] = true
@@ -717,6 +718,11 @@ function Dialog.update()
         mark_recent(composed)
         for _, t in ipairs(node_texts or {}) do mark_recent(t) end
         for _, t in ipairs(notice_extra or {}) do mark_recent(t) end
+        -- Also PIN this notice's texts for the whole epoch: a parked window must never
+        -- re-fire after the FIFO evicts its recent marks (user 2026-07-24).
+        pin(composed)
+        for _, t in ipairs(node_texts or {}) do pin(t) end
+        for _, t in ipairs(notice_extra or {}) do pin(t) end
         ann:reset()          -- keep the shared announcer clean for a following choice
         spoken = composed    -- for the DLG_TRACE line only
     end
@@ -730,7 +736,7 @@ end
 -- suppression the recent-set exists for never spans a map load, so clearing here
 -- costs nothing. Pure Lua only (runs mid-map-switch).
 Transition.on_begin("screen_dialog", function()
-    recent, recent_set = {}, {}
+    recent, recent_set, pinned_set = {}, {}, {}
     spoken, notice_msg, notice_full, notice_extra = nil, nil, nil, nil
     choice_prompt, choice_key, choice_marked = nil, nil, nil
     dlg_last, enum_last, state, win = nil, nil, nil, nil

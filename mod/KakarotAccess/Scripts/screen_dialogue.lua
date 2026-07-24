@@ -117,10 +117,10 @@ end
 -- NEXT line's text (the "mixed subtitles" reports, 2026-07-06).
 local function line_from(w, name_prop, body_prop)
     if not Core.on_screen(w) then return nil end
-    local body = node_text(w[body_prop])
+    local body = node_text(Core.member(w, body_prop))
     if not body then return nil end
-    local speaker = node_text(w[name_prop])
-    if node_text(w[body_prop]) ~= body then return nil end   -- changed mid-read
+    local speaker = node_text(Core.member(w, name_prop))
+    if node_text(Core.member(w, body_prop)) ~= body then return nil end   -- changed mid-read
     return speaker and (speaker .. ": " .. body) or body
 end
 

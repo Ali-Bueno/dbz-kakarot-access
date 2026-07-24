@@ -30,13 +30,13 @@ local function selected_row()
     if not Core.valid(host) then return nil end
     local bar = host.WL_StartCharBarList
     if not Core.valid(bar) then return nil end
-    local name = Core.read_text(bar.Txt_Name)
+    local name = Core.read_text(Core.member(bar, "Txt_Name"))
     if not name then return nil end
     return {
         name  = name,
-        lv    = Core.read_text(bar.Txt_Lv),         -- e.g. "Lvl 2"
-        pow   = Core.read_text(bar.Txt_Power),      -- "BP" label
-        num   = Core.read_text(bar.Txt_Power_Num),  -- e.g. "365"
+        lv    = Core.read_text(Core.member(bar, "Txt_Lv")),         -- e.g. "Lvl 2"
+        pow   = Core.read_text(Core.member(bar, "Txt_Power")),      -- "BP" label
+        num   = Core.read_text(Core.member(bar, "Txt_Power_Num")),  -- e.g. "365"
     }
 end
 

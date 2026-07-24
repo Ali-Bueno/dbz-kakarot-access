@@ -30,7 +30,7 @@ local function selected_topic()
         if pcall(function() row = plates[i] end) and Core.valid(row) then
             local sel
             pcall(function() sel = Core.is_visible(row.Ins_Cursor_Fad) end)
-            if sel then return Core.read_text(row.Txt_List) end
+            if sel then return Core.read_text(Core.member(row, "Txt_List")) end
         end
     end
     return nil

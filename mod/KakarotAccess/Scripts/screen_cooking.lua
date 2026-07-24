@@ -76,11 +76,11 @@ local DESCRIPTION_MEMBER = "Txt_Detail03"
 local function ingredient_parts()
     local parts, i = {}, 0
     while true do
-        local bar = host[string.format("Shop_Cmn_Bar_01_%02d", i)]
+        local bar = Core.member(host, string.format("Shop_Cmn_Bar_01_%02d", i))
         if not Core.valid(bar) then break end
         if Core.on_screen(bar) then
-            local p = Core.phrase(clean(Core.read_text(bar.Txt_List)),
-                                  clean(Core.read_text(bar.Txt_Num)))
+            local p = Core.phrase(clean(Core.read_text(Core.member(bar, "Txt_List"))),
+                                  clean(Core.read_text(Core.member(bar, "Txt_Num"))))
             if p ~= "" then parts[#parts + 1] = p end
         end
         i = i + 1
@@ -93,14 +93,14 @@ end
 local function detail()
     local parts = {}
     for _, m in ipairs(DETAIL_MEMBERS) do
-        local node = host[m]
+        local node = Core.member(host, m)
         if Core.on_screen(node) then
             local t = clean(Core.read_text(node))
             if t then parts[#parts + 1] = t end
         end
     end
     for _, p in ipairs(ingredient_parts()) do parts[#parts + 1] = p end
-    local desc = host[DESCRIPTION_MEMBER]
+    local desc = Core.member(host, DESCRIPTION_MEMBER)
     if Core.on_screen(desc) then
         local t = clean(Core.read_text(desc))
         if t then parts[#parts + 1] = t end
@@ -133,8 +133,8 @@ local function genre() return clean(shoplist_text("WL_Txt_GenreTitle")) end
 local function selection_sig()
     local parts = { shoplist_text("WL_CookWin_Cap_Title") }
     if Core.valid(host) then
-        parts[#parts + 1] = Core.read_text(host.Txt_Detail00_01)
-        parts[#parts + 1] = Core.read_text(host[DESCRIPTION_MEMBER])
+        parts[#parts + 1] = Core.read_text(Core.member(host, "Txt_Detail00_01"))
+        parts[#parts + 1] = Core.read_text(Core.member(host, DESCRIPTION_MEMBER))
     end
     return Core.phrase(table.unpack(parts))
 end
@@ -144,7 +144,7 @@ local function overlay_text()
     local comp
     pcall(function() comp = host.WL_CookingComp end)
     if Core.valid(comp) and Core.on_screen(comp) then
-        local t = clean(Core.read_text(comp.WL_Text))
+        local t = clean(Core.read_text(Core.member(comp, "WL_Text")))
         if t then return t end
     end
     local res
@@ -247,7 +247,7 @@ function Cooking.is_active()
         return false
     end
     pcall(function() shoplist = host.CookMenuList end)
-    list = Core.valid(shoplist) and shoplist.WL_Shop_Cmn_List or nil
+    list = Core.member(shoplist, "WL_Shop_Cmn_List")
     if A.list_select_index(list) == nil then return false end
     -- Live-detail gate: a genuinely open menu always shows the selected dish in the
     -- detail pane. A pooled closed Shop_Cook_C keeps a FROZEN GetSelectValue() (that

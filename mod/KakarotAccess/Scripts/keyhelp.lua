@@ -84,9 +84,14 @@ end
 local function texture_token(img)
     if not Core.valid(img) then return nil end
     local res
+    -- Core.nonnull, NEVER ro:IsValid(): a device-indexed glyph has a NULL ResourceObject,
+    -- and IsValid/GetFullName on that handle derefs null+0x10 straight through this pcall
+    -- (the crash ledger's CLASS A — this reader has the widest radius in the mod: every
+    -- keyhelp bar on every screen, and the ledger named it as the one to fix first if a
+    -- 0x10 AV recurred. It did: the user's 2026-07-24 mid-combat crash).
     pcall(function()
         local ro = img.Brush.ResourceObject
-        if ro and ro:IsValid() then res = ro:GetFullName() end
+        if Core.nonnull(ro) then res = ro:GetFullName() end
     end)
     return res and res:match("([%w_]+)%.[%w_]+$") or nil
 end

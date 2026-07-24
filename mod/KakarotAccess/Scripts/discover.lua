@@ -19,6 +19,8 @@
 -- earlier version called FindAllOf per-container and hung the game). Not shipped.
 
 local Core = require("ui_core")   -- Core.array_of: the only safe way to read a reflected TArray
+local Mem = require("mem")        -- native (non-UPROPERTY) selection indices
+local OFF = require("native_offsets")
 
 local Discover = {}
 
@@ -153,7 +155,8 @@ function Discover.run()
             local res
             local ok = pcall(function()
                 local ro = o.Brush.ResourceObject
-                if ro and ro:IsValid() then res = cname(ro) .. " " .. (ro:GetName() or "?") end
+                -- never ro:IsValid() — see Core.nonnull (that call IS the null deref)
+                if Core.nonnull(ro) then res = cname(ro) .. " " .. (ro:GetName() or "?") end
             end)
             if not ok then brush_fails = brush_fails + 1 end
             return res or "-"
@@ -414,6 +417,95 @@ function Discover.run()
                 end)
             else
                 out[#out + 1] = "  (no live AT_UIXcmnAgreement — press F7 while a document is on screen)"
+            end
+        end
+        flush()
+        out[#out + 1] = ""
+
+        -- Game-over / defeat menu: answers the TWO questions screen_gameover depends on,
+        -- which the text census can't (it walks the object tree by full name, so it proves
+        -- the widgets EXIST, not that they're reachable as reflected properties):
+        --   1) DETECTION — is a live Gameover_C findable, and is any manager field
+        --      pointing at it (a mapped class in ui_directory needs no scan at all, and
+        --      scanning is exactly what cinematic quiet mode defers).
+        --   2) READ PATH — are List_Bar0N / SelectionWidgetArray / CurrentSelectIndex
+        --      actually reflected on the host, or is the BP class empty as assumed.
+        -- Press F7 while the defeat menu is on screen.
+        out[#out + 1] = "==== GAME OVER (Gameover_C: detection + read path) ===="
+        flush()
+        do
+            local hosts = FindAllOf("Gameover_C") or {}
+            out[#out + 1] = string.format("-- FindAllOf(Gameover_C) = %d", #hosts)
+            for _, h in pairs(hosts) do
+                if valid(h) and not h:GetFullName():find("Default__", 1, true) then
+                    out[#out + 1] = "-- HOST " .. short(h:GetFullName())
+                        .. "  vis=" .. isvis(h) .. " enum=" .. vis_enum(h)
+                        .. " op=" .. (function()
+                            local ok, o = pcall(function() return h:GetRenderOpacity() end)
+                            return ok and tostring(o) or "-"
+                        end)()
+                    -- positional rows (what the adapter probes first)
+                    for i = 0, 5 do
+                        local nm = "List_Bar0" .. i
+                        local bar = Core.member(h, nm)
+                        if bar ~= nil then
+                            out[#out + 1] = string.format("     .%s reflected=yes valid=%s vis=%s txt=%q",
+                                nm, tostring(valid(bar)), isvis(bar),
+                                tostring(Core.text_of(Core.member(bar, "Txt_List"))))
+                        end
+                    end
+                    -- the native selection array + index (reflected first, then raw)
+                    local arr, n = Core.array_of(h, "SelectionWidgetArray")
+                    out[#out + 1] = "     SelectionWidgetArray = " .. tostring(n)
+                    if arr and n then
+                        for i = 1, n do
+                            local row; pcall(function() row = arr[i] end)
+                            out[#out + 1] = string.format("       [%d] valid=%s vis=%s txt=%q",
+                                i - 1, tostring(valid(row)), isvis(row),
+                                tostring(Core.text_of(Core.member(row, "Txt_List"))))
+                        end
+                    end
+                    out[#out + 1] = string.format("     CurrentSelectIndex reflected=%s  native@0x%x=%s",
+                        tostring(Core.member(h, "CurrentSelectIndex")),
+                        OFF.gameover.selectedIndex,
+                        tostring(Mem.i32(h, OFF.gameover.selectedIndex)))
+                    flush()
+                    -- Which manager field OWNS it? A hit here turns the adapter into a
+                    -- pointer read (ui_directory MAP) — no scan, immune to quiet mode.
+                    local target = h:GetFullName()
+                    for _, root_cls in ipairs({ "BP_ATGameInstance_C", "AT_GameHUD", "AT_UIFieldManager" }) do
+                        local root; pcall(function() root = FindFirstOf(root_cls) end)
+                        if valid(root) and not root:GetFullName():find("Default__", 1, true) then
+                            local cls; pcall(function() cls = root:GetClass() end)
+                            local d = 0
+                            while valid(cls) and d < 8 do
+                                pcall(function()
+                                    cls:ForEachProperty(function(prop)
+                                        local pn, pt = "?", "?"
+                                        pcall(function() pn = prop:GetFName():ToString() end)
+                                        pcall(function() pt = prop:GetClass():GetFName():ToString() end)
+                                        if pt == "ObjectProperty" then
+                                            local ch = Core.member(root, pn)
+                                            if valid(ch) then
+                                                local fn; pcall(function() fn = ch:GetFullName() end)
+                                                if fn == target then
+                                                    out[#out + 1] = string.format(
+                                                        "     OWNER FIELD: %s.%s -> this host", root_cls, pn)
+                                                end
+                                            end
+                                        end
+                                    end)
+                                end)
+                                local sup; pcall(function() sup = cls:GetSuperStruct() end)
+                                cls = valid(sup) and sup or nil; d = d + 1
+                            end
+                        end
+                    end
+                    flush()
+                end
+            end
+            if #hosts == 0 then
+                out[#out + 1] = "  (no Gameover_C at all — press F7 while the defeat menu is on screen)"
             end
         end
         flush()

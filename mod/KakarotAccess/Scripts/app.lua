@@ -41,6 +41,9 @@ Registry.register(require("screen_memory"))
 -- Story results (Quest_Main_Clear_C): the post-battle rank board. High priority — a
 -- full-screen sequence; reads incrementally following the game's reveal animation.
 Registry.register(require("screen_results"))
+-- Game-over / defeat menu (Gameover_C): the "Fin de la partida" retry/load/title list.
+-- High priority — a full-screen modal that owns the screen when the player is defeated.
+Registry.register(require("screen_gameover"))
 Registry.register(require("screen_dialog"))
 -- Boot agreement / privacy policy (AT_UIXcmnAgreement): the first screen after launch.
 -- Below the dialog reader (a confirm popup over it must win), above everything else —

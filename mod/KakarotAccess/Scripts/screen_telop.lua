@@ -38,9 +38,9 @@ local function slot_text(s)
     if not Core.valid(s) or not Core.is_visible(s) then return nil end
     local cap, name
     pcall(function()
-        cap = A.markup_to_speech(Core.read_text(s.Txt_Caption))
-        name = A.markup_to_speech(Core.read_text(s.Txt_Name))
-            or A.markup_to_speech(Core.read_text(s.Txt_Name_Foreign_Lang00))
+        cap = A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Caption")))
+        name = A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Name")))
+            or A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Name_Foreign_Lang00")))
     end)
     local t = Core.phrase(cap, name)
     return t ~= "" and t or nil

@@ -69,7 +69,7 @@ local function debug_dump_detail(d, key, label)
                 local params = ""
                 pcall(function()
                     local ro = img.Brush.ResourceObject
-                    if ro and ro:IsValid() then
+                    if Core.nonnull(ro) then                  -- never ro:IsValid(), see Core.nonnull
                         tex = ro:GetFullName()
                         -- The digit is presumably a material parameter on the MID
                         -- (all images share one atlas material — round-1 dump).
@@ -123,7 +123,7 @@ local function texture_token(img)
     local res
     pcall(function()
         local ro = img.Brush.ResourceObject
-        if ro and ro:IsValid() then res = ro:GetFullName() end
+        if Core.nonnull(ro) then res = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
     end)
     return res and res:match("([%w_]+)%.[%w_]+$") or nil
 end
@@ -163,8 +163,8 @@ local function lines()
         for i = 1, nbars do
             local bar = bars[i]
             if Core.valid(bar) and Core.on_screen(bar) then
-                local name = Core.read_text(bar.TextBox_Item)
-                local r = rank_letter(bar.Image_Rank)
+                local name = Core.read_text(Core.member(bar, "TextBox_Item"))
+                local r = rank_letter(Core.member(bar, "Image_Rank"))
                 if name and r then
                     out[#out + 1] = { key = "bar" .. i, text = name .. ", " .. r }
                 end
@@ -176,8 +176,8 @@ local function lines()
                         d = bar["Quest_Main_Clear_Detail" .. string.format("%02d", j)]
                     end)
                     if Core.valid(d) and Core.on_screen(d) then
-                        local dn = Core.read_text(d.TextBox_Detail)
-                        local dr = rank_letter(d.Image_Rank)
+                        local dn = Core.read_text(Core.member(d, "TextBox_Detail"))
+                        local dr = rank_letter(Core.member(d, "Image_Rank"))
                         if dn and dr then
                             local key = string.format("d%d.%d", i, j)
                             if DEBUG then debug_dump_detail(d, key, dn) end
@@ -204,7 +204,12 @@ end
 function Results.is_active()
     tick = tick + 1
     host = Core.first_on_screen("Quest_Main_Clear_C", tick)   -- pooled, multi-instance
-    if not host then
+    -- A pooled results pane lingers on_screen (still rendered) after it closes, so gate on
+    -- it being GENUINELY LIVE (pane_live: visibility + opacity) and cross-check free-roam
+    -- (the minimap being up = back in the world, so any remaining pane is stale). Without
+    -- this, a flicker off/on re-cleared `spoken` and re-announced old results in the middle
+    -- of nowhere (user 2026-07-24; same pane-live rule cooking uses, CLAUDE.md §8).
+    if not host or not Core.pane_live(host) or Core.free_roam(tick) then
         spoken = {}
         queue = {}
         dumped = {}

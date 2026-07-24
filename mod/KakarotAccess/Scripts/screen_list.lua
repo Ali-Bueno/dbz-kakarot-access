@@ -173,7 +173,7 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
             Core.refresh_all("CFUIMultiLineTextBox")
         end
         had_host = true
-        list = host[list_member]
+        list = Core.member(host, list_member)
         local idx = A.list_select_index(list)
         if (detail_nodes or name_node) and not boxes then collect_boxes() end
         if DEBUG then
@@ -197,7 +197,7 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
     function S.reset() ann:reset() boxes = nil name_box = nil empty_shown = false end
 
     function S.update()
-        local tab = tab_member and Core.read_text(list[tab_member]) or nil
+        local tab = tab_member and Core.read_text(Core.member(list, tab_member)) or nil
         -- Empty category: announce the section + "empty" (native flag; the UI itself is stale).
         -- reset() once on entry so the announcement isn't swallowed by the category-tab change
         -- (the announcer speaks a tab change on its own tick and drops the name that tick).

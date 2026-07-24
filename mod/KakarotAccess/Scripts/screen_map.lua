@@ -32,6 +32,10 @@ local ann = Core.make_announcer()
 local tick = 0
 local state = nil    -- { screen, name, world } computed in is_active
 local dests_said = false   -- world-map travel points announced once per opening
+local OBJ_READ_DELAY = 3   -- polls after opening before the quest objective is re-read, so
+                           -- it QUEUES after the map's own area/help/travel readout instead
+                           -- of talking over it (user 2026-07-24)
+local obj_read_at = nil    -- tick to fire the deferred objective re-read (nil = done/disarmed)
 
 -- World-map fast travel via the game's OWN selection machine (UAT_UIMapWorld, Ghidra 2026-07-09,
 -- native_offsets.mapWorld): d-pad up/down picks a destination by its native InfoIcon INDEX, we
@@ -110,8 +114,7 @@ local function curs_debug()
     end
     for _, ic in pairs(FindAllOf("Map_World_Icon_C") or {}) do
         if Core.valid(ic) then
-            local nm
-            pcall(function() nm = clean(Core.read_text(ic.Txt_Name)) end)
+            local nm = clean(Core.read_text(Core.member(ic, "Txt_Name")))
             local rx, ry = render_xy(ic)
             -- Icons render at 0,0 → their screen position lives in the canvas Slot offsets.
             local sl = "?"
@@ -288,7 +291,7 @@ function Map.is_active()
         area_open = true
         wake_disarm()
         state = { screen = I18n.header(21),
-                  name = node_text(am.Txt_Name) or node_text(am.Txt_Area),
+                  name = node_text(Core.member(am, "Txt_Name")) or node_text(Core.member(am, "Txt_Area")),
                   host = am }   -- the AT_UIMapM whose FocusTarget we read for POI-under-cursor
         return true
     end
@@ -326,7 +329,7 @@ function Map.is_active()
         -- The hovered area (Txt_Area, else Txt_Name). Empty = the cursor sits on open
         -- terrain, spoken as "empty terrain" so LEAVING an area is heard too (what the
         -- terrain actually is — sea, mountains — isn't exposed by the game's UI).
-        local area = wm and (node_text(wm.Txt_Area) or node_text(wm.Txt_Name))
+        local area = wm and (node_text(Core.member(wm, "Txt_Area")) or node_text(Core.member(wm, "Txt_Name")))
         state = { screen = I18n.header(8), name = area or I18n.t("map_empty"), world = true }
         return true
     end
@@ -359,8 +362,7 @@ local function ft_build(host)
     for _, ic in ipairs(Core.cached_all("Map_World_Icon_C", tick)) do
         if Core.valid(ic) then
             local a = Mem.addr(ic)
-            local nm
-            pcall(function() nm = clean(Core.read_text(ic.Txt_Name)) end)
+            local nm = clean(Core.read_text(Core.member(ic, "Txt_Name")))
             if a and nm and nm ~= "" then byaddr[a] = nm end
         end
     end
@@ -425,8 +427,10 @@ local function area_poi(host)
     pcall(function() ta = ft.Target end)
     local noun = (ta and Core.valid(ta)) and Nav.icon_noun(ta) or nil
     -- the detail panel's text (the POI's own name/description), if the game is showing it.
-    local name
-    pcall(function() name = clean(Core.read_text(host.WL_MapDetailTxt.WL_Detail_Txt)) end)
+    -- Both hops guarded: a chained `host.A.B` evaluates the inner fetch at the call
+    -- site, outside every pcall (the uncatchable-AV class, CLAUDE.md §8).
+    local name = clean(Core.read_text(
+        Core.member(Core.member(host, "WL_MapDetailTxt"), "WL_Detail_Txt")))
     local msg
     if noun and name and name ~= "" then msg = noun .. ", " .. name
     else msg = noun or (name ~= "" and name) or nil end
@@ -438,6 +442,11 @@ function Map.reset()
     ft_points, ft_sel, ft_prevbtn = nil, nil, 0
     area_focus_key = nil
     wake_disarm()
+    -- Opening the map re-reads the current quest objective on demand: the HUD reader only
+    -- speaks it on change / first sight (user 2026-07-24), so the map is where the player
+    -- reviews the goal again. DEFERRED (not spoken here): armed for OBJ_READ_DELAY polls so
+    -- update() reads it AFTER the map's own entry readout, queued, not talking over it.
+    obj_read_at = tick + OBJ_READ_DELAY
 end
 
 function Map.update()
@@ -446,6 +455,12 @@ function Map.update()
     -- screen name on entry; the current/hovered area (or "empty terrain") as it
     -- changes; the game's help line as the tooltip.
     ann:focus(s.screen, nil, s.name or s.screen, nil, Keyhelp.helpmsg)
+    -- Deferred quest-objective re-read: fire once, a few polls after opening, QUEUED
+    -- (interrupt=false) so it follows the readout above instead of overlapping it.
+    if obj_read_at and tick >= obj_read_at then
+        obj_read_at = nil
+        pcall(function() require("quest_objective").reannounce(false) end)
+    end
     if s.world then
         local host = ft_host()
         if not host then return end

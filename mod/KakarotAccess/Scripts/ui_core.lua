@@ -23,7 +23,43 @@ local TOOLTIP_WINDOW = 6   -- ticks to keep polling for a late-arriving tooltip
 
 -- ---- widget helpers --------------------------------------------------------
 
-function Core.valid(o) return o ~= nil and o:IsValid() == true end
+-- Does this handle point at a REAL object? A pure GetAddress() check: it returns the
+-- STORED pointer without dereferencing it, so — unlike IsValid() — it cannot fault on a
+-- handle that wraps NULL. That is the whole difference, and it is what makes
+-- `FSlateBrush.ResourceObject` readable at last: the crash ledger's CLASS A ("no safe
+-- guard exists") assumed the only way to ask was `ro:IsValid()`, which IS the deref that
+-- pierces pcall on a null resource (the 0x10 access violations). Never ask IsValid on a
+-- brush resource — ask the pointer.
+-- Fails CLOSED (unreadable = null): the callers are cosmetic glyph/texture names, and
+-- losing one is infinitely cheaper than the crash.
+function Core.nonnull(o)
+    if o == nil then return false end
+    local ok, a = pcall(function() return o:GetAddress() end)
+    return ok and type(a) == "number" and a ~= 0
+end
+
+-- Validity, with the NULL-handle guard.
+--
+-- A UE4SS RemoteObject can wrap a NULL UObject and STILL answer IsValid() == true —
+-- the documented failure mode of this game (CLAUDE.md §8: "a cached widget passes
+-- IsValid() and reports a NULL UObject on the very next member call"). The next
+-- property fetch then makes UE4SS read ClassPrivate at UObjectBase+0x10 off that null
+-- base, which is an ACCESS VIOLATION inside the VM: uncatchable by pcall, it kills the
+-- process. That is literally the user's 2026-07-24 mid-combat report
+-- (EXCEPTION_ACCESS_VIOLATION reading address 0x00000010) — the fault address IS the
+-- ClassPrivate offset, so the base was null.
+--
+-- GetAddress() returns the STORED pointer without dereferencing it, so it is the one
+-- question we can safely ask, and the only pre-check that can see the null before we
+-- touch a member. Anything that fails to answer counts as dead.
+function Core.valid(o)
+    if o == nil then return false end
+    local ok, v = pcall(function() return o:IsValid() end)
+    if not ok or v ~= true then return false end
+    local oka, a = pcall(function() return o:GetAddress() end)
+    if oka and (a == nil or a == 0) then return false end
+    return true
+end
 
 -- Guarded member fetch. `o.Name` is evaluated at the CALL SITE, so handing it
 -- straight to a helper (`read_text(bar.Txt00)`) leaves the fetch OUTSIDE every

@@ -57,7 +57,7 @@ function Options.reset()
 end
 
 function Options.update()
-    local tab = Core.text_of(opt.Txt_Title_Steam) or Core.text_of(opt.Txt_Title)
+    local tab = Core.text_of(Core.member(opt, "Txt_Title_Steam")) or Core.text_of(Core.member(opt, "Txt_Title"))
     local low, maxIdx, anyRow, byIdx = A.scan_list(rows)
 
     local name, value, isGuardar
@@ -83,7 +83,7 @@ function Options.update()
     end
 
     if isGuardar then
-        name = (anyRow and Core.text_of(anyRow.Txt_Enter)) or I18n.t("save_changes")
+        name = (anyRow and Core.text_of(Core.member(anyRow, "Txt_Enter"))) or I18n.t("save_changes")
         value = nil
     end
 

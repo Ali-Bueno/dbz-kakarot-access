@@ -2,7 +2,7 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-17 (notices batch: Roshi/Satan token swap, level-up banner, fishing result sheet, cinematic intro cards, results digit-param dump)
+**Last updated:** 2026-07-24 (end-user crash + stale-read batch, source-only, UNVERIFIED in game). CRASH: cooking-browse AV = the 07-21 dangling-UObject `__index` class in steady-state menu browsing (pooled ListView/detail recycled on scroll); migrated screen_cooking + shared `A.list_selected_row` to `Core.member`, then swept EVERY adapter and migrated 18 more files with the same naked-fetch-as-call-argument pattern (all luac). UI fixes (round 2 after user retest): (1) quest objective — SETTLE debounce (2 stable polls) so progressive HUD fill / pooled-instance flicker no longer speaks it "several times" or re-narrates on map close; map re-read DEFERRED + queued in `screen_map` so it no longer overlaps the map's area/help readout. (2) TOAST — presence dedup with a ~1.5 s GRACE (Info_Log02 is a flashing banner whose blink re-armed the dedup). (3) the persisting "desbloqueaste superataque" was actually `screen_dialog`'s post-confirm window re-firing once the 24-entry recent-set FIFO evicted its marks — added a `pinned_set` immune to FIFO eviction, cleared only on map transition. NEW: **defeat menu** (`screen_gameover.lua`, Gameover_C → UAT_UIGameover) — was silent (no adapter); reads "Fin de la partida" + the selected row (Reintentar/Cargar/Volver al título) via CurrentSelectIndex (reflected, mem_bridge @0x3E0 fallback).
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
@@ -20,6 +20,7 @@
 | Speech pipeline (PRISM) | done | Logs chosen backend on boot |
 | Overworld main menu (native selection) | done | `screen_field.lua`, reads via `UAT_UIStartTop` offsets |
 | Battle-pause menu (native selection) | done | `screen_pause.lua`, `UAT_UIXCmnPause +0x43C` |
+| Defeat / game-over menu | wip | `screen_gameover.lua` (NEW 2026-07-24) — Gameover_C → UAT_UIGameover. Reads "Fin de la partida" + selected row (Reintentar/Cargar/Volver al título). Index = CurrentSelectIndex (reflected first, mem_bridge @0x3E0 fallback — ObjectDump wasn't regenerated to confirm reflection); rows via SelectionWidgetArray / positional List_Bar0N. Pending in-game verify (needs game RESTART: new adapter + native_offsets) |
 | Dialog / message / confirm popups | done | `screen_dialog.lua`. VERIFIED 2026-07-16 night after the 21-round saga: per-NODE composition (rendered state via node_rt first, recent-set novelty second, help requires rendered title), row-filtered content folds on titled notices, latched per-appearance choice prompts, transition-epoch clear, emblem reward via the window's own WL_TextCmuCtn. See the Next step closure + git log for the derivation. 2026-07-16 night: verbatim-repeat rewards (Milk emblem) rescued by fresh CONTENT ROWS within ~3s of the appearance edge — pending verify |
 | Tutorial guidance line | done | `guide_watch.lua` — the pinned instruction box, read from the RICH side (`Txt_Detail/Txt_Help/Txt_Work` ExMainTxt; plain keeps stale text), every registry tick, F1 repeats. VERIFIED 2026-07-16 night ("oprime Confirmar para…" — abstract Decide glyph spoken as the action) |
 | NPC subtitles / dialogue | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` gated on the game's OWN subtitles option (FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. 2026-07-16 night: the gate read a DEAD TEMPLATE — the object array holds several ATSaveSystem instances (_0/_1 pristine EnableSubtitle=1, _4 = the user's real settings) and first-non-CDO picked _0, so it always read 1. Now resolved through the game's own pointer `UATSaveManager.SaveSystem` @0x108 (AT.hpp:29391), manager cached, pointer re-read per query. Pending verify with the option off |
@@ -86,6 +87,64 @@
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-24 (b): THIRD crash class — AV mid-COMBAT. Fixes applied and luac-validated; the user left
+before testing — WAITING ON THE IN-GAME RETEST (they will report back; if it crashes again they send
+the new stack).** Report: "a huge lag spike, then it crashes"
+— `EXCEPTION_ACCESS_VIOLATION reading address 0x00000010`. That fault address IS `UObjectBase::
+ClassPrivate` (+0x10), i.e. UE4SS resolved a property off a **NULL** object base; the lag spike is
+the engine's GC / streaming pass, which is precisely when pooled widgets die under us. Applied:
+0. **THE LIKELY ONE — `Core.nonnull(o)`, and CLASS A of the crash ledger is no longer unguardable.**
+   The ledger's own note said "WATCH `keyhelp.lua:88` first if a 0x10 AV recurs on an arbitrary
+   screen" — this is that recurrence. The blocker was believed to be that no guard exists for
+   `FSlateBrush.ResourceObject`, because `ro:IsValid()` is ITSELF the deref that pierces pcall on a
+   null resource. The way out: **`GetAddress()` returns the STORED pointer without dereferencing it**,
+   so it can be asked safely and answers 0 for a null handle. New `Core.nonnull` does exactly that
+   (fails closed) and now gates EVERY brush read: `keyhelp.texture_token` (widest radius in the mod —
+   every keyhelp bar on every screen, and keyhelp is re-read on every adapter flip, including the
+   subtitle flips that happen constantly during a battle), `screen_results` (x2),
+   `screen_battleresult`, `screen_community` face_resource + face_char (the latter also fed a null
+   `ro` straight into `array_of`, which asks IsValid), `screen_fishing`, `discover.brush_of`.
+1. **`Core.valid` now also rejects NULL-handle RemoteObjects** (`GetAddress() == 0`) — a wrapper can
+   answer `IsValid() == true` while holding NULL (CLAUDE.md §8), and the very next member fetch is
+   then the uncatchable AV. `GetAddress` only returns the STORED pointer (no deref), so it is the one
+   safe pre-check. This is the global fix for the whole class; everything routed through
+   `Core.member`/`Core.valid` inherits it.
+2. **`battle_monitor.lua` migrated to `Core.member`** — it was MISSED by the 07-21/07-24 sweeps and is
+   the only loop that polls (250ms) *through combat*, naked-fetching `hud.Txt_Num_Hp` /
+   `hud.Txt_Name_Char` on pooled battle HUDs the game recycles the instant a fight ends. Prime suspect.
+3. Same migration for the other naked fetches still live on churn-exposed paths: `nav_tracker`
+   `icon_in_use`, `screen_battleresult`, `screen_results`, `screen_map` (incl. a chained
+   `host.A.B`), `screen_telop`, `screen_questcard`, `screen_dialog` (choices/item rows/dump),
+   `screen_choice`, `quest_objective`.
+**`UE4SS.log` OF THE CRASHED SESSION: READ (don't ask for it again — it was preserved, the user had not
+relaunched).** Verdict: it stops 50s after boot at `New game mode — transition gate ON`, and contains
+**no `Error:`, no traceback, no "UObject instance is nullptr"** through the whole ~40min session. That
+RULES OUT the caught-error-retried-per-tick class (2026-07-13 raycast) and the `0xe06d7363` C++ throw
+(which always leaves a UE4SS traceback), and CONFIRMS a hard AV that kills the process before anything
+reaches disk — consistent with both suspects below, so the log cannot pick between them. (The boot-time
+`[PS] Failed to find GMalloc / FName::ToString / Scan failed` lines are UE4SS's normal scan fallback,
+present every session — not a clue.) **Retest checklist when the user returns:** full game RESTART (new
+adapter + offsets, Ctrl+Shift+R is not enough) → normal combat, ideally a fight WITH dialogue (that is
+what makes keyhelp re-read glyphs constantly) → if it crashes, compare the new stack's RELATIVE UE4SS
+offsets against today's; if they match, the guards were not enough and the next layer is the world-epoch
+invalidation. → then die once and press F7 on the defeat menu for the GAME OVER probe.
+**Still naked (menu-only paths, lower churn exposure, NOT yet migrated):** `screen_community` (its
+local `read(node)` helper takes the fetch as an argument — ~20 sites), `screen_fishing`,
+`screen_shopcmn`/`shopinfo`/`shoplist`, `screen_training` (chained), `screen_tips`,
+`screen_tutorial(s)`, `screen_saveload`, `screen_palette`, `discover.lua` (dev tool).
+**Durable fix still pending** (unchanged): the world-epoch invalidation described below.
+
+**2026-07-24 (a): the defeat menu still reads NOTHING in game.** Diagnosis: `Gameover_C` is unmapped,
+so it needs a SCAN — and the defeat state is exactly the state cinematic quiet mode defers scans in
+(gameplay world up, battle HUD gone, no minimap, no user press). Applied: the adapter now detects
+through `Core.first_on_screen` (cached_all → the watch lane applies) and **arms `Core.watch_for
+("Gameover_C")` on the battle-HUD falling edge** (~8s), plus a one-shot log line when the host IS live
+but exposes no readable rows. Open question the fix can't answer blind — whether `List_Bar0N` /
+`SelectionWidgetArray` / `CurrentSelectIndex` are reflected at all on this host (the BP dumps empty and
+the ObjectDump is gone): a new **F7 "GAME OVER" probe section** in `discover.lua` answers it, and also
+hunts the OWNER FIELD (walks gi/HUD/field-manager properties for a pointer to the live host) so the
+class can be mapped in `ui_directory` and stop needing scans entirely.
 
 **2026-07-21: TWO crashes reported by an END USER of the release — fixes applied, PENDING in-game
 verify.** Both stacks identical in the whole UE4SS portion (relative offsets) = ONE crash: property

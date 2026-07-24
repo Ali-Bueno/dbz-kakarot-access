@@ -155,7 +155,7 @@ end
 -- value in mainTxt and leave stale markup here), so gate on visibility to avoid
 -- recycled-row bleed. Returns the raw KeyConfigId, or nil.
 function A.row_keyconfig(row)
-    local tm = row.Txt_Mode
+    local tm = Core.member(row, "Txt_Mode")
     if not Core.valid(tm) then return nil end
     local rich = tm.ExMainTxt
     if not Core.is_visible(rich) then return nil end
@@ -328,25 +328,16 @@ function A.platbtn_token(plat)
     if tok then return tok end
     tok = ids_token(plat, "CurrentKeyIds")
     if tok then return tok end
-    -- Last resort: the glyph texture actually displayed (indexed too -> same resolver).
-    local imgs, ni = Core.array_of(plat, "Image_List")
-    if imgs then
-        pcall(function()
-            for i = 1, ni do
-                local img = imgs[i]
-                if Core.is_visible(img) then
-                    local ro = img.Brush.ResourceObject
-                    if ro and ro:IsValid() then
-                        local idx = ro:GetFullName():match("Btn_?(%d+)%.[%w_]+$")
-                        if idx then
-                            local t = platbtn_id_token(tonumber(idx))
-                            if t then tok = t return end
-                        end
-                    end
-                end
-            end
-        end)
-    end
+    -- (REMOVED 2026-07-24) The former "last resort" read each displayed glyph's
+    -- Brush.ResourceObject to recover a Btn_N face-button index from its texture name. That
+    -- is the UNCATCHABLE crash class: FSlateBrush.ResourceObject is unreadable from UE4SS,
+    -- and a NULL ResourceObject (every device-indexed glyph has one) makes ro:IsValid() /
+    -- ro:GetFullName() dereference null+0x10 (UObject.ClassPrivate) straight THROUGH the
+    -- pcall — the 2026-07-16 dead-end that was only removed from keyhelp's IconList back
+    -- then; this twin in platbtn_token survived and killed the game in the skill palette
+    -- (user 2026-07-24, EXCEPTION_ACCESS_VIOLATION reading 0x10). The indexed face buttons
+    -- already resolve above via KeyIdsForPad / CurrentKeyIds (the reflected id arrays), so
+    -- this path was redundant as well as fatal. Do NOT reintroduce a brush read here.
     return tok
 end
 
@@ -388,22 +379,22 @@ function A.row_value(row)
     if b then return b end
     local g = gauge_value(row)
     if g then return g end
-    local adjustable = Core.is_visible(row.Xmenu_Arrow01_L)
-        or Core.is_visible(row.Xmenu_Arrow01_R)
+    local adjustable = Core.is_visible(Core.member(row, "Xmenu_Arrow01_L"))
+        or Core.is_visible(Core.member(row, "Xmenu_Arrow01_R"))
     if not adjustable then return nil end
-    if Core.is_visible(row.Txt_Mode) then
-        local v = Core.text_of(row.Txt_Mode)
+    if Core.is_visible(Core.member(row, "Txt_Mode")) then
+        local v = Core.text_of(Core.member(row, "Txt_Mode"))
         if v then return v end
     end
-    if Core.is_visible(row.Txt_Mode_Scroll) then
-        local v = Core.text_of(row.Txt_Mode_Scroll)
+    if Core.is_visible(Core.member(row, "Txt_Mode_Scroll")) then
+        local v = Core.text_of(Core.member(row, "Txt_Mode_Scroll"))
         if v then return v end
     end
     return nil
 end
 
 function A.row_name(row)
-    return Core.text_of(row.Txt_List)
+    return Core.text_of(Core.member(row, "Txt_List"))
 end
 
 -- Scan a pool of Xlist_Bar03_C rows: lowest-index fad row (the real selection),
@@ -416,7 +407,7 @@ function A.scan_list(rows)
             local idx = A.row_index(r)
             byIdx[idx] = r
             if idx > maxIdx then maxIdx = idx end
-            if Core.is_visible(r.Ins_Cursor_Fad) then
+            if Core.is_visible(Core.member(r, "Ins_Cursor_Fad")) then
                 if not low or idx < low.idx then low = { idx = idx, row = r } end
             end
         end
@@ -460,9 +451,13 @@ function A.list_selected_row(list)
     if not plates or idx < 0 or idx >= num then return nil end
     local row
     if not pcall(function() row = plates[idx + 1] end) or not Core.valid(row) then return nil end
+    -- The row widget is a POOLED ListView entry: as the list scrolls the engine recycles
+    -- it, so a `row` that passes IsValid can still be dangling (IsValid lies on recycled
+    -- memory — the 2026-07-21 crash class). A naked `row.TxtName` fetch as a call argument
+    -- is then the uncatchable property __index AV; go through the guarded fetch.
     return {
-        name = Core.read_text(row.TxtName) or Core.read_text(row.Txt_List),
-        num  = Core.read_text(row.TxtNum),
+        name = Core.read_text(Core.member(row, "TxtName")) or Core.read_text(Core.member(row, "Txt_List")),
+        num  = Core.read_text(Core.member(row, "TxtNum")),
     }
 end
 

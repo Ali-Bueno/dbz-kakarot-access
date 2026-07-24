@@ -100,11 +100,11 @@ end
 -- "<button>: <item or empty slot>, <count>" for one row. All native members
 -- (AT_UIItemPaletteBar, AT.hpp).
 local function bar_phrase(bar)
-    local t = clean(Core.read_text(bar.Txt_List))
+    local t = clean(Core.read_text(Core.member(bar, "Txt_List")))
     if not t then return nil end
     if t:match("^[%-—–_ ]+$") then t = I18n.t("empty_socket") end
-    local tok = A.platbtn_token(bar.Xcmn_Btn_Plat)
-    local line = Core.phrase(t, clean(Core.read_text(bar.Txt_Num)))
+    local tok = A.platbtn_token(Core.member(bar, "Xcmn_Btn_Plat"))
+    local line = Core.phrase(t, clean(Core.read_text(Core.member(bar, "Txt_Num"))))
     return tok and (I18n.button(tok) .. ": " .. line) or line
 end
 
@@ -114,7 +114,7 @@ end
 local function selected_bar()
     local hit, count = nil, 0
     for _, e in ipairs(nodes.bars) do
-        if Core.valid(e.bar) and Core.is_visible(e.bar.Pnl_Curs_All) then
+        if Core.valid(e.bar) and Core.is_visible(Core.member(e.bar, "Pnl_Curs_All")) then
             count = count + 1
             hit = e.bar
         end

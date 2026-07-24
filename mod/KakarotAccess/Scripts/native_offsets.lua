@@ -293,4 +293,14 @@ return {
         tailScanFrom  = 0x438,   -- diff window start (for the F4 dev tool)
         tailScanLen   = 0xC8,    -- diff window length (0x438..0x500)
     },
+
+    -- Game-over / defeat menu: UAT_UIGameover (BP Gameover_C, which dumps EMPTY -> native
+    -- selection, §2 rule). Both members are NAMED in the CXX header dump (AT.hpp:33464):
+    -- CurrentSelectIndex @0x3E0, SelectionWidgetArray (TArray<UAT_UIGameoverBar*>) @0x3B8.
+    -- The reader reads CurrentSelectIndex reflected first and falls back to this offset if
+    -- the property isn't reflected (the ObjectDump wasn't available to confirm). Rows are
+    -- also reachable positionally as List_Bar00.. (F7 census 2026-07-24). UNVERIFIED offset.
+    gameover = {
+        selectedIndex = 0x3e0,   -- int32, CurrentSelectIndex (0=Retry,1=Load,2=Title)  (from header)
+    },
 }

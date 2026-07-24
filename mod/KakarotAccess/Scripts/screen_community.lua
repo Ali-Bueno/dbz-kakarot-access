@@ -105,10 +105,16 @@ end
 -- brush to a MaterialInstanceDynamic carrying the character icon as a texture
 -- parameter; an unacquired one keeps the constant "?" mask material.
 local function face_resource(emb)
+    -- Guard ImageFace: `emb.ImageFace.Brush...` was a naked chain — an empty socket can
+    -- have a null ImageFace child, and `.Brush` on it derefs null+0x10 through the pcall
+    -- (the 2026-07-24 crash class). (The ResourceObject read below stays: an emblem face is
+    -- always a real material, so it can't null-deref there — see the crash ledger.)
+    local imf = Core.member(emb, "ImageFace")
+    if not Core.valid(imf) then return nil end
     local name
     pcall(function()
-        local ro = emb.ImageFace.Brush.ResourceObject
-        if ro and ro:IsValid() then name = ro:GetFullName() end
+        local ro = imf.Brush.ResourceObject
+        if Core.nonnull(ro) then name = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
     end)
     return name
 end
@@ -145,9 +151,12 @@ local CHAR_TOKENS = {
 -- Character name of an ACQUIRED emblem: the face MID's texture parameter is the
 -- character icon (…/Charicon_Ev/Ev_Gok00_00_00 → token "Gok" → "Goku").
 local function face_char(emb)
+    local imf = Core.member(emb, "ImageFace")
+    if not Core.valid(imf) then return nil end
     local tok
     local ro
-    pcall(function() ro = emb.ImageFace.Brush.ResourceObject end)
+    pcall(function() ro = imf.Brush.ResourceObject end)
+    if not Core.nonnull(ro) then return nil end   -- array_of would ask IsValid: see Core.nonnull
     local tp, n = Core.array_of(ro, "TextureParameterValues")
     if not tp then return nil end
     pcall(function()

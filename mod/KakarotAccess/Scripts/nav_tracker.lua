@@ -491,10 +491,14 @@ local function classify(actor)
 end
 
 -- Is this pooled minimap icon actually in use (one of its widgets rendered)?
+-- Each sub-widget goes through Core.member: a naked `icon.WL_*` at the call site is a
+-- property __index on a pooled icon the game may have just recycled — the uncatchable
+-- AV class (CLAUDE.md §8), and this runs on every radar sweep.
 local function icon_in_use(icon)
     local ok, vis = pcall(function()
-        return Core.on_screen(icon.WL_QuestIconSw) or Core.on_screen(icon.WL_NaviIconSw)
-            or Core.on_screen(icon.WL_Icon_ImgSw)
+        return Core.on_screen(Core.member(icon, "WL_QuestIconSw"))
+            or Core.on_screen(Core.member(icon, "WL_NaviIconSw"))
+            or Core.on_screen(Core.member(icon, "WL_Icon_ImgSw"))
     end)
     return ok and vis == true
 end

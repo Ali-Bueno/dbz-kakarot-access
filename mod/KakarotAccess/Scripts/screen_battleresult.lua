@@ -35,14 +35,14 @@ local function texture_token(img)
     local res
     pcall(function()
         local ro = img.Brush.ResourceObject
-        if ro and ro:IsValid() then res = ro:GetFullName() end
+        if Core.nonnull(ro) then res = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
     end)
     return res and res:match("([%w_]+)%.[%w_]+$") or nil
 end
 
 local function rank_letter()
     for _, m in ipairs({ "RateIcon", "RateLowIcon" }) do
-        local tok = texture_token(host[m])
+        local tok = texture_token(Core.member(host, m))
         local letter = tok and (tok:match("[Rr]ank_(%u%u?)$") or tok:match("_(%u%u?)$"))
         if letter and RANKS[letter] then return letter end
     end
@@ -74,8 +74,9 @@ function Result.is_active()
     if not host then pending = nil return false end
     local exp_label
     pcall(function()
-        if Core.on_screen(host.ImgLangExp) then
-            exp_label = Core.read_text(host.ImgLangExp)
+        local lbl = Core.member(host, "ImgLangExp")   -- guarded: the result pane is pooled
+        if Core.on_screen(lbl) then
+            exp_label = Core.read_text(lbl)
         end
     end)
     if not exp_label then pending = nil return false end

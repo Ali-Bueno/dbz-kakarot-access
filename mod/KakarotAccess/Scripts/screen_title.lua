@@ -64,9 +64,9 @@ function Title.reannounce() ann:reset() end
 function Title.update()
     local name
     for i = 0, OPTION_COUNT - 1 do
-        local item = gt["Gametitle_List0" .. i]
-        if Core.valid(item) and Core.is_visible(item.Txt_Select) then
-            name = Core.text_of(item.Txt_List) or Core.text_of(item.Txt_Select)
+        local item = Core.member(gt, "Gametitle_List0" .. i)
+        if Core.valid(item) and Core.is_visible(Core.member(item, "Txt_Select")) then
+            name = Core.text_of(Core.member(item, "Txt_List")) or Core.text_of(Core.member(item, "Txt_Select"))
             break
         end
     end

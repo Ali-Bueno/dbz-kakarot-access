@@ -57,7 +57,7 @@ end
 -- the screens registered below it (the ring pause).
 local function selected_row()
     for _, row in ipairs(rows or {}) do
-        if Core.valid(row) and Core.on_screen(row) and node_text(row.Txt_List) then
+        if Core.valid(row) and Core.on_screen(row) and node_text(Core.member(row, "Txt_List")) then
             local ok, sel = pcall(function() return Core.is_visible(row.Ins_Cursor_Fad) end)
             if ok and sel then return row end
         end
@@ -76,13 +76,13 @@ function ShopCmn.is_active()
     pcall(function()
         if Core.is_visible(row.Txt_Sold_Out) then sold = node_text(row.Txt_Sold_Out) end
     end)
-    local qty = node_text(row.Txt_Num)
-    local have = node_text(row.Txt_Num_Have)
+    local qty = node_text(Core.member(row, "Txt_Num"))
+    local have = node_text(Core.member(row, "Txt_Num_Have"))
     state = {
         -- WL_* = the native BindWidget names (UAT_UIShopCommon, AT.hpp) — the blueprint
         -- class isn't in the header dump, so only native-declared properties are safe.
-        title = node_text(host.WL_Txt_Title),
-        name = node_text(row.Txt_List),
+        title = node_text(Core.member(host, "WL_Txt_Title")),
+        name = node_text(Core.member(row, "Txt_List")),
         value = Core.phrase(
             node_text(row.Txt_Num_Price),
             qty and string.format(I18n.t("shop_buy_fmt"), qty) or nil,
@@ -101,7 +101,7 @@ function ShopCmn.update()
     -- d-pad quantity change re-speaks just the value); detail + stock as tooltip.
     ann:focus(s.title, nil, s.name, s.value ~= "" and s.value or nil,
         function()
-            return Core.phrase(node_text(host.WL_Txt_Detail), node_text(host.WL_Txt_Stock))
+            return Core.phrase(node_text(Core.member(host, "WL_Txt_Detail")), node_text(Core.member(host, "WL_Txt_Stock")))
         end)
 end
 

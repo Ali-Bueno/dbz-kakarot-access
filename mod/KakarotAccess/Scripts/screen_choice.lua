@@ -59,18 +59,26 @@ local function row_hover(c)
     -- never re-announced). Verified via dump_choice.txt on Roshi's "help find the book?"
     -- (2026-07-04): selected colA=1.00, other colA=0.00; LinkImage is the inverse; the
     -- loop animation flickers so it's unreliable on its own.
+    -- Guard the child fetch: `c.HoverImage.ColorAndOpacity.A` was a naked chain — the OTHER
+    -- variant's field (HoverImage vs Dmy_Choice_Hover) is a null UObject on this row's class,
+    -- and `.ColorAndOpacity` on it derefs null+0x10 through the pcall (the 2026-07-24 crash
+    -- class). ColorAndOpacity is a struct on a VALID widget, so it's safe once the child is.
     local a
-    pcall(function() a = c.HoverImage.ColorAndOpacity.A end)
-    if a == nil then pcall(function() a = c.Dmy_Choice_Hover.ColorAndOpacity.A end) end
+    local hi = Core.member(c, "HoverImage")
+    if Core.valid(hi) then pcall(function() a = hi.ColorAndOpacity.A end) end
+    if a == nil then
+        local dh = Core.member(c, "Dmy_Choice_Hover")
+        if Core.valid(dh) then pcall(function() a = dh.ColorAndOpacity.A end) end
+    end
     if type(a) == "number" then return a >= 0.5 end
     -- Fallback for an unknown choice-row variant with no HoverImage: visibility, then the
     -- loop animation (native Anim_Loop / blueprint Loop).
-    local hov = false
-    pcall(function() hov = Core.is_visible(c.HoverImage) or Core.is_visible(c.Dmy_Choice_Hover) end)
+    local hov = Core.is_visible(Core.member(c, "HoverImage"))
+        or Core.is_visible(Core.member(c, "Dmy_Choice_Hover"))
     if hov then return true end
     pcall(function()
-        hov = (Core.valid(c.Anim_Loop) and c:IsAnimationPlaying(c.Anim_Loop))
-            or (Core.valid(c.Loop) and c:IsAnimationPlaying(c.Loop))
+        local a = Core.member(c, "Anim_Loop") or Core.member(c, "Loop")
+        hov = Core.valid(a) and c:IsAnimationPlaying(a)
     end)
     return hov == true
 end
@@ -160,8 +168,8 @@ end
 local function anim_sig(c)
     local loop = "?"
     pcall(function()
-        local a = Core.valid(c.Anim_Loop) and c.Anim_Loop or (Core.valid(c.Loop) and c.Loop or nil)
-        if a then loop = tostring(c:IsAnimationPlaying(a)) else loop = "noanim" end
+        local a = Core.member(c, "Anim_Loop") or Core.member(c, "Loop")
+        if Core.valid(a) then loop = tostring(c:IsAnimationPlaying(a)) else loop = "noanim" end
     end)
     return "loop=" .. loop
 end

@@ -64,10 +64,10 @@ end
 local function selected_row()
     local bar = slot_bar(cur_idx)
     if not bar then return nil end
-    local role = Core.read_text(bar.Txt_Player) or Core.read_text(bar.Txt_Suport)
-    local name = Core.read_text(bar.Txt_Name) or Core.read_text(bar.Txt_None)
+    local role = Core.read_text(Core.member(bar, "Txt_Player")) or Core.read_text(Core.member(bar, "Txt_Suport"))
+    local name = Core.read_text(Core.member(bar, "Txt_Name")) or Core.read_text(Core.member(bar, "Txt_None"))
     if not role and not name then return nil end
-    return { role = role, name = name, lv = Core.read_text(bar.Txt_Lv) }
+    return { role = role, name = name, lv = Core.read_text(Core.member(bar, "Txt_Lv")) }
 end
 
 function Party.is_active()

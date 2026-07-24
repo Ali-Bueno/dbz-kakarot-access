@@ -60,7 +60,7 @@ local function trace_state()
     local qs = Dir.peek("fm", "QuestMainStart")
     if Core.valid(qs) then
         local t
-        pcall(function() t = A.markup_to_speech(Core.read_text(qs.TitleText)) end)
+        t = A.markup_to_speech(Core.read_text(Core.member(qs, "TitleText")))
         st[#st + 1] = string.format("QS on=%s vis=%s op=%s txt=%s",
             tostring(Core.on_screen(qs)), vis_of(qs), op_of(qs), tostring(t))
     else
@@ -85,8 +85,7 @@ function Card.is_active()
         seen = nil
         return false
     end
-    local t
-    pcall(function() t = A.markup_to_speech(Core.read_text(host.TitleText)) end)
+    local t = A.markup_to_speech(Core.read_text(Core.member(host, "TitleText")))
     if not t or t == "" or t == seen then return false end
     pending = t
     -- Active only while there is something new to say; released right after (notice

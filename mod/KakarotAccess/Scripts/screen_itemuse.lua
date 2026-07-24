@@ -56,10 +56,10 @@ end
 
 -- Character name + level-up preview from a bar (UAT_UIStartPartyBarEx fields).
 local function bar_text(bar)
-    local name = Core.read_text(bar.Txt_Name01)
+    local name = Core.read_text(Core.member(bar, "Txt_Name01"))
     if not name then return nil end
-    local lv1 = Core.read_text(bar.Txt_Lv01)
-    local lv2 = Core.read_text(bar.Txt_Lv02)
+    local lv1 = Core.read_text(Core.member(bar, "Txt_Lv01"))
+    local lv2 = Core.read_text(Core.member(bar, "Txt_Lv02"))
     local lvl
     if lv1 and lv2 then lvl = I18n.t("itemuse_levelup"):format(lv1, lv2)
     elseif lv1 then lvl = lv1 end
@@ -73,8 +73,8 @@ function ItemUse.is_active()
     local bar = selected_bar()
     if DEBUG and bar then
         dbg(string.format("bar name01=%s lv01=%s lv02=%s next=%s",
-            tostring(Core.read_text(bar.Txt_Name01)), tostring(Core.read_text(bar.Txt_Lv01)),
-            tostring(Core.read_text(bar.Txt_Lv02)), tostring(Core.read_text(bar.Txt_Next_Num))))
+            tostring(Core.read_text(Core.member(bar, "Txt_Name01"))), tostring(Core.read_text(Core.member(bar, "Txt_Lv01"))),
+            tostring(Core.read_text(Core.member(bar, "Txt_Lv02"))), tostring(Core.read_text(Core.member(bar, "Txt_Next_Num")))))
     end
     return bar ~= nil
 end

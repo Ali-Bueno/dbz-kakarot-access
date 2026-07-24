@@ -38,7 +38,7 @@ local function selected_row()
     for i = 0, ROW_COUNT - 1 do
         local row
         pcall(function() row = host["Xlist_Bar05_" .. string.format("%02d", i)] end)
-        if Core.valid(row) and Core.on_screen(row) and node_text(row.Txt_List) then
+        if Core.valid(row) and Core.on_screen(row) and node_text(Core.member(row, "Txt_List")) then
             local ok, sel = pcall(function() return Core.is_visible(row.Ins_Cursor_Fad) end)
             if ok and sel then return row end
         end
@@ -52,15 +52,15 @@ function ShopInfo.is_active()
     if not Core.on_screen(host) then state = nil return false end
     local row = selected_row()
     if not row then state = nil return false end
-    local value = node_text(row.Txt_Num)
+    local value = node_text(Core.member(row, "Txt_Num"))
     -- Sold-out marker only when its node is actually shown on this row.
     local sold
     pcall(function()
         if Core.is_visible(row.Txt_Sold_Out) then sold = node_text(row.Txt_Sold_Out) end
     end)
     state = {
-        title = node_text(host.Txt_Title),
-        name = node_text(row.Txt_List),
+        title = node_text(Core.member(host, "Txt_Title")),
+        name = node_text(Core.member(row, "Txt_List")),
         value = Core.phrase(value, sold),
     }
     return true
@@ -73,7 +73,7 @@ function ShopInfo.update()
     if not s then return end
     -- title ("Buy") on entry; item + price on move; the live detail panel as tooltip.
     ann:focus(s.title, nil, s.name, s.value ~= "" and s.value or nil,
-        function() return node_text(host.Txt_Detail) end)
+        function() return node_text(Core.member(host, "Txt_Detail")) end)
 end
 
 return ShopInfo
