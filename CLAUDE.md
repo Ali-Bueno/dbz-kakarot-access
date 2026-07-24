@@ -336,3 +336,15 @@ day-to-day). Copy it from [the status template](reference/_mod-status-template.m
   issues.
 - Keep it **short** — a dashboard, not documentation. The *how* lives in `reference/`; `STATUS.md` only
   tracks *where this mod is*. Derive every value from real game data (no guessed offsets — PRINCIPLES §4).
+
+## 12. Session knowledge lives IN THE REPO, never in a local memory store
+
+Everything learned about a mod — findings, dead ends, per-subsystem offsets, working agreements —
+belongs in **versioned files inside the repo**: [`STATUS.md`](STATUS.md) for *where the mod is*,
+[`reference/dbz-kakarot/notes/`](reference/dbz-kakarot/notes/) for *what we know and how we learned it*
+(that folder has its own index). Read them at the start of a session and update them at the end.
+
+**Do NOT write project knowledge into an assistant-side memory folder** (user directive, 2026-07-24).
+A local memory store dies with the machine, is invisible to anyone contributing through GitHub, and
+silently forks from the code it describes. The repo is the single source of truth — if a fact is worth
+remembering, it is worth committing.

@@ -28,6 +28,7 @@ reference/
 |-------|----------------|---------|
 | [Audio navigation](audio-navigation/) | Three navigation styles (reactive radar, polar scan, wall sonification) + coordinate math, raycasting, scanning, zones, beacons, spatial audio, speech | A Hero's Call (.NET/MonoGame decompile), Swamp (native VB6 decompile), our own Unity mods — Core Keeper / DRG / Megabonk |
 | [UI accessibility](ui-accessibility/) | Prescriptive **behavior specs** (not RE) for in-game UI: menus (entering, tabs, navigation, controls, popup/confirmation dialogs) and inventories (item readout, subsections, crafting) | Our own accessibility playbook |
+| [DBZ Kakarot](dbz-kakarot/) | This mod's game-specific RE: UI/text architecture, input icons, and the [**working notes**](dbz-kakarot/notes/) — crash ledger, performance architecture, per-subsystem offsets and the dead ends behind them | Header dumps, Ghidra, runtime memory diffs, in-game verification |
 
 ## Adding a new engine study
 
