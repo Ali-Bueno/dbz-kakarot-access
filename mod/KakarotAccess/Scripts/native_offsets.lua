@@ -303,4 +303,42 @@ return {
     gameover = {
         selectedIndex = 0x3e0,   -- int32, CurrentSelectIndex (0=Retry,1=Load,2=Title)  (from header)
     },
+
+    -- LIVE key/button assignment — the copy the game is EDITING, before "Save changes".
+    --
+    -- The only reflected copy is the SAVED one (UATSaveSystem.InputAssign @0x720), which is
+    -- why the readout used to change only after saving. The pending layout is not a member of
+    -- any object at all — a full sweep of the reflected dumps found exactly ONE field of that
+    -- struct type in the whole game — it is a process-GLOBAL `TMap<FName,FName>`.
+    --
+    -- Ghidra 2026-07-25 (scripts code/ghidra/inputassign_*.java, output code/decompiled/):
+    --   * FUN_1416802b0 is the option screen's state machine (its strings: Option_Confirm_Save,
+    --     KeyConfig_Default_Controller_Confirm, KeyConfig_BattleTitle...). Its save case does
+    --         FUN_1419e48a0(saveSystem + 0x720, FUN_141a663e0())
+    --     i.e. it BUILDS the saved struct FROM this map. FUN_141a663e0 is literally
+    --     `return &DAT_14569c3b0;`.
+    --   * FUN_1419e48a0 fills the struct field by field, writing indices 0x30..0x3b — byte
+    --     offsets 0x180..0x1D8, exactly the 12 Controller_Btn_* slots of the header layout, and
+    --     skipping 0x2f (0x178 = Keyboard_Type). That match is what proves the destination is
+    --     the real FATSaveSystemInputAssign, and therefore that the source is its live twin.
+    --   * The same map is what the GAME's own glyph resolver reads (FUN_141a66300, called from
+    --     the prompt/UI resolvers), which is why the on-screen icon updates the instant you
+    --     rebind. Reading it is reading exactly what the player sees.
+    --   * Reverse direction (load / restore-defaults): FUN_1419d65b0 + FUN_141a82450.
+    -- Field offsets below are the operands of FUN_141a66300 itself (DAT_14569c3b0/b8/e4/f0/f8).
+    --
+    -- Values are FNames, directly comparable with the saved struct's. The reader REFUSES the
+    -- map unless all 12 slots are present and their values are a PERMUTATION of the 12 known
+    -- physical-key FNames — a patch that moves this global then degrades to the saved copy
+    -- instead of speaking nonsense.
+    inputAssignMap = {
+        rva      = 0x569c3b0,  -- from image base 0x140000000 (add Mem.module_base())
+        elements = 0x00,       -- Elements.Data — the element array
+        arrayNum = 0x08,       -- int32 — entries in that array (free slots included)
+        freeNum  = 0x34,       -- int32 NumFreeIndices (Num() = arrayNum - freeNum)
+        stride   = 0x18,       -- per element: FName Key, FName Value, int32 HashNextId
+        keyOff   = 0x00,
+        valOff   = 0x08,
+        maxNum   = 512,        -- sanity ceiling (the real table is ~59 entries)
+    },
 }

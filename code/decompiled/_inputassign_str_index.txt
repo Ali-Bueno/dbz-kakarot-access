@@ -1,0 +1,149 @@
+==== ANCHOR Controller_Btn_B ====
+  hit @ 1444da880  block=.rdata
+    ptr slot @ 145694388
+  hit @ 143c710f8  block=.rdata
+    CODE xref from 1410520c9 in 141051f50
+  hit @ 143d17020  block=.rdata
+    CODE xref from 1411dda37 in 1411dba70
+  hit @ 143d17570  block=.rdata
+    CODE xref from 1411de799 in 1411dba70
+  hit @ 143d177b0  block=.rdata
+    CODE xref from 1411deb6b in 1411dba70
+  hit @ 143d17a10  block=.rdata
+    CODE xref from 1411def16 in 1411dba70
+  hit @ 143d17a38  block=.rdata
+    CODE xref from 1411def2a in 1411dba70
+  hit @ 143d17a60  block=.rdata
+    CODE xref from 1411def81 in 1411dba70
+  hit @ 143d17a88  block=.rdata
+    CODE xref from 1411def95 in 1411dba70
+  hit @ 143d1d0f0  block=.rdata
+    CODE xref from 1411e040e in 1411e0180
+  hit @ 143d1dbb8  block=.rdata
+    CODE xref from 1411e1c39 in 1411e0180
+  hit @ 143d277a0  block=.rdata
+    CODE xref from 141200a3f in 141200920
+  hit @ 143d27df0  block=.rdata
+    CODE xref from 1412007f9 in 141200680
+  hit @ 143d28cd8  block=.rdata
+    CODE xref from 14120590d in 1412032b0
+  hit @ 143d2ced0  block=.rdata
+    CODE xref from 1411ff1d7 in 1411ff170
+  hit @ 143d2d860  block=.rdata
+    CODE xref from 14120ed59 in 14120d920
+  hit @ 143d33798  block=.rdata
+    CODE xref from 14120935d in 141207c60
+  hit @ 143d33818  block=.rdata
+    CODE xref from 141209377 in 141207c60
+  hit @ 143e48440  block=.rdata
+    CODE xref from 1414adebb in 1414addc0
+  hit @ 143ea57f8  block=.rdata
+    CODE xref from 140330d63 in 14032fad0
+  hit @ 143eec950  block=.rdata
+    CODE xref from 14034f065 in 14034ef40
+  hit @ 144452188  block=.rdata
+    CODE xref from 1419e61c7 in 1419e48a0
+  hit @ 1444521b0  block=.rdata
+    CODE xref from 1419e61f1 in 1419e48a0
+  hit @ 144453238  block=.rdata
+    CODE xref from 1419d6d25 in 1419d65b0
+    CODE xref from 1419d6d2f in 1419d65b0
+  hit @ 144455708  block=.rdata
+    CODE xref from 1419cf8d4 in 1419cf770
+  hit @ 144456298  block=.rdata
+    CODE xref from 1419e0140 in 1419e00e0
+==== ANCHOR Controller_Btn_Start ====
+  hit @ 1444da620  block=.rdata
+    ptr slot @ 145694158
+  hit @ 143d16648  block=.rdata
+    CODE xref from 1411dbcab in 1411dba70
+  hit @ 143d17b50  block=.rdata
+    CODE xref from 1411df0c2 in 1411dba70
+  hit @ 143d17b80  block=.rdata
+    CODE xref from 1411df0d6 in 1411dba70
+  hit @ 143d17bb0  block=.rdata
+    CODE xref from 1411df12d in 1411dba70
+  hit @ 143d17be0  block=.rdata
+    CODE xref from 1411df141 in 1411dba70
+  hit @ 143d1d8a0  block=.rdata
+    CODE xref from 1411e15df in 1411e0180
+  hit @ 143d2b0f8  block=.rdata
+    CODE xref from 14120b22e in 14120b080
+  hit @ 143d2cf40  block=.rdata
+    CODE xref from 1411ff48c in 1411ff170
+  hit @ 143d2d780  block=.rdata
+    CODE xref from 14120eb9e in 14120d920
+  hit @ 14444ae08  block=.rdata
+    CODE xref from 1419e0773 in 1419e00e0
+  hit @ 1444526c0  block=.rdata
+    CODE xref from 1419e6645 in 1419e48a0
+  hit @ 1444526f0  block=.rdata
+    CODE xref from 1419e666f in 1419e48a0
+  hit @ 144453418  block=.rdata
+    CODE xref from 1419d6ebf in 1419d65b0
+    CODE xref from 1419d6ec9 in 1419d65b0
+  hit @ 144455a40  block=.rdata
+    CODE xref from 1419cf9ce in 1419cf770
+==== ANCHOR Controller_Btn_R3 ====
+  hit @ 1444da648  block=.rdata
+    ptr slot @ 145694190
+  hit @ 143d16718  block=.rdata
+    CODE xref from 1411dbee5 in 1411dba70
+  hit @ 143d1d918  block=.rdata
+    CODE xref from 1411e16d3 in 1411e0180
+  hit @ 143d28fb0  block=.rdata
+    CODE xref from 141205fca in 1412032b0
+  hit @ 143d2d550  block=.rdata
+    CODE xref from 14120e1ba in 14120d920
+  hit @ 14444adc0  block=.rdata
+    CODE xref from 1419e06d3 in 1419e00e0
+  hit @ 144452670  block=.rdata
+    CODE xref from 1419e65d2 in 1419e48a0
+  hit @ 144452698  block=.rdata
+    CODE xref from 1419e65fc in 1419e48a0
+  hit @ 1444533f0  block=.rdata
+    CODE xref from 1419d6e96 in 1419d65b0
+    CODE xref from 1419d6ea0 in 1419d65b0
+  hit @ 144455a18  block=.rdata
+    CODE xref from 1419cf9b5 in 1419cf770
+==== ANCHOR InputAssign ====
+  hit @ 1444db320  block=.rdata
+    ptr slot @ 1456939c8
+  hit @ 1444db344  block=.rdata
+  hit @ 144683218  block=.rdata
+    ptr slot @ 1456b4b58
+  hit @ 1446843a0  block=.rdata
+    ptr slot @ 1456b3048
+  hit @ 144687555  block=.rdata
+  hit @ 1444d9b08  block=.rdata
+  hit @ 1444d9b38  block=.rdata
+  hit @ 1444dba40  block=.rdata
+  hit @ 1446855da  block=.rdata
+  hit @ 144685612  block=.rdata
+  hit @ 144688d02  block=.rdata
+==== ANCHOR Table_OptionControllerConfigParam ====
+  hit @ 144063538  block=.rdata
+    ptr slot @ 1454de6a8
+==== ANCHOR OptionControllerConfigParam ====
+  hit @ 14406353e  block=.rdata
+==== ANCHOR DynamicAssignInputControllerId ====
+  hit @ 144081740  block=.rdata
+    ptr slot @ 1454f4018
+  hit @ 144081780  block=.rdata
+    ptr slot @ 1454f4050
+  hit @ 144081f2f  block=.rdata
+  hit @ 144081f97  block=.rdata
+  hit @ 144526728  block=.rdata
+    ptr slot @ 1456a0b10
+==== ANCHOR KeyConfigList ====
+  hit @ 1445228e7  block=.rdata
+  hit @ 1445228ff  block=.rdata
+  hit @ 144522910  block=.rdata
+    ptr slot @ 1456a0db0
+  hit @ 144522920  block=.rdata
+    ptr slot @ 1456a0e28
+==== ANCHOR Keyboard_Type ====
+  hit @ 1444da950  block=.rdata
+    ptr slot @ 1456943c8
+  hit @ 144686738  block=.rdata
+    ptr slot @ 1456b54f8

@@ -147,6 +147,16 @@ function Speech.protected()
     return os.clock() < protect_until
 end
 
+-- End the protection NOW. The window is an ESTIMATE of how long the line takes to speak,
+-- and estimates outlive relevance: when the player dismisses the notice, they have decided
+-- they are done with it, and every reader that was politely waiting should get on with it.
+-- Without this the screen underneath stayed silent for the remainder of a window measured
+-- against a line the player already dismissed — up to six seconds of nothing after pressing
+-- a button (user 2026-07-25: the skill tree took "a while" to come back after its popup).
+function Speech.release_protection()
+    protect_until = 0
+end
+
 function Speech.backend_name()
     return loaded and prism.detect() or "none"
 end

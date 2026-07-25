@@ -10,6 +10,11 @@
   from B to X was still read as "B". This affected far more than the settings screen:
   every button prompt in the game, the on-screen action bar and every tutorial line was
   telling you the wrong button. The mod now reads your actual layout from your save.
+- **The button-config screen updates as you rebind it**, not only after pressing "Save
+  changes". Assign a new button and move to the next row: what you hear is already the new
+  assignment. Reading only the saved layout meant the screen said one thing and the mod
+  said another until you confirmed, which is exactly when a blind player most needs them
+  to agree.
 - **Messages are no longer cut off mid-sentence.** When a notice appeared - a new area
   unlocked on the map, a skill acquired, the popup explaining what a skill needs - the
   screen underneath announced itself again a moment later and silenced the message before
@@ -23,21 +28,18 @@
 ### Improvements
 - **Keyboard players can use the radar target picker.** It used to be reachable only by
   clicking the right stick. **V** opens and closes it, the **up and down arrows** move
-  through targets, **left and right** change category, and **Enter** locks onto the
-  focused one. While it is open the game no longer receives your keystrokes at all -
-  exactly what the mod already did with the controller - so plain keys are safe here even
-  though the game itself uses them (V is the skill palette, the arrows are
-  mount/dismount).
+  through targets, **left and right** change category, **Enter** locks onto the focused
+  one and **Escape** closes it and stops tracking. While it is open the game no longer
+  receives your keystrokes at all - exactly what the mod already did with the controller -
+  so plain keys are safe here even though the game itself uses them (V is the skill
+  palette, the arrows are mount/dismount).
 - **The world map's travel list responds to the arrow keys**, exactly as it already did to
   the d-pad: up and down move between travel points, **Enter** travels to the selected one.
 - **The button-config screen reads keyboard keys.** On the keyboard tabs it used to
   announce the equivalent controller button, because the key itself looked unreadable.
-  It now says the real key - "tecla: barra espaciadora", "tecla: clic izquierdo".
+  It now says the real key - "key: space bar", "key: left click".
 
 ### Notes
-- This version updates one of the mod's own libraries (the input bridge), so it needs the
-  game **restarted once** after updating - the new keyboard shortcuts are registered at
-  startup too.
 - If anything ever goes wrong while the picker is open, the keyboard block releases itself
   automatically within a fraction of a second. It cannot leave you unable to type, and
   Alt+F4 is never blocked.

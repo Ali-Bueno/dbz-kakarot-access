@@ -43,7 +43,11 @@ local queue = {}     -- { {key=, text=}, ... } computed in is_active
 -- brush material's Scalar/Vector parameter values (+ parent). The next real results
 -- screen tells us the parameter name/encoding; the reader fix follows.
 -- Turn OFF once the value source is fixed and re-verified.
-local DEBUG = true
+-- GATED on the dev build (2026-07-25): this dump walks brush MATERIALS, which is the
+-- uncatchable-abort family this project has been burned by more than once, and it writes a
+-- file on every results screen. It has to stay available — the digit decoder still depends
+-- on it — but it must never reach a player. package.ps1 rewrites build_flags to debug=false.
+local DEBUG = require("build_flags").debug
 local dumped = {}    -- detail KEY -> true (reset with `spoken` when the screen closes)
 
 local function dump_path()

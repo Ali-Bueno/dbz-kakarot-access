@@ -173,6 +173,42 @@ all — a partial sort interleaves placed and unplaced entries into an order mat
 Also: the direction/stick glyphs (`Btn_Key_Ud/Lr/All`, `Stk_*`) are *navigation*, not choices — an
 accessibility reader should drop them and speak only the real button presses.
 
+## Which DEVICE is in use — there is no getter, but the loaded ICON PATH answers (2026-07-25)
+
+Nothing reflected exposes "the player is on keyboard / on a pad". Swept exhaustively across
+AT / ATExt / CFramework / GCG: no device or platform enum (`EATPlatBtnId` is one flat 152-entry id
+space that mixes pad, mouse and every keyboard key, so the id alone carries no device tag), no
+`CurrentPlatform`-style property, and `UAT_UIXcmnPlatBtn` — the widget that actually swaps the
+images — declares **zero native functions**, so its resolution logic is Blueprint or non-reflected
+C++. The only device-aware surface is one-way: `UATCheatManager::ATDebugUiChangePlatform(FString)`
+(AT.hpp:26700) is a **setter** with no matching getter.
+
+What *is* readable is the outcome. **`UAT_UIXcmnPlatBtn.PathLoadIcon_DirectoryList` @0x0428**
+(FString, AT.hpp:38060-38076) holds the directory the widget actually loaded its icon from, so it
+names the platform set the game chose — no heuristic, no "last input used" guess: it is what is on
+screen. Read it off any live glyph widget (the keyhelp bar carries nine), reflected first and
+`Mem.fstring(w, 0x428)` as the fallback.
+
+The sets, confirmed against the pak index:
+
+| folder | device | contents |
+|---|---|---|
+| `PLAT_X` | Xbox | `Btn00..03`, `Btn_L1/L2`, `Btn_R1/R2`, `Btn_Options`, `Btn_Pad`, `Stk_*`, `Btn_Key_*` (d-pad) |
+| `PLAT_P` | PlayStation | identical file set, different art |
+| `PLAT_W` | **keyboard + mouse** | `Mouse_L/R/4/5/Move`, `Wheel_*`, and **individual key glyphs `kb_A_00`, `kb_Enter_00`, `kb_SpaceBar`, …** |
+
+So the game draws **real keyboard-key glyphs**, it does not reuse pad art — which is why a
+keyboard player currently hears the wrong thing: we resolve the id, never the set. `FCFIconArt`
+(CFramework.hpp:43-50) carries all three brushes side by side (`PLAT_P_Icon` / `PLAT_X_Icon` /
+`PLAT_W_Icon`) and something non-reflected picks one.
+
+If the path ever stops answering, the Ghidra entry points, in order: `ATDebugUiChangePlatform`
+(its write target IS the live value), the event code `EVENT_TYPE_PLATFORM_ICON_CHANGE = 109`
+(AT_enums.hpp:5482 — whoever raises it is the device detector), `UGCGSceneShopPaidCurrency::
+OnChangePlatBtnIcon()` (GCG.hpp:2686, a small concrete reaction handler that must call the
+getter), and `UCFDynamicAssignInputComponent` (CFramework.hpp:633, reflects nothing despite owning
+the concept).
+
 ## Platform glyph sets
 
 `PLAT_X` = **Xbox** glyph set (`/Game/Art/UI/Xcmn/PLAT_X/…`), `PLAT_P` = PlayStation, `PLAT_W` = other.

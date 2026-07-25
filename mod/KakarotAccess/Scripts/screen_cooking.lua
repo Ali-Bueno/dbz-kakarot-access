@@ -191,7 +191,8 @@ Cooking.confirm_ticks = 5   -- see the debounce note above
 -- One line per ACTIVATION (first announce after each reset) to dumps/dump_cooking.txt:
 -- if the stale pane still sneaks in somewhere, this names the state that let it
 -- through (visibility / opacity / where). Turn OFF with the latch verified dead.
-local LATCH_DEBUG = true
+-- Dev build only (2026-07-25): useful to us, but it writes a file on a player's machine.
+local LATCH_DEBUG = require("build_flags").debug
 local latch_logged = false
 
 local function latch_log(name)

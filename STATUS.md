@@ -57,6 +57,7 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Notices no longer cut off by the screen underneath | done | **VERIFIED in game 2026-07-25 (user).** `Announcer:focus` + `keyhelp_watch` defer while `Speech.protected()` — the shared fix for "the map/skill-tree readout talks over a popup". The offender is never the notice's own screen, so this belongs in the substrate, not per adapter |
 | Dialog re-trigger reads again | done (unverified) | 2026-07-25. `recent_set`/`pinned_set` are now scoped to the window PRESENCE (cleared after `CLOSED_CLEAR_S` = 0.7 s of continuous absence), not to the map epoch. Suppression was keyed per TEXT while every "new open" signal was per APPEARANCE |
 | Keyboard: radar picker + key names + INPUT BLOCK | done (unverified) | 2026-07-25. `radar_menu.Menu.key(cmd)` (queued, consumed on the game thread; `kb_open` so "no pad" ≠ "pad lost") + keybinds Ctrl+F3 / PageUp-PageDown / arrows / Enter — **needs a game RESTART** (main.lua + a rebuilt DLL). Button-config keyboard tabs speak the literal key via `A.action_key` + `I18n.key`. The mount/dismount conflict on ↑/↓ is GONE: `input_bridge.kb_block(ms)` now hides the keyboard from the game exactly like the pad block does |
+| Controller remap — LIVE, before "Save changes" | done | **VERIFIED in game 2026-07-25 (user).** Reported as "solo se actualizan al guardar". The pending layout is **not a member of any object** — a process-global `TMap<FName,FName>` at exe base + **0x569C3B0**, proven by Ghidra: the option screen's save case calls `FUN_1419e48a0(saveSystem+0x720, &DAT_14569c3b0)`, i.e. it BUILDS the saved struct from that map, writing exactly the 12 slots at 0x180..0x1D8 and skipping `Keyboard_Type`. The same map is what the game's OWN glyph resolver reads (`FUN_141a66300`), which is why the icon changes instantly — so reading it is reading what is on screen. Reader walks the element array comparing FName COMPARISON INDICES (no string conversion), and refuses unless all 12 slots are present and their values form a PERMUTATION of the 12 physical-key FNames → a moved global degrades to the saved copy. Offsets + evidence in `native_offsets.inputAssignMap` |
 | Controller REMAP honoured everywhere | done (unverified) | 2026-07-25. Every controller id the game exposes names a **SLOT**, not a button, and a slot keeps its factory name forever — so we were announcing the pre-remap button (user: melee B→X, ki X→B, both still read as B/X). F7 dump proved it in one pass: save `Controller_Btn_B = Gamepad_FaceButton_Left` / `Controller_Btn_X = Gamepad_FaceButton_Right` while the asset still pairs melee with slot `Controller_Btn_B`; the asset is NOT rewritten on rebind (its only live-vs-default delta is `ctrl` being filled in at runtime), so cache-clearing there could never have fixed it. New slot→physical layer in `ui_archetypes` reading `UATSaveSystem.InputAssign` via `gi.SaveManager→SaveSystem` (0.5 s TTL, fail-open to the slot name), applied in the single funnel `A.button_name` plus the three raw-token paths (`platbtn_token` ×2, `platbtn_id_token`'s idxToCtrl fallback). Identity under a default config, so it can only change a remapped pad. Fixes Options rows AND every `<inputicon>` prompt, keyhelp and tutorial glyph |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua`. Title 2026-07-17: SETTLE GATE — the boot-check dialogs re-commit the title on every gap and each re-commit re-announced "Menú principal, continuar"; the title now stays silent until it holds the screen 2.5 s with no dispatcher reset (no reflected boot-phase field exists on AAT_Title/AATTitleLevelScriptActor — swept), a cursor move lifts the gate at once, F1 bypasses it via `reannounce()`. Verified in-game 2026-07-17 (announced once, after the boot dialogs; 4 s felt sluggish → tuned to 2.5 s) |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
@@ -123,6 +124,78 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-25 (p): release hygiene.** Sweeping for diagnostics before packaging found TWO left
+enabled that were NOT gated on the dev build, i.e. they shipped: `screen_cooking.LATCH_DEBUG`
+and `screen_results.DEBUG`. The second matters — it walks brush MATERIALS (the uncatchable-abort
+family) and writes a file on every results screen. Neither was turned off (both still have work
+depending on them); both now read `require("build_flags").debug`, so they stay live in the dev
+tree and vanish from the package. That is what build_flags is for, and v0.1.0 already shipped a
+per-frame trace by accident once. Verified inside the zip.
+
+**2026-07-25 (o): round 3 — VERIFIED by the user. The LOG settled it in one read, and neither round-2 theory was
+right.** `DLG_TRACE` had been on for the user's session, so this was one grep instead of more
+reasoning (the rule earns its keep again). The decisive pair of lines:
+```
+22:43:52  speak=¡La batalla por el futuro contra los androides del terror!
+22:44:31  speak=Cómo adquirir, ¡La batalla por el futuro contra los androi…
+```
+The same notice, first HEADLESS and then in full. Cause: `fresh_notice` judged novelty per NODE
+**and composed from the fresh nodes only**, so "Cómo adquirir" — boilerplate shared by every
+skill-tree "how to acquire" notice — was marked recent by the first one and silently dropped
+from the next. That single defect produced BOTH user reports: a fragment reads as a repeat when
+the full text follows, and a notice whose every node is boilerplate goes mute.
+Fix: separate the two questions the function was conflating. **Novelty answers "is there news?";
+composition answers "what does this notice say?"** — a RENDERED title now always heads the
+utterance, while `news` (any fresh body/help node, or the rows rescue) still decides whether the
+window speaks at all. A parked window with only a stale title still says nothing.
+Consequence: the round-2 threshold split is REVERTED to one 0.7 s value. The pins were never the
+repeat source; raising them to 2 s only re-created a window where deliberately re-opening a
+notice stayed silent. The scenario the pins exist for happens with the window STAYING ON SCREEN,
+so no absence is measured for it and the threshold's only job is to outlast a flicker.
+Latency fix from round 2 (`Speech.release_protection` on dismissal) VERIFIED by the user
+("el árbol se lee rápido"). `DLG_TRACE` stays ON for one more round.
+
+**2026-07-25 (n): both halves of the notice fix needed a round 2 — and both were MY trade-offs
+biting back.** User: dialogs repeat now, and after dismissing one the menu underneath takes a
+while to come back.
+1. **The latency is the protection window outliving its relevance.** `say_protected` protects a
+   line for its ESTIMATED spoken duration (up to 6 s), and `Announcer:focus` defers on that. But
+   the player DISMISSES the notice with a button press — at which point the line is no longer the
+   most important thing on the reader, yet every other adapter kept politely waiting out the
+   remaining seconds. New `Speech.release_protection()`, called from `screen_dialog`'s falling
+   edge (window went off screen = dismissed). The protection still covers the whole time the
+   notice is up, which is when something would actually have talked over it. LESSON: a priority
+   window keyed to a TIME ESTIMATE needs an explicit end event, or it becomes a stall.
+2. **The repeats came from lowering the PIN threshold.** Round 1 collapsed both suppressors onto
+   one 0.7 s "real close". The pins were at 2.0 s for a reason — they guard the parked window
+   that re-fires on its own, and that window FLICKERS, so 0.7 s let a flicker read as a close.
+   Split again: recent FIFO 0.7 s (it is what blocked a deliberate re-trigger), pins back to
+   2.0 s. When the two goals conflict, the one that adds noise loses. **`DLG_TRACE` is ON** so
+   the next report is one grep instead of another round of reasoning.
+**speech.lua does NOT hot-reload** (it is required before main.lua's protected snapshot), so
+this one needs a full game restart, not Ctrl+Shift+R.
+
+**2026-07-25 (m): the live (pre-save) key config — VERIFIED in game by the user, and it
+re-proves the §2 rule.** Worth keeping as the cleanest example of it in this repo: reflected
+data said "nothing here", one Ghidra pass said "it is a global TMap, and it is the same one
+the game's own glyph resolver reads", and the fix worked first try with no capture round in
+between.
+User: the remap fix works, but the readout only changes after "Save changes", which is
+confusing. Reflected data was a dead end (ONE field of that struct type in the whole game,
+the saved one; no working copy on `UOptionMenu` / `UOptionMenuComponent` / `UAT_UIStartOption`;
+no Apply/Commit function taking it). That is precisely the §2 tell — private state, nothing
+reflected — so it went straight to Ghidra instead of another capture round, and the answer
+came back in one pass: **the pending layout is not a member of anything.** It is a
+process-global `TMap<FName,FName>` at exe base + `0x569C3B0`; the option screen's save case
+*builds* `UATSaveSystem+0x720` from it (`FUN_1419e48a0`, writing 0x180..0x1D8 and skipping
+`Keyboard_Type` — the offset match is what proves the destination is the real struct), and
+the game's own glyph resolver reads the same map, which is why the icon updates instantly.
+Reader: compare FName comparison INDICES (never convert to strings), refuse unless all 12
+slots resolve to a permutation of the 12 physical keys, fall back to the saved struct on any
+doubt. Note for next time: `FName("...")` as a Lua global is undocumented in our reference —
+it is used inside a pcall so an absent global degrades instead of breaking.
+Also: **Escape** now closes the picker and stops tracking (the pad's B).
 
 **2026-07-25 (l): the rest of the batch — one user-VERIFIED fix, three new ones.**
 

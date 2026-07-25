@@ -141,6 +141,7 @@ Handy shortcuts that mirror or complement the controller — not required to pla
 | **↑ / ↓** (picker open) | Move through targets (nearest first) |
 | **← / →** (picker open) | Previous / next category |
 | **Enter** (picker open) | Lock onto the focused target |
+| **Escape** (picker open) | Close the picker and stop tracking |
 | **↑ / ↓** (world map) | Move between travel points — the arrows act as the d-pad here |
 | **Enter** (world map) | Travel to the selected point |
 | **F5** | Announce the tracked objective (distance, clock direction) |

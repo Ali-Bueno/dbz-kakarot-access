@@ -97,6 +97,10 @@ RegisterKeyBind(Key.RIGHT_ARROW, function() App.nav_key("cat_next") end)
 RegisterKeyBind(Key.LEFT_ARROW, function() App.nav_key("cat_prev") end)
 -- Confirm: lock onto the focused target / travel to the selected point (the pad's A).
 RegisterKeyBind(Key.RETURN, function() App.nav_key("select") end)
+-- Escape: close the picker AND stop tracking, the pad's B. Only does anything while the
+-- picker is open — and while it is, the game never sees the key, so this cannot open the
+-- game's own pause menu underneath.
+RegisterKeyBind(Key.ESCAPE, function() App.nav_key("stop") end)
 
 -- F5: announce the tracked objective on demand (type, distance, clock direction).
 RegisterKeyBind(Key.F5, function() App.nav_where() end)

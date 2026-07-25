@@ -1,0 +1,854 @@
+# instructions scanned: 13783452
+
+=== A. functions with BOTH a 0x1E0/0x3C/0x78 copy size AND a 0x720 offset ===
+FUNC 0x1400bcee0  FUN_1400bcee0  size=false cnt=true off720=true slot=false
+    0x720 @ 1400bd130  MOV EAX,dword ptr [RSI + 0x720]
+    0x720 @ 1400bd46a  MOV EAX,dword ptr [RSI + 0x720]
+FUNC 0x1402c0f70  FUN_1402c0f70  size=false cnt=true off720=true slot=true
+    slot  @ 1402c2cc2  LEA RAX,[RBP + 0x180]
+    slot  @ 1402c2cec  MOV dword ptr [RBP + 0x180],0xa1
+    0x720 @ 1402c2f28  LEA RAX,[RBP + 0x720]
+    0x720 @ 1402c2f2f  MOV qword ptr [RBP + 0x720],RCX
+    slot  @ 1402c310e  LEA RAX,[RBP + 0x1d8]
+    slot  @ 1402c3138  MOV dword ptr [RBP + 0x1d8],0xc7
+FUNC 0x140896540  FUN_140896540  size=false cnt=true off720=true slot=true
+    0x720 @ 140899431  LEA RDX,[RBP + 0x720]
+    slot  @ 140899703  MOV dword ptr [RBP + 0x180],0x6b
+    slot  @ 140899720  LEA R8,[RBP + 0x180]
+    slot  @ 140899ba7  MOV dword ptr [RBP + 0x1d8],0x81
+    slot  @ 140899bc4  LEA R8,[RBP + 0x1d8]
+FUNC 0x141552650  FUN_141552650  size=false cnt=true off720=true slot=false
+    0x720 @ 1415526b2  MOV RDX,qword ptr [RBP + 0x720]
+FUNC 0x1417647c0  FUN_1417647c0  size=false cnt=true off720=true slot=false
+    0x720 @ 141764849  MOV dword ptr [RSP + 0x20],0x720
+FUNC 0x141793ec0  FUN_141793ec0  size=false cnt=true off720=true slot=false
+    0x720 @ 141793f49  MOV dword ptr [RSP + 0x20],0x720
+FUNC 0x141db0550  FUN_141db0550  size=false cnt=true off720=true slot=true
+    slot  @ 141db0699  MOV qword ptr [RBX + 0x180],R12
+    slot  @ 141db06e6  MOV byte ptr [RBX + 0x1d8],R12B
+    0x720 @ 141db0b85  MOV qword ptr [RBX + 0x720],R12
+FUNC 0x142d37fd0  FUN_142d37fd0  size=false cnt=true off720=true slot=true
+    slot  @ 142d38f8c  MOV qword ptr [RBP + 0x180],R15
+    slot  @ 142d38f93  LEA RCX,[RBP + 0x180]
+    slot  @ 142d38faa  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 142d38fc3  LEA R8,[RBP + 0x180]
+    slot  @ 142d38fd7  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 142d391b1  MOV qword ptr [RBP + 0x1d8],0x8
+    0x720 @ 142d3b52a  MOV qword ptr [RBP + 0x720],R15
+    0x720 @ 142d3b531  LEA RCX,[RBP + 0x720]
+    0x720 @ 142d3b548  MOV RCX,qword ptr [RBP + 0x720]
+    0x720 @ 142d3b561  LEA R8,[RBP + 0x720]
+    0x720 @ 142d3b575  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x142d47c10  FUN_142d47c10  size=true cnt=false off720=true slot=false
+    0x720 @ 142d47f58  MOV byte ptr [RSI + 0x720],0x1
+FUNC 0x1430ad270  FUN_1430ad270  size=false cnt=true off720=true slot=true
+    slot  @ 1430ae157  MOV qword ptr [RBP + 0x180],RSI
+    slot  @ 1430ae15e  LEA RCX,[RBP + 0x180]
+    slot  @ 1430ae175  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 1430ae18e  LEA R8,[RBP + 0x180]
+    slot  @ 1430ae1a2  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 1430ae386  MOV qword ptr [RBP + 0x1d8],0x8
+    0x720 @ 1430b07a9  MOV qword ptr [RBP + 0x720],RSI
+    0x720 @ 1430b07b0  LEA RCX,[RBP + 0x720]
+    0x720 @ 1430b07c7  MOV RCX,qword ptr [RBP + 0x720]
+    0x720 @ 1430b07e0  LEA R8,[RBP + 0x720]
+    0x720 @ 1430b07f4  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x14338f660  FUN_14338f660  size=true cnt=false off720=true slot=true
+    0x720 @ 1433904c1  LEA RCX,[RBP + 0x720]
+    slot  @ 143390875  MOVDQA xmmword ptr [RBP + 0x180],XMM0
+    slot  @ 14339088d  LEA RDX,[RBP + 0x180]
+FUNC 0x1437d4430  FUN_1437d4430  size=false cnt=true off720=true slot=true
+    slot  @ 1437d48d9  CMP dword ptr [RDI + 0x180],EAX
+    0x720 @ 1437d4a66  MOV RAX,qword ptr [RBX + 0x720]
+
+=== B. functions with a 0x720 offset AND the 0x180/0x1D8 slot window ===
+FUNC 0x1402c0f70  FUN_1402c0f70
+    slot  @ 1402c2cc2  LEA RAX,[RBP + 0x180]
+    slot  @ 1402c2cec  MOV dword ptr [RBP + 0x180],0xa1
+    0x720 @ 1402c2f28  LEA RAX,[RBP + 0x720]
+    0x720 @ 1402c2f2f  MOV qword ptr [RBP + 0x720],RCX
+    slot  @ 1402c310e  LEA RAX,[RBP + 0x1d8]
+    slot  @ 1402c3138  MOV dword ptr [RBP + 0x1d8],0xc7
+FUNC 0x1402e74d0  FUN_1402e74d0
+    0x720 @ 1402e958a  MOV qword ptr [RBP + 0x720],RDI
+    0x720 @ 1402e9591  LEA RCX,[RBP + 0x720]
+    0x720 @ 1402e95a8  MOV RCX,qword ptr [RBP + 0x720]
+    slot  @ 1402eab2d  MOV qword ptr [RBP + 0x1d8],0xf
+    slot  @ 1402eac64  MOV qword ptr [RBP + 0x180],RDI
+    slot  @ 1402eac6b  LEA RCX,[RBP + 0x180]
+    slot  @ 1402eac82  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 1402eb828  LEA RDX,[RBP + 0x180]
+    0x720 @ 1402ebfe4  LEA RDX,[RBP + 0x720]
+FUNC 0x1405a58f0  FUN_1405a58f0
+    slot  @ 1405a6492  LEA RAX,[RBP + 0x180]
+    slot  @ 1405a64a7  MOV qword ptr [RBP + 0x180],RCX
+    slot  @ 1405a66c6  MOV qword ptr [RBP + 0x1d8],RCX
+    slot  @ 1405a66f8  LEA RAX,[RBP + 0x1d8]
+    0x720 @ 1405a6724  LEA RCX,[RBP + 0x720]
+FUNC 0x1407a4330  FUN_1407a4330
+    slot  @ 1407a46ea  VMOVDQU ymmword ptr [RBP + 0x180],YMM1
+    slot  @ 1407a48ab  VMOVDQU YMM7,ymmword ptr [RDI + 0x180]
+    slot  @ 1407a495f  VMOVDQU ymmword ptr [RBP + 0x180],YMM12
+    slot  @ 1407a4a0f  VPADDW YMM0,YMM11,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a4ab6  VPSUBW YMM0,YMM11,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a4c00  VMOVDQU ymmword ptr [RBP + 0x180],YMM0
+    slot  @ 1407a4e92  VMOVDQU YMM0,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a4ea6  VMOVDQU ymmword ptr [RBP + 0x180],YMM0
+    slot  @ 1407a5143  VPADDW YMM0,YMM3,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a5150  VMOVDQU ymmword ptr [RBP + 0x180],YMM0
+    slot  @ 1407a587c  VPADDW YMM2,YMM4,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a589d  VPSUBW YMM3,YMM4,ymmword ptr [RBP + 0x180]
+FUNC 0x1407a6530  FUN_1407a6530
+    slot  @ 1407a6ae6  VMOVDQU YMM7,ymmword ptr [RDI + 0x180]
+    slot  @ 1407a6c60  VMOVDQU ymmword ptr [RBP + 0x180],YMM0
+    slot  @ 1407a7033  VMOVDQU YMM3,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a7228  VMOVDQU ymmword ptr [RBP + 0x180],YMM2
+    slot  @ 1407a759c  VPADDW YMM11,YMM1,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a77c6  VPSUBW YMM0,YMM1,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a78a0  VMOVDQU ymmword ptr [RBP + 0x180],YMM0
+    slot  @ 1407a7b77  VPADDW YMM0,YMM2,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a7bab  VPSUBW YMM0,YMM2,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a7e4b  VPADDW YMM0,YMM4,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a7e57  VPSUBW YMM1,YMM4,ymmword ptr [RBP + 0x180]
+    slot  @ 1407a8042  VMOVDQU YMM3,ymmword ptr [RBP + 0x180]
+FUNC 0x1407b4fd0  FUN_1407b4fd0
+    slot  @ 1407b522d  MOVDQA xmmword ptr [RBP + 0x180],XMM6
+    slot  @ 1407b5681  MOVDQA xmmword ptr [RBP + 0x180],XMM4
+    slot  @ 1407b57a4  MOVDQU XMM0,xmmword ptr [RDI + 0x180]
+    slot  @ 1407b5999  MOVDQA XMM5,xmmword ptr [RBP + 0x180]
+    slot  @ 1407b5a66  MOVDQA xmmword ptr [RBP + 0x180],XMM5
+    slot  @ 1407b5fb7  MOVDQA XMM6,xmmword ptr [RBP + 0x180]
+    slot  @ 1407b5fcd  PADDW XMM11,xmmword ptr [RBP + 0x180]
+    0x720 @ 1407b6734  MOVDQA xmmword ptr [RBP + 0x720],XMM2
+    slot  @ 1407b79ed  MOVDQA XMM6,xmmword ptr [RBP + 0x180]
+    slot  @ 1407b7b7f  MOVDQA xmmword ptr [RBP + 0x180],XMM6
+    slot  @ 1407b7c4d  MOVDQA XMM8,xmmword ptr [RBP + 0x180]
+    slot  @ 1407b7ce6  MOVDQA xmmword ptr [RBP + 0x180],XMM8
+FUNC 0x1407c5230  FUN_1407c5230
+    0x720 @ 1407c75b3  MOVDQU XMM10,xmmword ptr [RBP + RCX*0x8 + 0x720]
+    slot  @ 1407c8e34  MOVDQA xmmword ptr [RBP + 0x180],XMM0
+FUNC 0x140896540  FUN_140896540
+    0x720 @ 140899431  LEA RDX,[RBP + 0x720]
+    slot  @ 140899703  MOV dword ptr [RBP + 0x180],0x6b
+    slot  @ 140899720  LEA R8,[RBP + 0x180]
+    slot  @ 140899ba7  MOV dword ptr [RBP + 0x1d8],0x81
+    slot  @ 140899bc4  LEA R8,[RBP + 0x1d8]
+FUNC 0x1408deff0  FUN_1408deff0
+    slot  @ 1408df7fb  LEA RDX,[R12 + 0x1d8]
+    slot  @ 1408df825  MOV RCX,qword ptr [R14 + 0x180]
+    slot  @ 1408df8d0  MOV RCX,qword ptr [R14 + 0x180]
+    slot  @ 1408dfaf7  MOV RAX,qword ptr [R14 + 0x180]
+    slot  @ 1408dfb03  LEA RDI,[R12 + 0x1d8]
+    slot  @ 1408dfe09  MOV RAX,qword ptr [RAX + 0x180]
+    slot  @ 1408dfe1c  MOVSXD RAX,dword ptr [R12 + 0x180]
+    slot  @ 1408e03ba  MOV qword ptr [RBP + 0x1d8],RBX
+    slot  @ 1408e03ce  LEA RCX,[RBP + 0x1d8]
+    slot  @ 1408e03f4  MOV RCX,qword ptr [RBP + 0x1d8]
+    slot  @ 1408e044c  LEA R8,[RBP + 0x1d8]
+    slot  @ 1408e0482  MOV RCX,qword ptr [RBP + 0x1d8]
+FUNC 0x1409f4dc0  FUN_1409f4dc0
+    slot  @ 1409f4e6f  MOV qword ptr [RBX + 0x180],RAX
+    slot  @ 1409f4ec8  MOV qword ptr [RBX + 0x1d8],0x2
+    0x720 @ 1409f53fb  MOV qword ptr [RBX + 0x720],RAX
+FUNC 0x1409f5630  FUN_1409f5630
+    0x720 @ 1409f5745  MOV RCX,qword ptr [RBX + 0x720]
+    slot  @ 1409f5b28  LEA RCX,[RBX + 0x180]
+FUNC 0x140b9fdc0  FUN_140b9fdc0
+    0x720 @ 140ba0d35  LEA RCX,[RBP + 0x720]
+    0x720 @ 140ba0dbb  LEA R8,[RBP + 0x720]
+    slot  @ 140ba1a9e  MOV qword ptr [RBP + 0x180],RAX
+    slot  @ 140ba1afb  LEA RDX,[RBP + 0x180]
+    slot  @ 140ba1f8a  MOV qword ptr [RBP + 0x1d8],RAX
+FUNC 0x140d0e2a0  FUN_140d0e2a0
+    slot  @ 140d0e656  MOV qword ptr [RBP + 0x180],R10
+    0x720 @ 140d0ee28  MOV qword ptr [RBP + 0x720],RAX
+FUNC 0x140d92e90  FUN_140d92e90
+    slot  @ 140d93438  MOVSD qword ptr [RBP + 0x1d8],XMM2
+    slot  @ 140d93440  LEA RAX,[RBP + 0x1d8]
+    slot  @ 140d9417e  MOVSS dword ptr [RBP + 0x180],XMM1
+    0x720 @ 140d9557f  MOV qword ptr [RBP + 0x720],R15
+    0x720 @ 140d95592  LEA RCX,[RBP + 0x720]
+    slot  @ 140d95600  MOV ECX,dword ptr [RAX + 0x180]
+FUNC 0x140f360f0  FUN_140f360f0
+    slot  @ 140f366ec  MOV dword ptr [RBP + 0x1d8],EDX
+    slot  @ 140f36fd4  LEA RDX,[RBP + 0x180]
+    slot  @ 140f36fe1  MOVSS XMM2,dword ptr [RBP + 0x180]
+    0x720 @ 140f37b6e  MOVAPS XMM8,xmmword ptr [RSP + 0x720]
+    slot  @ 140f37c91  MOV R8D,dword ptr [RCX + 0x180]
+FUNC 0x140fec0d0  FUN_140fec0d0
+    0x720 @ 140fec1b6  MOV RCX,qword ptr [RBX + 0x720]
+    slot  @ 140fec41a  MOV RCX,qword ptr [RBX + 0x180]
+FUNC 0x140ffbc00  FUN_140ffbc00
+    slot  @ 140ffbeab  LEA RDX,[RBX + 0x180]
+    0x720 @ 140ffc9c7  LEA RDX,[RBX + 0x720]
+FUNC 0x141012a80  FUN_141012a80
+    slot  @ 141012da2  MOV qword ptr [RBX + 0x180],RAX
+    slot  @ 141012e46  MOV qword ptr [RBX + 0x1d8],RSI
+    slot  @ 141012e83  LEA RCX,[RBX + 0x1d8]
+    slot  @ 141012e8f  MOV RAX,qword ptr [RBX + 0x1d8]
+    0x720 @ 141013541  LEA RCX,[RBX + 0x720]
+FUNC 0x1411147c0  FUN_1411147c0
+    slot  @ 141114942  MOVUPS xmmword ptr [RCX + 0x180],XMM0
+    0x720 @ 141114eec  MOVUPS xmmword ptr [RCX + 0x720],XMM0
+FUNC 0x14112b0c0  FUN_14112b0c0
+    0x720 @ 14112b369  MOVUPS XMM8,xmmword ptr [RDI + 0x720]
+    slot  @ 14112bf27  MOVSXD R14,dword ptr [RSI + 0x1d8]
+    slot  @ 14112bf32  MOV dword ptr [RSI + 0x1d8],EAX
+    slot  @ 14112c032  MOVSXD R14,dword ptr [RSI + 0x1d8]
+    slot  @ 14112c03d  MOV dword ptr [RSI + 0x1d8],EAX
+    slot  @ 14112c1d7  MOVSXD RCX,dword ptr [RAX + 0x1d8]
+FUNC 0x14121f170  FUN_14121f170
+    slot  @ 14121f24d  MOV qword ptr [RBX + 0x1d8],RDI
+    0x720 @ 14121f62e  MOV dword ptr [RBX + 0x720],EDI
+    slot  @ 14121fbee  MOV word ptr [RBX + 0x180],DI
+FUNC 0x141220920  FUN_141220920
+    0x720 @ 141220c8b  MOV dword ptr [RBX + 0x720],ESI
+    slot  @ 141220ed2  LEA RCX,[RBX + 0x1d8]
+FUNC 0x14126a2b0  FUN_14126a2b0
+    0x720 @ 14126ac46  MOV RCX,qword ptr [RBP + 0x720]
+    slot  @ 14126c7f4  MOV qword ptr [RBP + 0x180],0x17
+    slot  @ 14126cdfb  MOV qword ptr [RBP + 0x1d8],R15
+    slot  @ 14126ce02  LEA RCX,[RBP + 0x1d8]
+    slot  @ 14126ce0e  MOV RCX,qword ptr [RBP + 0x1d8]
+    slot  @ 14126ce3d  LEA RAX,[RBP + 0x1d8]
+    slot  @ 14126ce5f  MOV RCX,qword ptr [RBP + 0x1d8]
+FUNC 0x14143ab80  FUN_14143ab80
+    slot  @ 14143af24  MOV qword ptr [RBP + 0x180],R12
+    0x720 @ 14143b71a  MOV qword ptr [RBP + 0x720],RDI
+FUNC 0x141827fa0  FUN_141827fa0
+    slot  @ 141828226  LEA RDX,[RBX + 0x180]
+    0x720 @ 141828d42  LEA RDX,[RBX + 0x720]
+FUNC 0x1419c8fe0  FUN_1419c8fe0
+    slot  @ 1419c9058  MOV qword ptr [RCX + 0x180],RDX
+    slot  @ 1419c906d  MOV qword ptr [RCX + 0x1d8],RDX
+    0x720 @ 1419c93f4  MOV qword ptr [RCX + 0x720],RDX
+FUNC 0x141b10980  FUN_141b10980
+    slot  @ 141b10a54  LEA RCX,[RDI + 0x180]
+    slot  @ 141b10afc  MOV qword ptr [RDI + 0x1d8],RSI
+    0x720 @ 141b10ef1  MOV qword ptr [RDI + 0x720],RSI
+FUNC 0x141cbb910  FUN_141cbb910
+    slot  @ 141cbb9c1  MOV qword ptr [RBP + 0x180],R12
+    slot  @ 141cbba6d  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 141cbca02  LEA RCX,[RBP + 0x1d8]
+    slot  @ 141cbca0e  LEA RDX,[RBP + 0x1d8]
+    0x720 @ 141cbd86f  MOV qword ptr [RBP + 0x720],R12
+FUNC 0x141db0550  FUN_141db0550
+    slot  @ 141db0699  MOV qword ptr [RBX + 0x180],R12
+    slot  @ 141db06e6  MOV byte ptr [RBX + 0x1d8],R12B
+    0x720 @ 141db0b85  MOV qword ptr [RBX + 0x720],R12
+FUNC 0x141e60790  FUN_141e60790
+    0x720 @ 141e60f7d  MOVSD qword ptr [RBP + 0x720],XMM1
+    0x720 @ 141e60fea  MOVSD XMM1,qword ptr [RBP + 0x720]
+    slot  @ 141e61bf2  LEA RCX,[RBP + 0x180]
+    slot  @ 141e61c03  LEA RDX,[RBP + 0x180]
+FUNC 0x141f2da10  FUN_141f2da10
+    slot  @ 141f377e8  MOV dword ptr [RSP + 0x180],EAX
+    slot  @ 141f377ef  MOV EDX,dword ptr [RSP + 0x180]
+    slot  @ 141f37894  MOV EAX,dword ptr [RSP + 0x180]
+    slot  @ 141f378a6  MOVSXD RAX,dword ptr [RSP + 0x180]
+    slot  @ 141f3a041  MOV dword ptr [RSP + 0x1d8],EAX
+    slot  @ 141f3a048  MOV EDX,dword ptr [RSP + 0x1d8]
+    slot  @ 141f3a0ed  MOV EAX,dword ptr [RSP + 0x1d8]
+    slot  @ 141f3a0ff  MOVSXD RAX,dword ptr [RSP + 0x1d8]
+    0x720 @ 141f60c30  MOV dword ptr [RSP + 0x720],EAX
+    0x720 @ 141f60c37  MOV EDX,dword ptr [RSP + 0x720]
+    0x720 @ 141f60cdc  MOV EAX,dword ptr [RSP + 0x720]
+    0x720 @ 141f60cee  MOVSXD RAX,dword ptr [RSP + 0x720]
+FUNC 0x141f75a10  FUN_141f75a10
+    slot  @ 141f7faa8  MOV dword ptr [RSP + 0x180],EAX
+    slot  @ 141f7faaf  MOV EDX,dword ptr [RSP + 0x180]
+    slot  @ 141f7fb51  MOV EAX,dword ptr [RSP + 0x180]
+    slot  @ 141f7fb63  MOVSXD RAX,dword ptr [RSP + 0x180]
+    slot  @ 141f82132  MOV dword ptr [RSP + 0x1d8],EAX
+    slot  @ 141f82139  MOV EDX,dword ptr [RSP + 0x1d8]
+    slot  @ 141f821de  MOV EAX,dword ptr [RSP + 0x1d8]
+    slot  @ 141f821f0  MOVSXD RAX,dword ptr [RSP + 0x1d8]
+    0x720 @ 141fa8d15  MOV dword ptr [RSP + 0x720],EAX
+    0x720 @ 141fa8d1c  MOV EDX,dword ptr [RSP + 0x720]
+    0x720 @ 141fa8dc1  MOV EAX,dword ptr [RSP + 0x720]
+    0x720 @ 141fa8dd3  MOVSXD RAX,dword ptr [RSP + 0x720]
+FUNC 0x141fad930  FUN_141fad930
+    0x720 @ 141fb5e37  MOV dword ptr [RSP + 0x720],EAX
+    0x720 @ 141fb5e68  MOV ECX,dword ptr [RSP + 0x720]
+    0x720 @ 141fb5ecf  CMP dword ptr [RSP + 0x720],EAX
+    slot  @ 141fb73a9  MOV dword ptr [RSP + 0x180],EAX
+    slot  @ 141fb73b0  MOV EDX,dword ptr [RSP + 0x180]
+    slot  @ 141fb7452  MOV EAX,dword ptr [RSP + 0x180]
+    slot  @ 141fb7464  MOVSXD RAX,dword ptr [RSP + 0x180]
+    slot  @ 141fb9ab8  MOV dword ptr [RSP + 0x1d8],EAX
+    slot  @ 141fb9abf  MOV EDX,dword ptr [RSP + 0x1d8]
+    slot  @ 141fb9b64  MOV EAX,dword ptr [RSP + 0x1d8]
+    slot  @ 141fb9b76  MOVSXD RAX,dword ptr [RSP + 0x1d8]
+FUNC 0x1420664f0  FUN_1420664f0
+    0x720 @ 14206baf7  MOV qword ptr [RSP + 0x720],-0x1
+    0x720 @ 14206bb03  INC qword ptr [RSP + 0x720]
+    0x720 @ 14206bb13  MOV RCX,qword ptr [RSP + 0x720]
+    0x720 @ 14206bb21  MOV RAX,qword ptr [RSP + 0x720]
+    slot  @ 14206cab8  MOV dword ptr [RSP + 0x180],EAX
+    slot  @ 14206cae9  MOV ECX,dword ptr [RSP + 0x180]
+    slot  @ 14206cb5d  MOV EDX,dword ptr [RSP + 0x180]
+    slot  @ 14206df8d  MOV dword ptr [RSP + 0x1d8],EAX
+    slot  @ 14206df9c  MOV ECX,dword ptr [RSP + 0x1d8]
+    slot  @ 14206dfb1  CMP dword ptr [RSP + 0x1d8],EAX
+FUNC 0x1420cea40  FUN_1420cea40
+    slot  @ 1420d0376  MOV qword ptr [RSP + 0x180],RAX
+    slot  @ 1420d0383  MOV qword ptr [RSP + 0x180],RAX
+    slot  @ 1420d03f1  MOV RCX,qword ptr [RSP + 0x180]
+    slot  @ 1420d041a  MOV RCX,qword ptr [RSP + 0x180]
+    slot  @ 1420d1be8  MOV qword ptr [RSP + 0x1d8],RAX
+    slot  @ 1420d1bf5  MOV qword ptr [RSP + 0x1d8],RAX
+    slot  @ 1420d1c49  MOV RAX,qword ptr [RSP + 0x1d8]
+    slot  @ 1420d1c6a  MOV RCX,qword ptr [RSP + 0x1d8]
+    0x720 @ 1420df63c  MOV qword ptr [RSP + 0x720],RAX
+    0x720 @ 1420df649  MOV qword ptr [RSP + 0x720],RAX
+    0x720 @ 1420dfba9  MOV RCX,qword ptr [RSP + 0x720]
+    0x720 @ 1420dfbd2  MOV RCX,qword ptr [RSP + 0x720]
+FUNC 0x142151d80  FUN_142151d80
+    slot  @ 142151eb2  MOV qword ptr [RSI + 0x180],0x3f800000
+    slot  @ 142151f03  MOV byte ptr [RSI + 0x1d8],R14B
+    0x720 @ 1421524fa  MOV dword ptr [RSI + 0x720],0xffffffff
+FUNC 0x1421a9cb0  FUN_1421a9cb0
+    slot  @ 1421aa71b  MOV dword ptr [RBP + 0x1d8],EDI
+    slot  @ 1421aaa78  MOV dword ptr [RBP + 0x180],EDI
+    slot  @ 1421aaada  MOV byte ptr [RSI + 0x1d8],AL
+    0x720 @ 1421ab9e1  MOV RBX,qword ptr [RBP + 0x720]
+FUNC 0x1421b7040  FUN_1421b7040
+    slot  @ 1421b8786  MOV dword ptr [RBP + 0x180],R13D
+    slot  @ 1421b8d15  LEA RCX,[RBX + 0x1d8]
+    0x720 @ 1421b930a  MOV RBX,qword ptr [RBP + 0x720]
+FUNC 0x14223c710  FUN_14223c710
+    0x720 @ 14223c72a  SUB RSP,0x720
+    slot  @ 14223cb0e  LEA RCX,[RBX + 0x1d8]
+    0x720 @ 14223cd49  LEA R11,[RSP + 0x720]
+FUNC 0x14224d930  FUN_14224d930
+    slot  @ 14224e72b  MOV qword ptr [RBP + 0x180],RDI
+    0x720 @ 14224f24d  MOVDQA xmmword ptr [RBP + 0x720],XMM0
+FUNC 0x1422733d0  FUN_1422733d0
+    slot  @ 14227362a  MOV dword ptr [RBP + 0x180],EDI
+    0x720 @ 142273915  LEA RCX,[RBP + 0x720]
+    slot  @ 142274576  MOV qword ptr [RBP + 0x1d8],R14
+    slot  @ 14227488d  LEA RDX,[RBP + 0x1d8]
+    slot  @ 142274ec8  LEA RCX,[RBP + 0x1d8]
+FUNC 0x1424d5830  FUN_1424d5830
+    slot  @ 1424d590a  MOV qword ptr [RBP + 0x180],RCX
+    slot  @ 1424d5a0c  CMP qword ptr [RAX + 0x1d8],R14
+    slot  @ 1424d5a92  LEA RDX,[RAX + 0x1d8]
+    slot  @ 1424d5af6  MOV RCX,qword ptr [RAX + 0x1d8]
+    slot  @ 1424d5afd  MOV qword ptr [RAX + 0x1d8],R14
+    0x720 @ 1424d6574  LEA R9,[RBP + 0x720]
+    0x720 @ 1424d65c4  MOVDQA xmmword ptr [RBP + 0x720],XMM1
+    slot  @ 1424d7505  MOV dword ptr [RBP + 0x1d8],R15D
+    slot  @ 1424d9008  MOV RAX,qword ptr [RBP + 0x180]
+FUNC 0x1426f22c0  FUN_1426f22c0
+    0x720 @ 1426f3bb4  AND dword ptr [RBP + 0x720],EAX
+    slot  @ 1426f45a7  MOV qword ptr [RBP + 0x180],0x6
+    slot  @ 1426f4a53  MOV qword ptr [RBP + 0x1d8],RDI
+    slot  @ 1426f4a5a  LEA RCX,[RBP + 0x1d8]
+    slot  @ 1426f4a71  MOV RCX,qword ptr [RBP + 0x1d8]
+    slot  @ 1426f4a8f  LEA RDX,[RBP + 0x1d8]
+    slot  @ 1426f4a9b  MOV RCX,qword ptr [RBP + 0x1d8]
+FUNC 0x1426f94b0  FUN_1426f94b0
+    slot  @ 1426fb622  LEA RDX,[RBP + 0x180]
+    slot  @ 1426fb635  MOVSXD RCX,dword ptr [RBP + 0x180]
+    slot  @ 1426fc23e  LEA RDX,[RBP + 0x1d8]
+    slot  @ 1426fc251  MOVSXD RAX,dword ptr [RBP + 0x1d8]
+    0x720 @ 1426fd094  AND dword ptr [RBP + 0x720],EAX
+    slot  @ 1426fdb32  MOV RDX,qword ptr [R12 + 0x180]
+FUNC 0x142707c60  FUN_142707c60
+    slot  @ 1427080dc  MOV qword ptr [RBP + 0x180],R14
+    slot  @ 14270811d  LEA R9,[RBP + 0x180]
+    slot  @ 142708c64  MOV dword ptr [RBP + 0x1d8],0xffffffff
+    slot  @ 142708ca4  MOVUPS XMM2,xmmword ptr [RBP + 0x1d8]
+    0x720 @ 1427093a8  MOV qword ptr [RBP + 0x720],R15
+    0x720 @ 1427093bb  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x14270dca0  FUN_14270dca0
+    0x720 @ 14270df6d  MOV dword ptr [RBP + 0x720],0xffffffff
+    slot  @ 14270e6a6  MOV dword ptr [RBP + 0x180],R8D
+    slot  @ 14270e6dd  MOVUPS xmmword ptr [RBP + 0x1d8],XMM0
+    slot  @ 14270e731  MOV dword ptr [RBP + 0x180],R8D
+    slot  @ 14270e7a7  MOV R12,qword ptr [RBP + 0x1d8]
+FUNC 0x142748150  FUN_142748150
+    0x720 @ 14274816c  MOV qword ptr [RBP + 0x720],RAX
+    slot  @ 142749002  LEA RDX,[RBP + 0x180]
+    slot  @ 142749ca4  MOVUPS xmmword ptr [RBP + 0x1d8],XMM1
+    slot  @ 142749cda  CMP qword ptr [RBP + 0x1d8],RDX
+    0x720 @ 14274a0e4  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x142798e90  FUN_142798e90
+    slot  @ 142799052  MOV EAX,dword ptr [RDI + 0x1d8]
+    slot  @ 142799058  MOV dword ptr [RBX + 0x1d8],EAX
+    0x720 @ 142799b00  MOVSD XMM1,qword ptr [RDI + 0x720]
+    0x720 @ 142799b08  MOVSD qword ptr [RBX + 0x720],XMM1
+FUNC 0x1428bf150  FUN_1428bf150
+    slot  @ 1428bf404  MOVSXD R8,dword ptr [RDI + 0x180]
+    slot  @ 1428c0399  MOVSXD R14,dword ptr [RDI + 0x180]
+    slot  @ 1428c09e5  MOVSXD R14,dword ptr [RDI + 0x180]
+    slot  @ 1428c1615  MOVSXD R15,dword ptr [RDI + 0x180]
+    slot  @ 1428c18fb  MOVSXD RSI,dword ptr [RDI + 0x180]
+    slot  @ 1428c1acb  MOVSXD R14,dword ptr [RDI + 0x180]
+    0x720 @ 1428c1b7f  MOVAPS xmmword ptr [RBP + 0x720],XMM1
+    slot  @ 1428c1e1c  MOVAPS xmmword ptr [RBP + 0x180],XMM3
+    slot  @ 1428c1fcc  MOVSS XMM3,dword ptr [RBP + 0x180]
+    0x720 @ 1428c1fea  MOVAPS xmmword ptr [RBP + 0x720],XMM12
+    0x720 @ 1428c2074  MOVAPS xmmword ptr [RBP + 0x720],XMM12
+    0x720 @ 1428c20f0  MOVAPS xmmword ptr [RBP + 0x720],XMM0
+FUNC 0x1428e6820  FUN_1428e6820
+    slot  @ 1428e6ad6  MOVSS dword ptr [RSP + 0x1d8],XMM0
+    slot  @ 1428e6adf  MOVSS XMM0,dword ptr [RSP + 0x1d8]
+    slot  @ 1428e75a4  MOVAPS xmmword ptr [RSP + 0x180],XMM0
+    slot  @ 1428e75b4  MULSS XMM0,dword ptr [RSP + 0x180]
+    slot  @ 1428e75e6  MOVAPS xmmword ptr [RSP + 0x180],XMM0
+    slot  @ 1428e75f6  MULSS XMM0,dword ptr [RSP + 0x180]
+    slot  @ 1428e7628  MOVAPS xmmword ptr [RSP + 0x180],XMM0
+    slot  @ 1428e7630  MOVAPS XMM0,xmmword ptr [RSP + 0x180]
+    slot  @ 1428e7638  MULSS XMM0,dword ptr [RSP + 0x180]
+    slot  @ 1428e769b  MOVAPS XMM0,xmmword ptr [RSP + 0x180]
+    slot  @ 1428e76b4  MOVAPS XMM0,xmmword ptr [RSP + 0x180]
+    0x720 @ 1428ea2f6  MOVAPS xmmword ptr [RSP + 0x720],XMM0
+FUNC 0x14295a070  FUN_14295a070
+    0x720 @ 14295a08c  MOV qword ptr [RBP + 0x720],RAX
+    slot  @ 14295a764  MOV qword ptr [RBP + 0x1d8],RAX
+    slot  @ 14295a78d  LEA R8,[RBP + 0x1d8]
+    slot  @ 14295a7e3  MOV qword ptr [RBP + 0x180],RAX
+    slot  @ 14295a9d8  MOV RAX,qword ptr [RBP + 0x180]
+    0x720 @ 14295d471  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x14297ef70  FUN_14297ef70
+    0x720 @ 14297f001  MOV dword ptr [RDI + 0x720],0x3f800000
+    slot  @ 14297f058  MOVZX EAX,byte ptr [RSP + 0x180]
+FUNC 0x142ba5790  FUN_142ba5790
+    slot  @ 142ba59bc  MOV qword ptr [RBX + 0x1d8],RDI
+    0x720 @ 142ba5cb1  MOV dword ptr [RBX + 0x720],EDI
+FUNC 0x142bcc460  FUN_142bcc460
+    slot  @ 142bcdc9f  MOVUPS xmmword ptr [RAX + 0x180],XMM0
+    0x720 @ 142bce02a  MOV dword ptr [RBP + 0x720],0x3f800000
+    0x720 @ 142bce064  MOVAPS XMM1,xmmword ptr [RBP + 0x720]
+    slot  @ 142bcf327  MOV dword ptr [RBP + 0x180],EAX
+    slot  @ 142bcf373  LEA RCX,[RBP + 0x180]
+FUNC 0x142c065c0  FUN_142c065c0
+    0x720 @ 142c06757  MOV qword ptr [RDI + 0x720],RSI
+    slot  @ 142c06b53  MOV dword ptr [RDI + 0x1d8],EAX
+FUNC 0x142c31e60  FUN_142c31e60
+    slot  @ 142c31e76  SUB RSP,0x180
+    0x720 @ 142c31f4b  LEA R8,[RDI + 0x720]
+    slot  @ 142c3254f  ADD RSP,0x180
+FUNC 0x142d37fd0  FUN_142d37fd0
+    slot  @ 142d38f8c  MOV qword ptr [RBP + 0x180],R15
+    slot  @ 142d38f93  LEA RCX,[RBP + 0x180]
+    slot  @ 142d38faa  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 142d38fc3  LEA R8,[RBP + 0x180]
+    slot  @ 142d38fd7  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 142d391b1  MOV qword ptr [RBP + 0x1d8],0x8
+    0x720 @ 142d3b52a  MOV qword ptr [RBP + 0x720],R15
+    0x720 @ 142d3b531  LEA RCX,[RBP + 0x720]
+    0x720 @ 142d3b548  MOV RCX,qword ptr [RBP + 0x720]
+    0x720 @ 142d3b561  LEA R8,[RBP + 0x720]
+    0x720 @ 142d3b575  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x142d70240  FUN_142d70240
+    0x720 @ 142d70286  CMP byte ptr [RCX + 0x720],0x0
+    slot  @ 142d70417  MOVAPS xmmword ptr [RSP + 0x180],XMM8
+    slot  @ 142d7088f  MOVAPS XMM8,xmmword ptr [RSP + 0x180]
+FUNC 0x142f4c8f0  FUN_142f4c8f0
+    slot  @ 142f4deb0  MOV ECX,0x180
+    slot  @ 142f4dec8  MOV R8D,0x180
+    slot  @ 142f4ed85  MOVAPS xmmword ptr [RBP + 0x180],XMM2
+    slot  @ 142f4ee36  MOVSS XMM2,dword ptr [RBP + 0x180]
+    slot  @ 142f4ee86  MOVSS dword ptr [RBP + 0x180],XMM2
+    0x720 @ 142f4f27b  MOVAPS xmmword ptr [RBP + 0x720],XMM9
+    slot  @ 142f4f4b7  MOVSS XMM0,dword ptr [RBP + 0x1d8]
+    slot  @ 142f4f4e3  MOVSS dword ptr [RBP + 0x1d8],XMM0
+FUNC 0x142fd39c0  FUN_142fd39c0
+    slot  @ 142fd3b89  MOVUPS xmmword ptr [RDX + 0x180],XMM0
+    slot  @ 142fd411b  MOVUPS XMM0,xmmword ptr [R14 + 0x180]
+    slot  @ 142fd4333  MOVUPS XMM6,xmmword ptr [RSI + 0x180]
+    0x720 @ 142fd4ca5  MOVUPS xmmword ptr [RDI + 0x720],XMM5
+FUNC 0x1430ad270  FUN_1430ad270
+    slot  @ 1430ae157  MOV qword ptr [RBP + 0x180],RSI
+    slot  @ 1430ae15e  LEA RCX,[RBP + 0x180]
+    slot  @ 1430ae175  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 1430ae18e  LEA R8,[RBP + 0x180]
+    slot  @ 1430ae1a2  MOV RCX,qword ptr [RBP + 0x180]
+    slot  @ 1430ae386  MOV qword ptr [RBP + 0x1d8],0x8
+    0x720 @ 1430b07a9  MOV qword ptr [RBP + 0x720],RSI
+    0x720 @ 1430b07b0  LEA RCX,[RBP + 0x720]
+    0x720 @ 1430b07c7  MOV RCX,qword ptr [RBP + 0x720]
+    0x720 @ 1430b07e0  LEA R8,[RBP + 0x720]
+    0x720 @ 1430b07f4  MOV RCX,qword ptr [RBP + 0x720]
+FUNC 0x1430e3220  FUN_1430e3220
+    0x720 @ 1430e3d3a  CMP qword ptr [RDI + 0x720],R12
+    0x720 @ 1430e3d89  MOV qword ptr [RDI + 0x720],RAX
+    slot  @ 1430e3f3d  LEA RDX,[RDI + 0x1d8]
+FUNC 0x1431441b0  FUN_1431441b0
+    0x720 @ 1431443eb  CALL qword ptr [RAX + 0x720]
+    slot  @ 143144516  MOV R13,qword ptr [RSP + 0x180]
+FUNC 0x14338f660  FUN_14338f660
+    0x720 @ 1433904c1  LEA RCX,[RBP + 0x720]
+    slot  @ 143390875  MOVDQA xmmword ptr [RBP + 0x180],XMM0
+    slot  @ 14339088d  LEA RDX,[RBP + 0x180]
+FUNC 0x143391540  FUN_143391540
+    0x720 @ 14339196e  LEA RAX,[RBP + 0x720]
+    0x720 @ 143391bb8  MOV dword ptr [RBP + 0x720],0x4
+    0x720 @ 143391bd1  LEA RAX,[RBP + 0x720]
+    slot  @ 143392048  LEA RCX,[RBP + 0x180]
+    slot  @ 1433920b0  LEA RCX,[RBP + 0x180]
+FUNC 0x1433ae3d0  FUN_1433ae3d0
+    slot  @ 1433aea3e  MOV EDI,0x180
+    0x720 @ 1433aeddf  MOV dword ptr [RBP + 0x720],EBX
+    slot  @ 1433afcba  MOV qword ptr [RBP + 0x180],RAX
+    slot  @ 1433afcc1  LEA R8,[RBP + 0x180]
+    slot  @ 1433b059e  MOV qword ptr [RBP + 0x1d8],RAX
+FUNC 0x1434ac850  FUN_1434ac850
+    slot  @ 1434adcdf  CMP qword ptr [RSI + 0x1d8],0x0
+    0x720 @ 1434ade0a  MOVSS XMM0,dword ptr [RBP + 0x720]
+    slot  @ 1434ade4a  MOVSS dword ptr [RBP + 0x1d8],XMM1
+    slot  @ 1434af1d2  CMP qword ptr [RDI + RSI*0x1 + 0x1d8],0x0
+    slot  @ 1434af369  MOVSS dword ptr [RBP + 0x1d8],XMM0
+    slot  @ 1434af65f  LEA R9,[RBP + 0x1d8]
+    slot  @ 1434af692  LEA R9,[RBP + 0x1d8]
+    slot  @ 1434afb8c  MOV ESI,0x180
+    slot  @ 1434afc15  MOVAPS xmmword ptr [RBP + 0x180],XMM1
+    slot  @ 1434afc3b  MOVSS XMM15,dword ptr [RBP + 0x180]
+    slot  @ 1434afdf0  MOVSS XMM15,dword ptr [RBP + 0x180]
+FUNC 0x1434b52f0  FUN_1434b52f0
+    slot  @ 1434b5744  MOVUPS xmmword ptr [RBP + 0x180],XMM0
+    slot  @ 1434b575a  LEA R8,[RBP + 0x180]
+    slot  @ 1434b637c  CMP qword ptr [RDI + 0x1d8],0x0
+    0x720 @ 1434b6421  MOVZX EAX,word ptr [RBP + 0x720]
+    slot  @ 1434b6796  MOVSS dword ptr [RBP + 0x1d8],XMM6
+    slot  @ 1434b6b8e  LEA RAX,[RBP + 0x180]
+    slot  @ 1434b6e0d  MOV ESI,0x180
+    slot  @ 1434b6e62  LEA RAX,[RBP + 0x180]
+FUNC 0x1435b5290  FUN_1435b5290
+    slot  @ 1435b52ac  MOV qword ptr [RSP + 0x180],-0x2
+    0x720 @ 1435b5318  MOV qword ptr [RAX + 0x720],0x0
+    0x720 @ 1435b5c81  MOV qword ptr [RCX + 0x720],RAX
+FUNC 0x1437d4430  FUN_1437d4430
+    slot  @ 1437d48d9  CMP dword ptr [RDI + 0x180],EAX
+    0x720 @ 1437d4a66  MOV RAX,qword ptr [RBX + 0x720]
+
+=== C. every immediate 0x1E0 site (size arg) + following call ===
+# total: 323
+0x1400373b8  SUB RSP,0x1e0                            in 1400373a0  -> -
+0x14003834a  SUB RSP,0x1e0                            in 140038344  -> FUN_140033a80@140033a80
+0x14003842d  ADD RSP,0x1e0                            in 140038344  -> -
+0x1400eafe2  MOV ECX,0x1e0                            in 1400eaf80  -> -
+0x1400eb053  MOV ECX,0x1e0                            in 1400eaf80  -> -
+0x1400ebb88  MOV EAX,0x1e0                            in 1400eb0c0  -> -
+0x1400ec0ed  MOV EAX,0x1e0                            in 1400eb0c0  -> -
+0x1400ed463  CMP EBX,0x1e0                            in 1400ed430  -> -
+0x140164c8d  MOV R13D,0x1e0                           in 140164c20  -> -
+0x14033df81  SUB RSP,0x1e0                            in 14033df60  -> -
+0x1405df188  MOV dword ptr [RAX + 0x8],0x1e0          in 1405df170  -> -
+0x140713178  MOV dword ptr [RAX + 0x8],0x1e0          in 140713160  -> -
+0x14077d4c8  MOV dword ptr [RAX + 0x8],0x1e0          in 14077d4b0  -> -
+0x1407ea6fa  SUB RSP,0x1e0                            in 1407ea6f0  -> FUN_141e95440@141e95440
+0x1407ead0d  ADD RSP,0x1e0                            in 1407ea6f0  -> -
+0x1407f748d  MOV ECX,0x1e0                            in 1407f7480  -> FUN_140b40c10@140b40c10
+0x1407fe248  MOV EDX,0x1e0                            in 1407fe230  -> thunk_FUN_141de9200@140b40c20
+0x1409bf1f4  SUB RSP,0x1e0                            in 1409bf1e0  -> -
+0x1409bf427  ADD RSP,0x1e0                            in 1409bf1e0  -> -
+0x140aeb654  SUB RSP,0x1e0                            in 140aeb640  -> -
+0x140aebae8  ADD RSP,0x1e0                            in 140aeb640  -> -
+0x140b1b9a3  SUB RSP,0x1e0                            in 140b1b990  -> -
+0x140b1c050  ADD RSP,0x1e0                            in 140b1b990  -> -
+0x140b35b09  SUB RSP,0x1e0                            in 140b35af0  -> -
+0x140b361cb  ADD RSP,0x1e0                            in 140b35af0  -> -
+0x140b5b440  SUB RSP,0x1e0                            in 140b5b420  -> FUN_141e09010@141e09010
+0x140b680b5  SUB RSP,0x1e0                            in 140b680b0  -> FUN_140b6a700@140b6a700
+0x140b68234  ADD RSP,0x1e0                            in 140b680b0  -> -
+0x140b9f01a  SUB RSP,0x1e0                            in 140b9f010  -> -
+0x140b9f66b  ADD RSP,0x1e0                            in 140b9f010  -> FUN_1407e59d0@1407e59d0
+0x140bed1a9  ADD RCX,0x1e0                            in 140bed1a0  -> FUN_140b0b9c0@140b0b9c0
+0x140c3f71b  SUB RSP,0x1e0                            in 140c3f710  -> -
+0x140c3fe4d  ADD RSP,0x1e0                            in 140c3f710  -> -
+0x140c3fe6b  SUB RSP,0x1e0                            in 140c3fe60  -> -
+0x140c4059d  ADD RSP,0x1e0                            in 140c3fe60  -> -
+0x140c41ac7  SUB RSP,0x1e0                            in 140c41ab0  -> -
+0x140ccf226  SUB RSP,0x1e0                            in 140ccf210  -> FUN_140cd93e0@140cd93e0
+0x140ccfb6a  ADD RSP,0x1e0                            in 140ccf210  -> -
+0x140da32a1  SUB RSP,0x1e0                            in 140da3290  -> -
+0x140da36db  ADD RSP,0x1e0                            in 140da3290  -> -
+0x140de0f88  MOV EDX,0x1e0                            in 140de0f00  -> thunk_FUN_141de9200@140b40c20
+0x140dece16  SUB RSP,0x1e0                            in 140dece00  -> FUN_142058d50@142058d50
+0x140e34bb6  SUB RSP,0x1e0                            in 140e34bb0  -> -
+0x140e34c63  ADD RSP,0x1e0                            in 140e34bb0  -> -
+0x140e65d1f  ADD RCX,0x1e0                            in 140e65d10  -> FUN_1408439e0@1408439e0
+0x140e6d12f  SUB RSP,0x1e0                            in 140e6d120  -> -
+0x140eb0a4f  SUB RSP,0x1e0                            in 140eb0a40  -> -
+0x140ef65a4  MOV EDX,0x1e0                            in 140ef6510  -> thunk_FUN_141de9200@140b40c20
+0x140f14aa6  SUB RSP,0x1e0                            in 140f14aa0  -> -
+0x140f14b53  ADD RSP,0x1e0                            in 140f14aa0  -> -
+0x140f52da0  SUB RSP,0x1e0                            in 140f52d90  -> -
+0x140f532ed  ADD RSP,0x1e0                            in 140f52d90  -> -
+0x140fbee70  SUB RSP,0x1e0                            in 140fbee60  -> -
+0x140fbf222  ADD RSP,0x1e0                            in 140fbee60  -> -
+0x140fcd830  SUB RSP,0x1e0                            in 140fcd820  -> FUN_140fcccd0@140fcccd0
+0x140fcda97  ADD RSP,0x1e0                            in 140fcd820  -> -
+0x140fcdfde  ADD RSP,0x1e0                            in 140fcd820  -> -
+0x141007303  SUB RSP,0x1e0                            in 1410072f0  -> FUN_140d47d20@140d47d20
+0x14105cc3d  SUB RSP,0x1e0                            in 14105cc30  -> FUN_141042f10@141042f10
+0x14105d83e  ADD RSP,0x1e0                            in 14105cc30  -> -
+0x1411349ae  ADD RDI,0x1e0                            in 141134900  -> -
+0x141134a05  ADD RDI,0x1e0                            in 141134900  -> -
+0x141134a81  ADD RDI,0x1e0                            in 141134900  -> -
+0x14117d42e  SUB RSP,0x1e0                            in 14117d420  -> -
+0x14117d925  ADD RSP,0x1e0                            in 14117d420  -> FUN_140d2f270@140d2f270
+0x141182d37  ADD RCX,0x1e0                            in 141182d10  -> FUN_1408573e0@1408573e0
+0x141199bab  ADD RCX,0x1e0                            in 141199b70  -> FUN_1408573e0@1408573e0
+0x141199dec  ADD RCX,0x1e0                            in 141199db0  -> FUN_1408573e0@1408573e0
+0x1411ac6ab  SUB RSP,0x1e0                            in 1411ac6a0  -> -
+0x1411acb4f  ADD RSP,0x1e0                            in 1411ac6a0  -> -
+0x14125d588  SUB RSP,0x1e0                            in 14125d570  -> FUN_14125c820@14125c820
+0x141285c81  SUB RSP,0x1e0                            in 141285c70  -> -
+0x14128639a  ADD RSP,0x1e0                            in 141285c70  -> -
+0x1412a50da  SUB RSP,0x1e0                            in 1412a50c0  -> FUN_141230f10@141230f10
+0x1412f5ebc  MOV EDX,0x1e0                            in 1412f5e40  -> thunk_FUN_141de9200@140b40c20
+0x14130760f  SUB RSP,0x1e0                            in 141307600  -> -
+0x141307bcb  ADD RSP,0x1e0                            in 141307600  -> -
+0x14134249c  SUB RSP,0x1e0                            in 141342490  -> FUN_1413136a0@1413136a0
+0x141342840  ADD RSP,0x1e0                            in 141342490  -> -
+0x1414745de  SUB RSP,0x1e0                            in 1414745d0  -> -
+0x141475551  ADD RSP,0x1e0                            in 1414745d0  -> FUN_141471150@141471150
+0x141475586  ADD RSP,0x1e0                            in 1414745d0  -> -
+0x14148eca0  SUB RSP,0x1e0                            in 14148ec90  -> -
+0x14148fdc5  ADD RSP,0x1e0                            in 14148ec90  -> -
+0x141546f5d  SUB RSP,0x1e0                            in 141546f50  -> -
+0x141547710  ADD RSP,0x1e0                            in 141546f50  -> -
+0x1415614fa  SUB RSP,0x1e0                            in 1415614e0  -> -
+0x141586ed9  MOV EDX,0x1e0                            in 141586ec0  -> thunk_FUN_141de9200@140b40c20
+0x141638d3b  CMP RBP,0x1e0                            in 141638bd0  -> -
+0x141641291  SUB RSP,0x1e0                            in 141641280  -> -
+0x141641869  ADD RSP,0x1e0                            in 141641280  -> -
+0x141641c53  SUB RSP,0x1e0                            in 141641c40  -> -
+0x141642363  ADD RSP,0x1e0                            in 141641c40  -> -
+0x14164aa6b  CMP RBP,0x1e0                            in 14164a970  -> -
+0x1416ca42c  SUB RSP,0x1e0                            in 1416ca420  -> FUN_140d2f940@140d2f940
+0x1416ca904  ADD RSP,0x1e0                            in 1416ca420  -> -
+0x1416f68c6  SUB RSP,0x1e0                            in 1416f68b0  -> -
+0x14171cc91  SUB RSP,0x1e0                            in 14171cc70  -> -
+0x1417287a3  MOV EDX,0x1e0                            in 141728780  -> thunk_FUN_141de9200@140b40c20
+0x141728818  ADD RBX,0x1e0                            in 1417287c0  -> FUN_140bdefe0@140bdefe0
+0x141728b1b  MOV ECX,0x1e0                            in 141728a60  -> FUN_140b40c10@140b40c10
+0x141729ab9  ADD RBX,0x1e0                            in 1417299a0  -> FUN_140bdefe0@140bdefe0
+0x141792f0e  MOV dword ptr [RSP + 0x20],0x1e0         in 141792e90  -> FUN_141f291f0@141f291f0
+0x1417ef359  MOV dword ptr [RSP + 0x20],0x1e0         in 1417ef2d0  -> FUN_141f291f0@141f291f0
+0x1417f0cc9  MOV dword ptr [RSP + 0x20],0x1e0         in 1417f0c40  -> FUN_141f291f0@141f291f0
+0x1418671f9  MOV dword ptr [RSP + 0x20],0x1e0         in 141867170  -> FUN_141f291f0@141f291f0
+0x14191ce35  MOV EDX,0x1e0                            in 14191ce10  -> thunk_FUN_141de9200@140b40c20
+0x14192c302  SUB RSP,0x1e0                            in 14192c300  -> FUN_1411fc890@1411fc890
+0x14192c37a  ADD RSP,0x1e0                            in 14192c300  -> -
+0x14192e11b  ADD RCX,0x1e0                            in 14192e100  -> FUN_142058d50@142058d50
+0x14192e419  ADD RCX,0x1e0                            in 14192e3f0  -> FUN_142058d50@142058d50
+0x14192e6b5  ADD RCX,0x1e0                            in 14192e680  -> FUN_142058d50@142058d50
+0x1419535a9  SUB RSP,0x1e0                            in 141953590  -> -
+0x141995532  SUB RSP,0x1e0                            in 141995530  -> FUN_1411fc890@1411fc890
+0x141995597  ADD RSP,0x1e0                            in 141995530  -> -
+0x1419a164b  SUB RSP,0x1e0                            in 1419a1640  -> FUN_1411fc890@1411fc890
+0x1419abc32  SUB RSP,0x1e0                            in 1419abc30  -> FUN_1411fc890@1411fc890
+0x1419abd46  ADD RSP,0x1e0                            in 1419abc30  -> -
+0x1419b4a52  SUB RSP,0x1e0                            in 1419b4a50  -> FUN_1411fc890@1411fc890
+0x1419b4ac6  ADD RSP,0x1e0                            in 1419b4a50  -> -
+0x1419c0ff6  SUB RSP,0x1e0                            in 1419c0ff0  -> FUN_1411fc890@1411fc890
+0x1419c10ed  ADD RSP,0x1e0                            in 1419c0ff0  -> -
+0x1419c3262  SUB RSP,0x1e0                            in 1419c3260  -> FUN_1411fc890@1411fc890
+0x1419c3301  ADD RSP,0x1e0                            in 1419c3260  -> -
+0x1419c331b  SUB RSP,0x1e0                            in 1419c3310  -> FUN_140d27290@140d27290
+0x1419c406e  SUB RSP,0x1e0                            in 1419c4060  -> -
+0x141a0c419  MOV dword ptr [RSP + 0x20],0x1e0         in 141a0c390  -> FUN_141f291f0@141f291f0
+0x141a0fef9  MOV dword ptr [RSP + 0x20],0x1e0         in 141a0fe70  -> FUN_141f291f0@141f291f0
+0x141a12089  MOV dword ptr [RSP + 0x20],0x1e0         in 141a12000  -> FUN_141f291f0@141f291f0
+0x141a12549  MOV dword ptr [RSP + 0x20],0x1e0         in 141a124c0  -> FUN_141f291f0@141f291f0
+0x141a13699  MOV dword ptr [RSP + 0x20],0x1e0         in 141a13610  -> FUN_141f291f0@141f291f0
+0x141a13b99  MOV dword ptr [RSP + 0x20],0x1e0         in 141a13b10  -> FUN_141f291f0@141f291f0
+0x141a16029  MOV dword ptr [RSP + 0x20],0x1e0         in 141a15fa0  -> FUN_141f291f0@141f291f0
+0x141a31a0a  MOV dword ptr [RAX + 0x8],0x1e0          in 141a319f0  -> -
+0x141a32159  MOV R8D,0x1e0                            in 141a32150  -> memset@1438246ce
+0x141a33398  MOV R9D,0x1e0                            in 141a33370  -> FUN_142042ad0@142042ad0
+0x141a3c199  MOV dword ptr [RSP + 0x20],0x1e0         in 141a3c110  -> FUN_141f291f0@141f291f0
+0x141ad54f8  AND ECX,0x1e0                            in 141ad50a0  -> -
+0x141ae7436  SUB RSP,0x1e0                            in 141ae7420  -> -
+0x141b1479f  SUB RSP,0x1e0                            in 141b14790  -> -
+0x141b14ad4  ADD RSP,0x1e0                            in 141b14790  -> -
+0x141c0b9e1  MOV EDX,0x1e0                            in 141c0b970  -> thunk_FUN_141de9200@140b40c20
+0x141d7f679  MOV dword ptr [RSP + 0x20],0x1e0         in 141d7f5f0  -> FUN_141f291f0@141f291f0
+0x141dea7d8  SUB RSP,0x1e0                            in 141dea7c0  -> -
+0x141deb9ae  ADD RSP,0x1e0                            in 141dea7c0  -> -
+0x141df90d4  SUB RSP,0x1e0                            in 141df90c0  -> -
+0x141df9309  ADD RSP,0x1e0                            in 141df90c0  -> -
+0x141e6ec6a  SUB RSP,0x1e0                            in 141e6ec50  -> FUN_141e7a4b0@141e7a4b0
+0x141ec456c  CMP EAX,0x1e0                            in 141ec4530  -> FUN_141e22aa0@141e22aa0
+0x141fd058d  ADD RAX,0x1e0                            in 141fd0370  -> -
+0x141fd0711  ADD RAX,0x1e0                            in 141fd0370  -> -
+0x14201273d  SUB RSP,0x1e0                            in 142012730  -> -
+0x142012985  ADD RSP,0x1e0                            in 142012730  -> -
+0x14203cc91  SUB RSP,0x1e0                            in 14203cc80  -> -
+0x14203d017  ADD RSP,0x1e0                            in 14203cc80  -> -
+0x14203f694  SUB RSP,0x1e0                            in 14203f680  -> FUN_141e24b60@141e24b60
+0x142040a10  ADD RSP,0x1e0                            in 14203f680  -> -
+0x142054555  SUB RSP,0x1e0                            in 142054540  -> -
+0x142054925  ADD RSP,0x1e0                            in 142054540  -> -
+0x1420904db  MOV ECX,0x1e0                            in 1420904c0  -> FUN_140b40c10@140b40c10
+0x142090505  MOV ECX,0x1e0                            in 1420904c0  -> FUN_140b40c10@140b40c10
+0x1420957fa  SUB RSP,0x1e0                            in 1420957e0  -> -
+0x1420b4ff0  MOV ECX,0x1e0                            in 1420b4fc0  -> FUN_140b40c10@140b40c10
+0x1420c2edf  MOV EDX,0x1e0                            in 1420c2e40  -> thunk_FUN_141de9200@140b40c20
+0x14210090e  SUB RSP,0x1e0                            in 142100900  -> -
+0x142153a8d  ADD RCX,0x1e0                            in 142153a80  -> FUN_1407e59d0@1407e59d0
+0x142178774  SUB RSP,0x1e0                            in 142178770  -> -
+0x142178a0a  ADD RSP,0x1e0                            in 142178770  -> -
+0x142192482  SUB RSP,0x1e0                            in 142192470  -> -
+0x1421a24f4  MOV R9D,0x1e0                            in 1421a1970  -> FUN_1420ab9b0@1420ab9b0
+0x1421cdbf0  SUB RSP,0x1e0                            in 1421cdbe0  -> FUN_1421a72f0@1421a72f0
+0x1421cdfc6  ADD RSP,0x1e0                            in 1421cdbe0  -> -
+0x142205123  SUB RSP,0x1e0                            in 142205110  -> -
+0x1422059de  ADD RSP,0x1e0                            in 142205110  -> -
+0x14224d42f  SUB RSP,0x1e0                            in 14224d420  -> -
+0x14224d890  ADD RSP,0x1e0                            in 14224d420  -> -
+0x142257494  SUB RSP,0x1e0                            in 142257480  -> -
+0x14225b9c4  SUB RSP,0x1e0                            in 14225b9b0  -> -
+0x14225bcaa  ADD RSP,0x1e0                            in 14225b9b0  -> -
+0x14225cfaf  SUB RSP,0x1e0                            in 14225cfa0  -> -
+0x14225d249  ADD RSP,0x1e0                            in 14225cfa0  -> -
+0x14225ee30  SUB RSP,0x1e0                            in 14225ee20  -> -
+0x14225f82a  ADD RSP,0x1e0                            in 14225ee20  -> -
+0x14227af43  SUB RSP,0x1e0                            in 14227af30  -> -
+0x14227b1ea  ADD RSP,0x1e0                            in 14227af30  -> -
+0x14228d456  SUB RSP,0x1e0                            in 14228d450  -> -
+0x14228d51f  ADD RSP,0x1e0                            in 14228d450  -> FUN_140b40c10@140b40c10
+0x14233b6f9  MOV EDX,0x1e0                            in 14233b6e0  -> thunk_FUN_141de9200@140b40c20
+0x14235605d  MOV ECX,0x1e0                            in 142356050  -> FUN_140b40c10@140b40c10
+0x142357196  MOV ECX,0x1e0                            in 142357190  -> FUN_140b40c10@140b40c10
+0x1423c0428  SUB RSP,0x1e0                            in 1423c0410  -> -
+0x1423c07de  ADD RSP,0x1e0                            in 1423c0410  -> -
+0x1423c0818  SUB RSP,0x1e0                            in 1423c0800  -> -
+0x1423c0bce  ADD RSP,0x1e0                            in 1423c0800  -> -
+0x1423c0c08  SUB RSP,0x1e0                            in 1423c0bf0  -> -
+0x1423c0fbe  ADD RSP,0x1e0                            in 1423c0bf0  -> -
+0x1423c0ff8  SUB RSP,0x1e0                            in 1423c0fe0  -> -
+0x1423c13ae  ADD RSP,0x1e0                            in 1423c0fe0  -> -
+0x1424721ba  MOV dword ptr [RBP + -0x20],0x1e0        in 142472130  -> -
+0x142473239  MOV dword ptr [RBP + -0x20],0x1e0        in 142473200  -> -
+0x142487f59  MOV ECX,0x1e0                            in 142487f50  -> FUN_140b40c10@140b40c10
+0x14248967a  MOV ECX,0x1e0                            in 142489670  -> FUN_140b40c10@140b40c10
+0x1424a69c0  MOV EDX,0x1e0                            in 1424a6330  -> FUN_141e83730@141e83730
+0x1425047c9  MOV ECX,0x1e0                            in 1425047c0  -> FUN_140b40c10@140b40c10
+0x1425058e6  MOV ECX,0x1e0                            in 1425058e0  -> FUN_140b40c10@140b40c10
+0x1425a3929  SUB RSP,0x1e0                            in 1425a3910  -> -
+0x1425c837b  SUB RSP,0x1e0                            in 1425c8370  -> -
+0x1425c8be9  ADD RSP,0x1e0                            in 1425c8370  -> -
+0x1426a8613  SUB RSP,0x1e0                            in 1426a8600  -> -
+0x1427127fd  SUB RSP,0x1e0                            in 1427127e0  -> FUN_140845880@140845880
+0x142714849  ADD RSP,0x1e0                            in 1427127e0  -> -
+0x1427293a6  ADD RCX,0x1e0                            in 142729390  -> FUN_141e66de0@141e66de0
+0x14272c706  ADD RCX,0x1e0                            in 14272c6f0  -> FUN_141e66de0@141e66de0
+0x142789b00  SUB RSP,0x1e0                            in 142789ae0  -> -
+0x1428b27f9  MOV EDX,0x1e0                            in 1428b27e0  -> thunk_FUN_141de9200@140b40c20
+0x1428b57ff  SUB RSP,0x1e0                            in 1428b57f0  -> -
+0x1428f478a  MOV dword ptr [RAX + 0x8],0x1e0          in 1428f4770  -> -
+0x1428f8322  ADD RBX,0x1e0                            in 1428f8240  -> -
+0x1428f95f8  MOV R9D,0x1e0                            in 1428f95d0  -> FUN_142042ad0@142042ad0
+0x142957c4b  SUB RSP,0x1e0                            in 142957c40  -> -
+0x1429582b6  ADD RSP,0x1e0                            in 142957c40  -> -
+0x142989e10  SUB RSP,0x1e0                            in 142989e00  -> -
+0x14298a2b9  ADD RSP,0x1e0                            in 142989e00  -> -
+0x1429be2a3  SUB RSP,0x1e0                            in 1429be290  -> -
+0x1429be9b2  ADD RSP,0x1e0                            in 1429be290  -> -
+0x1429ce7e2  SUB RSP,0x1e0                            in 1429ce7d0  -> -
+0x1429d11e2  SUB RSP,0x1e0                            in 1429d11d0  -> -
+0x1429d8594  ADD RCX,0x1e0                            in 1429d8590  -> -
+0x1429ec071  SUB RSP,0x1e0                            in 1429ec060  -> -
+0x1429ec52a  ADD RSP,0x1e0                            in 1429ec060  -> -
+0x142a214c8  ADD R14,0x1e0                            in 142a20d80  -> -
+0x142a4d11d  ADD RCX,0x1e0                            in 142a4ad40  -> FUN_140856000@140856000
+0x142ae57cf  SUB RSP,0x1e0                            in 142ae57c0  -> -
+0x142ae5b64  ADD RSP,0x1e0                            in 142ae57c0  -> -
+0x142bb2bcc  SUB RSP,0x1e0                            in 142bb2bc0  -> -
+0x142bb3578  ADD RSP,0x1e0                            in 142bb2bc0  -> -
+0x142c00a8b  SUB RSP,0x1e0                            in 142c00a80  -> -
+0x142c00e59  ADD RSP,0x1e0                            in 142c00a80  -> _Init_thread_header@1438207a0
+0x142c362d3  MOV EDX,0x1e0                            in 142c36250  -> thunk_FUN_141de9200@140b40c20
+0x142c47136  SUB RSP,0x1e0                            in 142c47120  -> -
+0x142cd1354  SUB RSP,0x1e0                            in 142cd1340  -> -
+0x142cd1808  ADD RSP,0x1e0                            in 142cd1340  -> -
+0x142d0fdf7  MOV EDX,0x1e0                            in 142d0fd00  -> thunk_FUN_141de9200@140b40c20
+0x142d17f71  MOV dword ptr [RBP + -0x78],0x1e0        in 142d17020  -> FUN_141e69f90@141e69f90
+0x142d47c2a  SUB RSP,0x1e0                            in 142d47c10  -> -
+0x142d66f58  SUB RSP,0x1e0                            in 142d66f40  -> -
+0x142d6807b  ADD RSP,0x1e0                            in 142d66f40  -> -
+0x142de87f0  SUB RSP,0x1e0                            in 142de87e0  -> -
+0x142de92c0  ADD RSP,0x1e0                            in 142de87e0  -> -
+0x142e8ec39  MOV EDX,0x1e0                            in 142e8ec20  -> thunk_FUN_141de9200@140b40c20
+0x142e8ecd3  MOV EDX,0x1e0                            in 142e8ecb0  -> thunk_FUN_141de9200@140b40c20
+0x142e93ef4  MOV ECX,0x1e0                            in 142e93ea0  -> FUN_140b40c10@140b40c10
+0x142ebacca  ADD RCX,0x1e0                            in 142ebacb0  -> indirect@142ebacd4
+0x142ebe5e4  ADD RAX,0x1e0                            in 142ebe270  -> -
+0x142f2a876  IMUL RAX,RDI,0x1e0                       in 142f2a5c0  -> -
+0x142f2a87d  IMUL RDX,R11,0x1e0                       in 142f2a5c0  -> -
+0x142f2ccd4  IMUL R13,RBP,0x1e0                       in 142f2cc60  -> FUN_142f27f90@142f27f90
+0x142f2cd1b  IMUL R8,RAX,0x1e0                        in 142f2cc60  -> memmove@1438246bc
+0x142f2cd25  IMUL RDX,RAX,0x1e0                       in 142f2cc60  -> memmove@1438246bc
+0x142f35909  IMUL RAX,R10,0x1e0                       in 142f35670  -> -
+0x142f3664f  IMUL RCX,RAX,0x1e0                       in 142f36620  -> FUN_141df5250@141df5250
+0x142f36690  IMUL RDX,RAX,0x1e0                       in 142f36620  -> FUN_141df5850@141df5850
+0x142f55bcf  SUB RSP,0x1e0                            in 142f55bc0  -> FUN_1420126f0@1420126f0
+0x142f55fdc  ADD RSP,0x1e0                            in 142f55bc0  -> FUN_142c20ee0@142c20ee0
+0x142fa6ec3  SUB RSP,0x1e0                            in 142fa6eb0  -> -
+0x142fa7b13  ADD RSP,0x1e0                            in 142fa6eb0  -> -
+0x142fb98c0  SUB RSP,0x1e0                            in 142fb98b0  -> -
+0x14307209e  SUB RSP,0x1e0                            in 143072090  -> -
+0x14308661b  SUB RSP,0x1e0                            in 143086610  -> -
+0x143086721  ADD RSP,0x1e0                            in 143086610  -> -
+0x14308f53a  MOV dword ptr [RBP + -0x20],0x1e0        in 14308f4b0  -> -
+0x1430a1f0f  SUB RSP,0x1e0                            in 1430a1f00  -> -
+0x1430a20b9  ADD RSP,0x1e0                            in 1430a1f00  -> _Init_thread_header@1438207a0
+0x1430c4837  MOV dword ptr [RCX + 0x14],0x1e0         in 1430c47f0  -> -
+0x1430c7082  ADD RAX,0x1e0                            in 1430c6fc0  -> -
+0x1430c7151  ADD RCX,0x1e0                            in 1430c6fc0  -> indirect@1430c715b
+0x1430c730d  ADD RCX,0x1e0                            in 1430c71f0  -> indirect@1430c7317
+0x1430ee9d8  ADD RDX,0x1e0                            in 1430ee700  -> FUN_1430e1330@1430e1330
+0x1430ef202  ADD RDX,0x1e0                            in 1430eefb0  -> FUN_1430e1330@1430e1330
+0x1430ef242  ADD RAX,0x1e0                            in 1430eefb0  -> -
+0x1430ef314  ADD RCX,0x1e0                            in 1430eefb0  -> indirect@1430ef31e
+0x143109c52  SUB RSP,0x1e0                            in 143109c40  -> -
+0x143140c41  SUB RSP,0x1e0                            in 143140c30  -> -
+0x14314229a  ADD RSP,0x1e0                            in 143140c30  -> -
+0x143169764  ADD RBX,0x1e0                            in 1431696a0  -> -
+0x14319d18e  MOV dword ptr [RSP + 0x20],0x1e0         in 14319d110  -> FUN_141f291f0@141f291f0
+0x1431bb5c9  MOV dword ptr [RSP + 0x20],0x1e0         in 1431bb540  -> FUN_141f291f0@141f291f0
+0x1431ef648  SUB RSP,0x1e0                            in 1431ef630  -> -
+0x1431efaa2  ADD RSP,0x1e0                            in 1431ef630  -> -
+0x14328354a  MOV dword ptr [RAX + 0x8],0x1e0          in 143283530  -> -
+0x143283b9e  IMUL RCX,RSI,0x1e0                       in 143283b00  -> FUN_143283d90@143283d90
+0x14328481c  ADD RBX,0x1e0                            in 1432847f0  -> -
+0x143285058  MOV R9D,0x1e0                            in 143285030  -> FUN_142042ad0@142042ad0
+0x1432dd200  SUB RSP,0x1e0                            in 1432dd1e0  -> -
+0x1432fca8f  SUB RSP,0x1e0                            in 1432fca70  -> -
+0x14338fa44  MOV EDI,0x1e0                            in 14338f660  -> FUN_1407e2ee0@1407e2ee0
+0x14339dcf4  SUB RSP,0x1e0                            in 14339dce0  -> -
+0x14339e0ea  ADD RSP,0x1e0                            in 14339dce0  -> -
+0x1433b5710  MOV EDX,0x1e0                            in 1433b56b0  -> thunk_FUN_141de9200@140b40c20
+0x1433f5899  MOV dword ptr [RSP + 0x20],0x1e0         in 1433f5810  -> FUN_141f291f0@141f291f0
+0x14341e760  SUB RSP,0x1e0                            in 14341e750  -> -
+0x14341e820  SUB RSP,0x1e0                            in 14341e810  -> PxShapeGeneratedInfo@1438251bb
+0x14343f385  MOV dword ptr [RBX + 0x220],0x1e0        in 14343f2f0  -> -
+0x143458293  MOV ECX,0x1e0                            in 143458200  -> FUN_140b40c10@140b40c10
+0x143458475  MOV EDX,0x1e0                            in 143458420  -> thunk_FUN_141de9200@140b40c20
+0x143458780  MOV ECX,0x1e0                            in 1434586a0  -> FUN_140b40c10@140b40c10
+0x143477efb  SUB RSP,0x1e0                            in 143477ef0  -> -
+0x14349e376  SUB RSP,0x1e0                            in 14349e360  -> -
+0x14349e546  SUB RSP,0x1e0                            in 14349e530  -> -
+0x1434c5726  MOV dword ptr [RBP + -0x20],0x1e0        in 1434c54b0  -> -
+0x1434e8aff  CMP dword ptr [RSP],0x1e0                in 1434e8960  -> -
+0x1434f2e78  MOV R8D,0x1e0                            in 1434f2db0  -> memcpy@1438246c8
+0x143552a90  MOV EDX,0x1e0                            in 143552a10  -> FUN_143553060@143553060
+0x14358b678  MOV ECX,0x1e0                            in 14358b110  -> FUN_1434d7ee0@1434d7ee0
+0x1435c1d92  MOV ECX,0x1e0                            in 1435c1d80  -> FUN_1434d7ee0@1434d7ee0
+0x1436745f0  SUB RSP,0x1e0                            in 1436745d0  -> -
+0x1436b57d3  SUB RSP,0x1e0                            in 1436b57c0  -> -
+0x1436fc678  SUB RSP,0x1e0                            in 1436fc670  -> -
+0x1436fc75c  ADD RSP,0x1e0                            in 1436fc670  -> -
+0x1437bd078  MOV dword ptr [RSP + 0x20],0x1e0         in 1437bcff0  -> FUN_143709ff0@143709ff0
+0x1438151c0  SUB RSP,0x1e0                            in 1438151a0  -> -
+0x143846329  MOV EDX,0x1e0                            in 143846320  -> thunk_FUN_141de9200@140b40c20
+0x143846349  MOV EDX,0x1e0                            in 143846340  -> thunk_FUN_141de9200@140b40c20
+
+=== D. all functions touching offset 0x720 (count only) ===
+# 285 functions reference displacement 0x720

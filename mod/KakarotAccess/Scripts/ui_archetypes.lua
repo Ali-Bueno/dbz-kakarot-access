@@ -7,6 +7,8 @@
 
 local Core = require("ui_core")
 local I18n = require("i18n")
+local Mem = require("mem")            -- raw reads for the live (pre-save) key assignment
+local OFF = require("native_offsets")
 
 local A = {}
 
@@ -123,10 +125,101 @@ local function assign_value(name)
     return s
 end
 
--- The button a slot token currently DRIVES ("B" -> "X" on the remap above). Identity when
--- the save can't be read, or for anything that is already a physical button.
+-- ---- the PENDING layout (what the screen is showing, before "Save changes") ----------
+--
+-- InputAssign is the SAVED layout, so reading only it means a rebind is announced only once
+-- the player confirms — confusing, because the on-screen glyph changed several keypresses
+-- earlier (user 2026-07-25). The copy the game is EDITING is a process-global
+-- `TMap<FName,FName>`; see native_offsets.inputAssignMap for the Ghidra evidence. The
+-- decisive part of that evidence for a reader: this map is what the GAME's own glyph
+-- resolver reads, so reading it is reading exactly what is on screen.
+--
+-- No FName is ever converted to a string here. We compare COMPARISON INDICES: build them
+-- once from the 12 slot names and the 12 physical-key names, then match raw int32s out of
+-- the element array. If UE4SS's FName global isn't available the whole layer switches off
+-- and the saved struct answers, as before.
+local PEND = OFF.inputAssignMap
+local slot_by_idx = nil   -- FName index of "Controller_Btn_X" -> slot token "X"
+local phys_by_idx = nil   -- FName index of "Gamepad_FaceButton_Left" -> physical token "X"
+
+local function fname_index(name)
+    local ok, v = pcall(function() return FName(name):GetComparisonIndex() end)
+    return (ok and type(v) == "number") and v or nil
+end
+
+-- false (not nil) once it has failed, so the pcall storm happens at most once.
+local function build_fname_tables()
+    if slot_by_idx ~= nil then return slot_by_idx ~= false end
+    local sk, pb, n = {}, {}, 0
+    for fkey, tok in pairs(FKEY_TOKEN) do
+        local pi = fname_index(fkey)
+        local si = fname_index("Controller_Btn_" .. tok)
+        if not pi or not si then slot_by_idx = false return false end
+        pb[pi], sk[si] = tok, tok
+        n = n + 1
+    end
+    if n ~= 12 then slot_by_idx = false return false end
+    slot_by_idx, phys_by_idx = sk, pb
+    return true
+end
+
+-- Short TTL: the value has to follow the player's keypresses, and the walk is ~60 guarded
+-- int32 reads. Long enough that one readout (which asks for several button names) pays for
+-- the walk once.
+local PEND_TTL = 0.3
+local pend_map, pend_at = nil, 0
+
+-- { slotToken -> physicalToken } from the live map, or nil to fall back. Every failure
+-- path returns nil: this is an OPTIMISATION over the saved struct, never a gate on it.
+local function pending_slots()
+    local now = os.clock()
+    if pend_map ~= nil and (now - pend_at) < PEND_TTL then
+        return pend_map ~= false and pend_map or nil
+    end
+    pend_at = now
+    pend_map = false
+    if not build_fname_tables() then return nil end
+    local base = Mem.module_base and Mem.module_base() or nil
+    if not base then return nil end
+    local map = base + PEND.rva
+    local num = Mem.at_i32(map, PEND.arrayNum)
+    local data = Mem.at_ptr(map, PEND.elements)
+    if not num or num <= 0 or num > PEND.maxNum then return nil end
+    if not data or data == 0 then return nil end
+    local out, seen, found = {}, {}, 0
+    for i = 0, num - 1 do
+        local off = i * PEND.stride
+        local kidx = Mem.at_i32(data, off + PEND.keyOff)
+        local knum = Mem.at_i32(data, off + PEND.keyOff + 4)
+        -- knum == 0: these are plain names, never "Name_3" style instance names. A free
+        -- sparse-array slot holds garbage and simply matches no slot key.
+        local tok = (kidx and knum == 0) and slot_by_idx[kidx] or nil
+        if tok then
+            local vidx = Mem.at_i32(data, off + PEND.valOff)
+            local vnum = Mem.at_i32(data, off + PEND.valOff + 4)
+            local phys = (vidx and vnum == 0) and phys_by_idx[vidx] or nil
+            -- INVARIANT: the layout is a PERMUTATION of the 12 physical buttons. An unknown
+            -- value or a duplicate means we are not looking at what we think we are (a moved
+            -- global after a game patch, a half-written table) -> refuse the whole read.
+            if not phys or seen[phys] then return nil end
+            seen[phys] = true
+            out[tok] = phys
+            found = found + 1
+        end
+    end
+    if found ~= 12 then return nil end
+    pend_map = out
+    return out
+end
+
+-- The button a slot token currently DRIVES ("B" -> "X" on the remap above). Prefers the
+-- PENDING layout so a rebind is announced as soon as the player makes it; falls back to the
+-- saved one, and finally to the slot name itself, so every failure is silent-but-correct
+-- rather than silent.
 function A.physical_token(tok)
     if not tok then return nil end
+    local live = pending_slots()
+    if live and live[tok] then return live[tok] end
     local fk = assign_value("Controller_Btn_" .. tok)
     return (fk and FKEY_TOKEN[fk]) or tok
 end

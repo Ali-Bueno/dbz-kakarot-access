@@ -353,7 +353,9 @@ end
 -- Turn OFF once those rows are identified.
 local DEBUG = false
 local last_dumped = nil
-local DLG_TRACE = false    -- log dialogue acquire/skip decisions (rounds 5-21 diagnosis)
+local DLG_TRACE = false    -- OFF again 2026-07-25, the flow reads right. It earned its keep:
+                           -- one grep of the trace settled in a single read what two rounds of
+                           -- pure reasoning had got wrong twice. Flip to true, reproduce, grep.
 local ENUM_WINDOWS = false -- win01 enum incl. per-node rendered flags (round 19-20 evidence)
 local dlg_last = nil
 
@@ -449,7 +451,7 @@ local choice_key = nil    -- signature (labels+msg) the latched prompt belongs t
 -- FIFO evicted a text or the map changed, which made re-opening a dialog silent — the marks
 -- are keyed per TEXT, so identical words could never speak twice however deliberately the
 -- player asked for them (user 2026-07-25). It is now cleared alongside the pins on a real
--- close; see CLOSED_CLEAR_S below.
+-- close; see RECENT_CLEAR_S / PIN_CLEAR_S below.
 local RECENT_MAX = 24
 local recent, recent_set = {}, {}
 -- PINNED notice texts: like recent_set but IMMUNE to the FIFO's RECENT_MAX eviction and to
@@ -463,7 +465,7 @@ local recent, recent_set = {}, {}
 -- inside one map — the save confirmations in Options ("¿Guardar?", "Guardando…") speak once
 -- and were then mute for the rest of the session. The parked-window bug the pin exists for
 -- happens while the window STAYS on screen, so presence scope still fixes it; the pins are
--- released only after the window has been CONTINUOUSLY off screen for CLOSED_CLEAR_S, which is
+-- released only after the window has been CONTINUOUSLY off screen for PIN_CLEAR_S, which is
 -- far longer than the tick-to-tick blink the recent-set was built for (so a blink can never
 -- unpin, and a genuine reopen always can).
 local pinned_set = {}
@@ -478,7 +480,15 @@ local pinned_set = {}
 -- that still cannot be reached by a blink: 0.7 s is 7 poll ticks, where the blink this
 -- machinery was built for lasts one or two. The parked-window repeat that the pins exist for
 -- is unaffected — that window never leaves the screen, so no absence is ever measured.
-local CLOSED_CLEAR_S = 0.7
+-- ONE threshold again (2026-07-25 round 3). Round 2 raised the pins back to 2 s believing
+-- they were the source of the repeats; the log proved otherwise — the repeats were the
+-- headless-fragment bug in fresh_notice above, and the 2 s pin only added a window where
+-- deliberately re-opening a notice stayed silent. The scenario the pins exist for (a parked
+-- window re-firing) happens with the window STAYING ON SCREEN, so no absence is measured for
+-- it at all and the threshold's only job is to outlast a FLICKER: 0.7 s is 7 poll ticks
+-- against a flicker of one or two.
+local RECENT_CLEAR_S = 0.7
+local PIN_CLEAR_S    = 0.7
 local gone_since = nil     -- os.clock of the falling edge, nil while on screen
 local function was_recent(m) return m ~= nil and (recent_set[m] == true or pinned_set[m] == true) end
 local function pin(m) if m then pinned_set[m] = true end end
@@ -528,19 +538,29 @@ local function fresh_notice(w, rows_ok)
     -- subtitle — during the reward's title flicker the title-less ticks must not
     -- speak the help as a headless fragment).
     local title_fresh = title ~= nil and not was_recent(title)
-    local parts = {}
-    if title_fresh then parts[#parts + 1] = title end
+    -- A RENDERED title always HEADS the utterance, fresh or not — while `news` below still
+    -- decides whether the window speaks at all. The two are different questions and
+    -- conflating them was a real bug (log 2026-07-25, 22:43:52 vs 22:44:31): "Cómo adquirir"
+    -- is boilerplate shared by every skill-tree "how to acquire" notice, so per-node novelty
+    -- dropped it from the second one and the notice spoke headless — just "¡La batalla por el
+    -- futuro contra los androides del terror!" — and then read IN FULL a minute later, which
+    -- is what the player hears as a repeat. Novelty answers "is there news?"; composition
+    -- answers "what does this notice say?", and a header is part of what it says every time.
+    local parts, news = {}, title_fresh
+    if title then parts[#parts + 1] = title end
     for _, m in ipairs(UNTITLED_MEMBERS) do
         local t
         pcall(function() t = node_speech(w[m]) end)
         if t and t ~= "" and not was_recent(t) and t ~= parts[#parts] then
             parts[#parts + 1] = t
+            news = true
         end
     end
     if title and help and not was_recent(help) then
         parts[#parts + 1] = help
+        news = true
     end
-    if #parts == 0 then
+    if not news then
         -- Verbatim-repeat reward: nothing above is fresh, but a rendered title plus a
         -- fresh content row (item plate / received-emblem row) means a NEW notice that
         -- reuses the previous one's exact wording. Re-speak the stale title as the
@@ -588,19 +608,32 @@ function Dialog.is_active()
     if ENUM_WINDOWS and tick % 5 == 0 then pcall(enum_windows) end
     if not Core.on_screen(win) then acquire() end   -- acquire is now cheap (cached refs)
     if not Core.on_screen(win) then
+        if was_on then
+            -- The window just went away: the player dismissed it, so the line it spoke stops
+            -- being the most important thing on the screen reader. Hand the floor back at once
+            -- instead of making every other reader wait out a window that was only ever an
+            -- ESTIMATE of the spoken duration (user 2026-07-25: the skill tree took seconds to
+            -- come back after its popup). The protection still does its job while the notice
+            -- is up, which is when something else would have talked over it.
+            Speech.release_protection()
+        end
         window_gone()
         was_on = false
-        -- Sustained absence = a real close, and a real close ENDS THE EVENT: release BOTH
-        -- suppressors, the per-presence pins and the recent-text FIFO. The next appearance is
-        -- a new event by definition — the player closed the window and did something to open
-        -- one again — so it must speak even when it says exactly the same words. Everything
-        -- these two tables exist for happens WITHIN one presence (a pooled window's
-        -- tick-to-tick blink, a title flickering present/empty, a parked window re-firing),
-        -- which is why scoping them to the presence loses nothing.
+        -- Sustained absence = a real close, and a real close ENDS THE EVENT: release the
+        -- suppressors so the next appearance speaks even when it says exactly the same words.
+        -- TWO thresholds on purpose (2026-07-25 round 2, after repeats came back):
+        --   * the recent FIFO clears quickly — it is what blocked a deliberate re-trigger;
+        --   * the PINS keep their original, tuned 2 s. They exist for the parked window that
+        --     re-fires on its own, and that window FLICKERS: a 0.7 s release let a flicker
+        --     count as a close, which is a repeat straight into the player's ear. When the two
+        --     goals conflict, the one that adds noise loses.
         gone_since = gone_since or os.clock()
-        if (os.clock() - gone_since) >= CLOSED_CLEAR_S
-            and (next(pinned_set) ~= nil or next(recent_set) ~= nil) then
-            pinned_set, recent, recent_set = {}, {}, {}
+        local away = os.clock() - gone_since
+        if away >= RECENT_CLEAR_S and next(recent_set) ~= nil then
+            recent, recent_set = {}, {}
+        end
+        if away >= PIN_CLEAR_S and next(pinned_set) ~= nil then
+            pinned_set = {}
         end
         return false
     end

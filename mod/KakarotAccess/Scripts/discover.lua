@@ -92,10 +92,23 @@ local MAP_INPUT_TEST = false
 -- Options screen isn't up, so it costs nothing when it isn't wanted.
 -- =====================================================================================
 -- ANSWERED 2026-07-25 (dump_keyconfig_1784989557_001.txt) — the ids are SLOTS and the live
--- layout is in UATSaveSystem.InputAssign; fix shipped in ui_archetypes.physical_token. Kept
--- (switched OFF, so F7 is the normal census again) because it is the cheapest way to re-derive
--- this if a patch moves the save layout: flip to true, open Options, press F7.
-local KEYCONFIG_PROBE = false
+-- layout is in UATSaveSystem.InputAssign; fix shipped in ui_archetypes.physical_token, and
+-- the user confirmed it reads correctly.
+--
+-- RE-ARMED for the follow-up question: the readout only changes once the player presses
+-- "Save changes", because InputAssign is the SAVED layout. Where the PENDING one lives is
+-- not answerable from static data — a full sweep of the reflected dumps found exactly ONE
+-- field of type FATSaveSystemInputAssign in the entire game (the saved one), no working
+-- copy on UOptionMenu / UOptionMenuComponent / UAT_UIStartOption, and no Apply/Commit
+-- function taking that struct. So it is either non-reflected C++ or lives on a Blueprint
+-- widget, and only a capture taken WITH AN UNSAVED CHANGE ON SCREEN can say which.
+--
+-- HOW TO RUN IT for that question: open Options -> the button tab, CHANGE a button, and
+-- press F7 *before* saving. Then compare, in dumps/dump_keyconfig_*.txt: does the row's
+-- rich-text markup name the NEW button (section 1), does a glyph widget carry it
+-- (section 2), or does InputAssign still show the OLD one (section 3)? Whichever moved is
+-- the live source.
+local KEYCONFIG_PROBE = true
 
 local function keyconfig_probe(outfile_for)
     local A = require("ui_archetypes")
