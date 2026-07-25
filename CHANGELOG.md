@@ -22,11 +22,14 @@
 
 ### Improvements
 - **Keyboard players can use the radar target picker.** It used to be reachable only by
-  clicking the right stick. **Ctrl+F3** opens and closes it, **Page Up / Page Down** (or
-  the up and down arrows) move through targets, the left and right arrows change category,
-  and **Enter** locks onto the focused one. While it is open the game no longer receives
-  your keystrokes at all - exactly what the mod already did with the controller - so
-  moving through the list cannot make your character do anything.
+  clicking the right stick. **V** opens and closes it, the **up and down arrows** move
+  through targets, **left and right** change category, and **Enter** locks onto the
+  focused one. While it is open the game no longer receives your keystrokes at all -
+  exactly what the mod already did with the controller - so plain keys are safe here even
+  though the game itself uses them (V is the skill palette, the arrows are
+  mount/dismount).
+- **The world map's travel list responds to the arrow keys**, exactly as it already did to
+  the d-pad: up and down move between travel points, **Enter** travels to the selected one.
 - **The button-config screen reads keyboard keys.** On the keyboard tabs it used to
   announce the equivalent controller button, because the key itself looked unreadable.
   It now says the real key - "tecla: barra espaciadora", "tecla: clic izquierdo".

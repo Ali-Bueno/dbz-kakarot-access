@@ -151,7 +151,15 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
   THREAD (a keybind callback is not the game thread and `do_open` reads the world); `kb_open`
   distinguishes "no pad because there is none" from "the pad went away mid-menu", which the old
   teardown could not tell apart. Keys: Ctrl+F3 toggle, PageUp/PageDown + ↑/↓ move, ←/→ category,
-  Enter select. **Needs a game RESTART** (main.lua + a rebuilt DLL).
+  Enter select. **Needs a game RESTART** (main.lua + a rebuilt DLL). Keys settled with the user:
+  **V** toggles the picker, ↑/↓ move, ←/→ change category, Enter selects — plain unmodified keys,
+  which only became safe once the keyboard block below existed (V is the skill palette and the
+  arrows are mount/dismount in the game's own layout). The opening keypress is swallowed too: the
+  lease is taken BEFORE `do_open`, which is safe here precisely because it expires by itself (the
+  pad block is taken after, so a fault in the world read can never strand it). The **world map's
+  travel list** takes the same commands (`screen_map.Map.key`, consumed in `ft_guidance` above the
+  no-pad early return), so ↑/↓ act as the d-pad there and Enter travels. One dispatcher,
+  `App.nav_key`, feeds both — they can never be up at once (the picker needs free roam).
 - **The keyboard is now hidden from the GAME while the picker is open**, the exact twin of the
   pad block (user asked "¿no podemos hacer lo mismo que con el mando?" — yes, and it removes the
   ↑/↓ mount-dismount conflict entirely instead of documenting it). Two facts had to be settled

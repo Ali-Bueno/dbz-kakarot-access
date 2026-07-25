@@ -46,6 +46,12 @@ local FT = OFF.mapWorld
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
+-- Pending KEYBOARD command for the travel list (main.lua's arrow / Enter keybinds via
+-- App.nav_key). Queued rather than acted on where the keybind fires: that callback runs on
+-- UE4SS's own thread, and moving a point WRITES the game's selection index. Consumed in
+-- ft_guidance, which runs on the game thread. One slot is enough — a human cannot outrun
+-- the 20 ms poll.
+local ft_kb_cmd = nil
 
 -- Area map (Map_M_C / AT_UIMapM): the POI the cursor is focused on lives in FocusTarget
 -- (reflected). We announce it (type via the radar's EMapIcon vocabulary + the game's detail
@@ -389,24 +395,42 @@ local function ft_guidance(host)
     if not ft_points then ft_points = ft_build(host) end
     local n = #ft_points
     if n == 0 then return end
-    local snap = Input.read()
-    if not snap then return end
-    local B = Input.BTN
-    local function pressed(m) return (snap.buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
-    if pressed(B.DPAD_DOWN) then
-        ft_sel = ((ft_sel or -1) + 1) % n
-        Mem.write_i32(host, FT.selIndex, ft_sel)
-        Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
-    elseif pressed(B.DPAD_UP) then
-        ft_sel = ((ft_sel or 0) - 1) % n
+
+    -- Keyboard first: the arrows drive this exactly like the d-pad does, and the pad
+    -- snapshot below returns early on a machine with no controller, so a keyboard command
+    -- handled after it would never run. Queued by main.lua's keybinds and consumed HERE,
+    -- on the game thread, because moving a point WRITES the game's own selection index.
+    local kcmd = ft_kb_cmd
+    ft_kb_cmd = nil
+    local function move(delta)
+        ft_sel = ((ft_sel or (delta > 0 and -1 or 0)) + delta) % n
         Mem.write_i32(host, FT.selIndex, ft_sel)
         Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
     end
-    -- Confirm: pin the chosen index and fire the game's own confirm for it (validated in-game).
-    if pressed(B.A) and ft_sel then
+    local function confirm()
+        if not ft_sel then return end
         Mem.write_i32(host, FT.selIndex, ft_sel)
         pcall(function() host:InputConfirm() end)
     end
+    if kcmd == "next" then move(1)
+    elseif kcmd == "prev" then move(-1)
+    elseif kcmd == "select" then confirm() end
+
+    local snap = Input.read()
+    if not snap then
+        -- No pad: keep the chosen index pinned so the game's own confirm still targets it.
+        if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
+        return
+    end
+    local B = Input.BTN
+    local function pressed(m) return (snap.buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
+    if pressed(B.DPAD_DOWN) then
+        move(1)
+    elseif pressed(B.DPAD_UP) then
+        move(-1)
+    end
+    -- Confirm: pin the chosen index and fire the game's own confirm for it (validated in-game).
+    if pressed(B.A) then confirm() end
     ft_prevbtn = snap.buttons
     -- keep the chosen index pinned so the game's own Confirm (A) also targets it.
     if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
@@ -497,6 +521,12 @@ local function ft_step()
     local host = ft_host()
     if host then ft_guidance(host) end
 end
+
+-- Keyboard command for the world-map travel list: "next" / "prev" move through the points
+-- (the arrows, mirroring the d-pad) and "select" travels (Enter, mirroring A). Ignored
+-- unless the travel list is actually up — ft_guidance only runs there — so the same keys
+-- stay free everywhere else.
+function Map.key(cmd) ft_kb_cmd = cmd end
 
 function Map.start()
     if travel_running then return end

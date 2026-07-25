@@ -202,10 +202,17 @@ function App.nav_toggle() Nav.toggle() end
 function App.nav_route_toggle() Nav.toggle_route() end
 function App.nav_where() Nav.where() end
 function App.nav_companion() Nav.cycle_companion() end
--- Keyboard control of the R3 radar target picker (Ctrl+F3 / arrows / PageUp-PageDown /
--- Enter). The command is queued and consumed by the picker's own game-thread step; see
--- radar_menu.Menu.key. Kept here so the keybinds in main.lua stay hot-reloadable.
-function App.radar_key(cmd) RadarMenu.key(cmd) end
+-- Keyboard control of the pad-driven overlays: the radar target picker (V) and the world
+-- map's travel list. ONE entry point on purpose — the arrows and Enter mean the same thing
+-- in both, and each overlay ignores the command unless it is the one currently up (they
+-- can never be up at the same time: the picker needs free roam, the travel list is a
+-- menu). Every command is QUEUED and consumed by the receiver's own game-thread step —
+-- a RegisterKeyBind callback is not the game thread, and both receivers read or write
+-- game state. Kept here so the keybinds in main.lua stay hot-reloadable.
+function App.nav_key(cmd)
+    RadarMenu.key(cmd)
+    MapScreen.key(cmd)
+end
 
 function App.nav_dump() Nav.dump() end
 function App.nav_dump_levels() Nav.dump_levels() end

@@ -137,13 +137,12 @@ Handy shortcuts that mirror or complement the controller — not required to pla
 | **Ctrl+F2** | Toggle automatic button-help announcements |
 | **F3** | Toggle the navigation radar |
 | **Shift+F3** | Toggle NavMesh route guidance |
-| **Ctrl+F3** | Open / close the radar **target picker** (the R3 menu, from the keyboard) |
-| **Page Down / Page Up** or **↓ / ↑** (picker open) | Move through targets (nearest first) |
+| **V** | Open / close the radar **target picker** (the R3 menu, from the keyboard) |
+| **↑ / ↓** (picker open) | Move through targets (nearest first) |
 | **← / →** (picker open) | Previous / next category |
 | **Enter** (picker open) | Lock onto the focused target |
-
-While the picker is open the game does not receive your keystrokes at all — the same thing the mod
-already did with the controller — so moving through the list can't trigger anything in the game.
+| **↑ / ↓** (world map) | Move between travel points — the arrows act as the d-pad here |
+| **Enter** (world map) | Travel to the selected point |
 | **F5** | Announce the tracked objective (distance, clock direction) |
 | **Shift+F5** | Cycle companion tracking |
 | **F8** | Speech test (also names the active screen reader) |
@@ -151,6 +150,10 @@ already did with the controller — so moving through the list can't trigger any
 | **F11 / Shift+F11** | Next / previous stat block on the status sheet |
 | **Ctrl+M** | Toggle the menu reader on/off |
 | **Ctrl+Shift+R** | Reload the mod (useful after editing a translation file) |
+
+While the radar picker is open the game does not receive your keystrokes at all — the same thing
+the mod already did with the controller — so plain, unmodified keys are safe here even where the
+game uses them itself (V is the skill palette by default, the arrows are mount/dismount).
 
 ---
 

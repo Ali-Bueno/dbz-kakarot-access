@@ -155,7 +155,16 @@ local function handle_kb(cmd)
             -- Respect the pad-modal mutex exactly as the R3 path does: if the config menu
             -- owns the pad, the picker must not steal it.
             local modal = _G.__KakarotPadModal
-            if not modal or modal == "radar" then do_open(); kb_open = true end
+            if not modal or modal == "radar" then
+                -- Take the keyboard BEFORE building the list, so the very keypress that
+                -- opened the picker doesn't also reach the game (V is the skill palette in
+                -- the game's own default layout). Safe to do first, unlike the pad block
+                -- below — the keyboard block is a lease that expires by itself, so a fault
+                -- inside do_open's world reads cannot strand it.
+                Input.kb_block(KB_BLOCK_MS)
+                do_open()
+                kb_open = true
+            end
         end
         return
     end
