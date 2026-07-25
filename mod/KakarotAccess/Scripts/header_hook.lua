@@ -44,7 +44,7 @@ function Hook._install_experimental()
     _G.__KakarotHook = { installed = false, fired = {}, last = {} }
     local H = _G.__KakarotHook
     if type(RegisterHook) ~= "function" then return false end
-    for _, name in ipairs(CANDIDATES) do
+    for _, name in ipairs(TRIED) do   -- was CANDIDATES: renamed to TRIED, this dead path kept the old name
         H.fired[name] = 0
         pcall(function()
             RegisterHook(name, function(ctx, p1)
@@ -68,7 +68,7 @@ function Hook.status()
     local H = _G.__KakarotHook
     if not H then return "hook not installed" end
     local parts = {}
-    for _, name in ipairs(CANDIDATES) do
+    for _, name in ipairs(TRIED) do   -- was CANDIDATES: renamed to TRIED, this dead path kept the old name
         local short = name:match("([^%.]+:[%w_]+)$") or name
         local n = H.fired[name] or 0
         if n > 0 then

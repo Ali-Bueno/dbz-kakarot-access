@@ -153,19 +153,34 @@ if Build.debug then
         require("discover").run()
         Speech.say("Discover", true)
     end)
+
+    -- Ctrl+G: flip the two REFLECTION GATES in ui_core (the member-existence check and the array
+    -- type check) off and on. They refuse a fetch the class does not declare, and an array read on
+    -- a member that is not a real TArray — both of which are otherwise uncatchable aborts. But a
+    -- gate on that path fails by making a screen go QUIET with no error, so this key answers "is
+    -- the gate why this screen stopped reading?" in one press instead of one code change. The
+    -- state survives Ctrl+Shift+R; the `member gate:` / `array gate:` log lines name what was
+    -- refused. Does NOT touch the memory pre-check (Mem.alive) — that one is the actual crash fix
+    -- and has no silent-failure mode of this kind.
+    RegisterKeyBind(Key.G, { ModifierKey.CONTROL }, function() App.toggle_gates() end)
+
+    -- Ctrl+Shift+G: flip the SEH memory pre-check (Mem.alive) off and on. That check is the actual
+    -- crash fix, so it stays on normally — but a guard that wrongly refuses a LIVE object silences
+    -- whatever was reading it with no error at all, and a rising "N rejected" count looks identical
+    -- to the guard working. This key is how that gets ruled in or out in one press: if a screen
+    -- starts reading again with the pre-check off, the pre-check was the cause. Together with Ctrl+G
+    -- these two keys switch off everything the 2026-07-25 batch added to the read path.
+    RegisterKeyBind(Key.G, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function() App.toggle_precheck() end)
 end
 
--- Global transition gate: a new-UWorld notify flags "map switch in progress" so every
--- loop goes inert and every UObject cache is flushed before any tick could probe a
--- freed object of the old level (an uncatchable abort — the recurring return-to-title
--- / post-cutscene crash). NOT a LoadMap hook: that trampoline crashes this game (see
--- transition.lua). Registered ONCE here (a reload must not re-register); the callback
--- reaches the current module instance through _G.
-pcall(function()
-    if require("transition").install() then
-        print("[" .. MOD .. "] Transition gate (world notify) registered.\n")
-    end
-end)
+-- Global transition gate: "map switch in progress" makes every loop go inert and every
+-- UObject cache flush before a tick could probe a freed object of the old level (an
+-- uncatchable abort — the recurring return-to-title / post-cutscene crash). Since
+-- 2026-07-25 the signal is a WORLD-EPOCH POLL on the game thread, driven from
+-- ui_core.begin_scan_tick — no construction notify (its callback could run mod Lua on the
+-- engine's async loading thread) and no LoadMap hook (that trampoline crashes this game).
+-- Nothing to register any more; install() just announces itself. See transition.lua.
+pcall(function() require("transition").install() end)
 
 -- Field-menu section reader — the mod's ONE RegisterHook, in its own file so it can be
 -- disabled by simply deleting header_hook.lua (see that file). Registered ONCE here (a reload

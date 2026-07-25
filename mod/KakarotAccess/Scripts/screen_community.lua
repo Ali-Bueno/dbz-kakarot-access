@@ -358,6 +358,9 @@ local function ensure_skill_props(d)
                 ["OffsetInternal"] = SKILL_PARTS_BASE + i * 8,
             })
         end)
+        -- A custom property is invisible to ForEachProperty, so Core.member's existence gate
+        -- must be told about it explicitly or it would refuse these rows.
+        Core.allow_member("CommuSkillPart" .. i)
     end
 end
 
@@ -460,6 +463,14 @@ local function detail_text()
 end
 
 -- ---- adapter protocol -------------------------------------------------------------
+
+-- Forward declaration (fixed 2026-07-25). `last_sub` is declared local much further down, next
+-- to the link-bonus subtitle reader, but clear_state() below assigns it — and a local only
+-- enters scope at its own statement, so that assignment was writing a GLOBAL and the subtitle
+-- latch was never actually cleared: a link bonus shown twice in a session announced only the
+-- first time. Found by listing the compiled globals (`luac -l -p` → `_ENV "name"`), which is
+-- the only check that catches this class; `luac -p` accepts it as valid syntax.
+local last_sub
 
 local function clear_state()
     last_idx, label_cache, label_idx = nil, nil, nil
@@ -998,7 +1009,7 @@ local function grid_hunt()
 end
 
 local last_held = false      -- emblem-in-hand edge detector
-local last_sub = nil         -- last spoken link-bonus subtitle
+last_sub = nil               -- last spoken link-bonus subtitle (declared local up by clear_state)
 local snap_tick = 0          -- DEBUG state-snapshot throttle
 
 -- PLACING-mode hover debounce (state declared up with the other board locals). While

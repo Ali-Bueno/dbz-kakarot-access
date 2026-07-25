@@ -38,6 +38,9 @@ local function ensure_registered()
                 ["OffsetInternal"] = off,
             })
         end)
+        -- A custom property is invisible to ForEachProperty, so Core.member's existence gate
+        -- must be told about it explicitly or it would refuse these two slots.
+        Core.allow_member(SLOT_PROP[i])
     end
 end
 

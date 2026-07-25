@@ -14,7 +14,8 @@
 
 local Speech = require("speech")
 local Transition = require("transition")
-local Mem = require("mem")   -- only for Mem.thread_id (stamping the game thread, see begin_scan_tick)
+local Mem = require("mem")   -- Mem.alive (the SEH-guarded pre-check every guard here runs first)
+                             -- and Mem.thread_id (stamping the game thread, see begin_scan_tick)
 
 local Core = {}
 
@@ -23,18 +24,23 @@ local TOOLTIP_WINDOW = 6   -- ticks to keep polling for a late-arriving tooltip
 
 -- ---- widget helpers --------------------------------------------------------
 
--- Does this handle point at a REAL object? A pure GetAddress() check: it returns the
--- STORED pointer without dereferencing it, so — unlike IsValid() — it cannot fault on a
--- handle that wraps NULL. That is the whole difference, and it is what makes
--- `FSlateBrush.ResourceObject` readable at last: the crash ledger's CLASS A ("no safe
--- guard exists") assumed the only way to ask was `ro:IsValid()`, which IS the deref that
--- pierces pcall on a null resource (the 0x10 access violations). Never ask IsValid on a
--- brush resource — ask the pointer.
--- Fails CLOSED (unreadable = null): the callers are cosmetic glyph/texture names, and
+-- Does this handle point at a REAL, readable object? Asks the STORED pointer (never a deref) and
+-- then checks that memory through mem_bridge — so, unlike IsValid(), it cannot fault on a handle
+-- that wraps NULL. That is what makes `FSlateBrush.ResourceObject` readable at last: the crash
+-- ledger's CLASS A ("no safe guard exists") assumed the only way to ask was `ro:IsValid()`, which
+-- IS the deref that pierces pcall on a null resource (the 0x10 access violations). Never ask
+-- IsValid on a brush resource.
+-- Fails CLOSED (cannot answer = treat as null): the callers are cosmetic glyph/texture names, and
 -- losing one is infinitely cheaper than the crash.
 function Core.nonnull(o)
     if o == nil then return false end
-    local ok, a = pcall(function() return o:GetAddress() end)
+    -- Both questions in ONE call: Mem.alive already asks for the stored pointer and returns it,
+    -- so this no longer calls GetAddress itself. That matters beyond tidiness — a direct call
+    -- here would sit outside Mem.alive's transactional guard, and a GetAddress on a non-UObject
+    -- handle pierces pcall and kills the caller's tick (Core.valid_ref explains the whole story).
+    -- Fails CLOSED by requiring a real address: on any path where the pre-check cannot answer,
+    -- Mem.alive returns no address, and a cosmetic glyph is not worth a guess.
+    local ok, a = Mem.alive(o)
     return ok and type(a) == "number" and a ~= 0
 end
 
@@ -52,13 +58,41 @@ end
 -- GetAddress() returns the STORED pointer without dereferencing it, so it is the one
 -- question we can safely ask, and the only pre-check that can see the null before we
 -- touch a member. Anything that fails to answer counts as dead.
-function Core.valid(o)
+-- REGRESSION NOTE (2026-07-25). The 07-24 cut of this function rejected a handle whose
+-- `GetAddress()` answered NIL, treating "the wrapper can't tell you" as "the pointer is null".
+-- Those are different questions, and the blast radius is not one widget: ui_directory gates
+-- EVERY pointer hop of every chain on Core.valid (mm -> m_xLoadMenu -> m_UIStartSaveLoad …),
+-- so one unanswerable hop makes a directory-mapped screen resolve to nothing and go silent
+-- with no error logged anywhere — the load-game screen and the Options save confirmations.
+-- The null case is now handled where it belongs, inside Mem.alive, which fails OPEN on every
+-- "don't know" and closed only on memory it has actually read.
+-- Validity for a RemoteObject that is NOT a UObject — a TArray wrapper, a struct handle. It does
+-- `IsValid()` and NOTHING else, and that restriction is the whole point.
+--
+-- `GetAddress` is overridden only on the UObject family. On any other RemoteObject UE4SS's base
+-- implementation RAISES `Call to RemoteObject:GetAddress on polymorphic type is not allowed`, and
+-- that error PIERCES pcall: it unwinds to UE4SS's own callback boundary, so the adapter's update
+-- dies mid-function while `pcall` reports nothing. Proven from the user's UE4SS.log on 2026-07-25
+-- — 510 occurrences, every single one entering through `Core.array_of`'s validity check on the
+-- ARRAY, and the screens in the tracebacks are exactly the screens the user reported silent:
+-- the save/load slot list, the status page's stat rows, the skill palette's plates, the emblem
+-- grid, the tutorials list, the skill tree's orbs, keyhelp's glyph list, the dialog's choices.
+-- The 2026-07-24 cut had the same call in Core.valid, which is what silenced them then too.
+-- RULE: a TArray or struct handle goes through HERE; only a UObject goes through Core.valid.
+function Core.valid_ref(o)
     if o == nil then return false end
     local ok, v = pcall(function() return o:IsValid() end)
-    if not ok or v ~= true then return false end
-    local oka, a = pcall(function() return o:GetAddress() end)
-    if oka and (a == nil or a == 0) then return false end
-    return true
+    return ok and v == true
+end
+
+function Core.valid(o)
+    if o == nil then return false end
+    -- BEFORE IsValid, never after: IsValid is ITSELF a dereference of the object it is being
+    -- asked about (UE4SS evaluates IsUnreachable() before its own object-set lookup), so this
+    -- SEH-guarded memory pre-check is the only guard that can run first. See Mem.alive.
+    if not Mem.alive(o) then return false end
+    local ok, v = pcall(function() return o:IsValid() end)
+    return ok and v == true
 end
 
 -- Guarded member fetch. `o.Name` is evaluated at the CALL SITE, so handing it
@@ -68,8 +102,139 @@ end
 -- it is the access-violation class in the two user crash reports of 2026-07-21
 -- (property __index on a dangling UObject, deep in the Lua VM, no traceback).
 -- Any code that can run while the world is being torn down fetches through here.
+-- ---- property-existence gate ------------------------------------------------------------
+--
+-- Fetching a member a class does NOT declare is one of this game's UNCATCHABLE aborts —
+-- UE4SS raises it below the Lua boundary, so the `pcall` in Core.member below cannot save
+-- you. It killed the process on 2026-07-17: `node_text(bar.Txt00)` where `Txt00` belongs to
+-- the SIBLING item-log bar class, retried every tick on a blank pooled bar. The rule written
+-- then ("never assume a member exists from a look-alike sibling class") is a rule for humans;
+-- this is the same rule enforced by the code. The only real defence is not to ask.
+--
+-- So the first time a (class, name) pair is needed, enumerate the class's REAL property names
+-- and cache them. `ForEachProperty` lists a class's OWN properties only, so the
+-- `GetSuperStruct()` walk is what makes inherited members resolvable (a UMG widget's
+-- BP-declared `Txt_*` live on the generated `_C` class, `Slot`/`RenderOpacity` on the native
+-- bases) — the same idiom discover.lua already uses to dump classes.
+--
+-- FAILS OPEN, like every other guard here (the 2026-07-25 rule): if the class cannot be
+-- identified, or the enumeration yields nothing, the fetch proceeds exactly as before. A gate
+-- on the hottest path in the mod must never become the reason a screen goes quiet — and when
+-- it DOES block something it says so in the log, capped, with the class and member named, so
+-- an over-eager rejection is visible instead of silent.
+-- KILL SWITCH for BOTH reflection gates (member existence + the array type check), restoring the
+-- pre-2026-07-25 behaviour exactly. It exists because the failure mode of a gate on this path is a
+-- screen that goes quiet with no error, and whoever is testing must be able to rule it out
+-- immediately rather than wait for a code change.
+--
+-- Toggled IN GAME with Ctrl+G (a dev keybind; see main.lua) — editing this file was the first
+-- design and it was worse: it needs a text editor mid-session, and the state reset to the default
+-- on every reload. The value therefore lives in `_G`: Ctrl+Shift+R DOES re-require this module, so a
+-- plain local would silently turn the gates back on at every reload, which is the opposite of what a
+-- diagnostic switch is for. Mirrored into a local because prop_set reads it on the hottest path.
+if _G.__KakarotReflectionGates == nil then _G.__KakarotReflectionGates = true end
+local REFLECTION_GATES = _G.__KakarotReflectionGates
+
+-- Returns the new state. If flipping this makes a screen read again, the `member gate:` /
+-- `array gate:` log lines name exactly what was being refused.
+function Core.toggle_gates()
+    REFLECTION_GATES = not REFLECTION_GATES
+    _G.__KakarotReflectionGates = REFLECTION_GATES
+    return REFLECTION_GATES
+end
+
+local prop_sets = {}      -- class address -> { [name] = "<PropertyType>" } | false if unavailable
+local SUPER_MAX = 16      -- inheritance-chain depth cap. This game's widget chains run ~6-10
+                          -- (WidgetBlueprintGeneratedClass → game base → UUserWidget → UWidget →
+                          -- UVisual → UObject); 16 leaves margin, and stopping SHORT would drop
+                          -- inherited members and make the gate reject them.
+local blocked_seen = {}   -- "classaddr:name" -> true (log each pair once)
+local blocked_logged = 0
+local BLOCKED_LOG_MAX = 50
+-- Building a set walks the whole inheritance chain and stringifies every property name — a
+-- one-off per class, but a screen opening for the first time can present a dozen new classes in
+-- ONE tick, and this codebase's whole performance history is about not letting per-class work
+-- cluster on a single tick (SCANS_PER_TICK exists for exactly that). So the enumeration draws
+-- from its own small per-tick budget; a denied call simply skips the gate that once (fail open)
+-- and the set gets built a tick later.
+-- ACCEPTED LIMIT, stated plainly so nobody reads this as full coverage: because a set is built
+-- at most once per tick, the FIRST fetch of a member on a never-seen class is always ungated.
+-- The 2026-07-17 abort was a fetch REPEATED every tick, so it is caught from tick two — but a
+-- one-shot bad fetch can still get through by construction. Raising this constant trades that
+-- for per-tick spikes on screen entry, which is the tradeoff SCANS_PER_TICK already lost once.
+local PROP_SETS_PER_TICK = 1
+local prop_budget = 0
+
+-- CUSTOM PROPERTIES ARE INVISIBLE TO ForEachProperty. `RegisterCustomProperty` stores the
+-- member in UE4SS's own map, consulted by `__index` as a fallback — it is NOT added to the
+-- UClass, so the enumeration above will never see it and the gate would refuse a member that
+-- reads perfectly. The mod uses this to recover collapsed FIXED C arrays (screen_party's
+-- party slots 1/2, screen_community's skill parts 1..9 — UE4SS reflection collapses a fixed
+-- array to element 0). Those call sites fetch raw today, so nothing is broken right now, but
+-- the standing rule is "route member fetches through Core.member", and following it would
+-- have silently killed those screens. So: whoever registers a custom property declares it
+-- here in the same breath, and the gate always lets it through.
+local custom_props = {}
+function Core.allow_member(name)
+    if type(name) == "string" and name ~= "" then custom_props[name] = true end
+end
+
+local function prop_set(o)
+    if not REFLECTION_GATES then return nil end
+    local cls
+    if not pcall(function() cls = o:GetClass() end) or cls == nil then return nil end
+    local key = math.tointeger(Mem.raw_addr(cls) or 0)
+    if key == nil or key == 0 then return nil end
+    local cached = prop_sets[key]
+    if cached ~= nil then return cached or nil end
+    if prop_budget <= 0 then return nil end     -- not this tick: gate stays open
+    prop_budget = prop_budget - 1
+    local set, count = {}, 0
+    local s, depth = cls, 0
+    while s ~= nil and depth < SUPER_MAX do
+        pcall(function()
+            s:ForEachProperty(function(p)
+                local pn, pt
+                if pcall(function() pn = p:GetFName():ToString() end)
+                    and type(pn) == "string" and pn ~= "" and not set[pn] then
+                    -- The property's TYPE comes free with this walk, and it is what finally
+                    -- makes Core.array_of safe (see there): only "ArrayProperty" is a real
+                    -- TArray. Stored as a string, so `set[name]` stays truthy for the
+                    -- existence gate.
+                    pcall(function() pt = p:GetClass():GetFName():ToString() end)
+                    set[pn] = (type(pt) == "string" and pt ~= "" and pt) or "?"
+                    count = count + 1
+                end
+            end)
+        end)
+        local sup
+        if not pcall(function() sup = s:GetSuperStruct() end) then break end
+        if not Core.valid(sup) then break end
+        s, depth = sup, depth + 1
+    end
+    if count == 0 then
+        prop_sets[key] = false     -- introspection told us nothing: never gate on it
+        return nil
+    end
+    prop_sets[key] = set
+    return set, key
+end
+
 function Core.member(o, name)
     if not Core.valid(o) then return nil end
+    local set, key = prop_set(o)
+    if set and not set[name] and not custom_props[name] then
+        local mark = tostring(key) .. ":" .. tostring(name)
+        if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
+            blocked_seen[mark] = true
+            blocked_logged = blocked_logged + 1
+            local cn = "?"
+            pcall(function() cn = o:GetClass():GetFName():ToString() end)
+            print(string.format("[KakarotAccess] member gate: %s has no '%s' (not fetched)\n",
+                cn, tostring(name)))
+        end
+        return nil
+    end
     local v
     if not pcall(function() v = o[name] end) then return nil end
     return v
@@ -185,18 +350,38 @@ end
 -- IsValid) and its owner must both be checked before the call. Every TArray read goes through
 -- here; never call GetArrayNum directly.
 --
--- SECOND failure mode this guard can NOT stop (2026-07-16, screen_dialog WL_LvTextList): a
--- native FIXED C-array member (e.g. `UCFUIXcmnMultiLineText* X[7]`) collapses to a
--- RemoteObject that PASSES the IsValid check below, and GetArrayNum on it raises the
--- "UObject instance is nullptr" C++ error THROUGH the pcall — the process survives (UE4SS
--- catches it at its callback boundary) but the whole Lua tick aborts mid-function, through
--- every enclosing pcall. There is no runtime check for this: the caller must never pass a
--- fixed-array member here — check the member's declared size in the CXX header dump (a
--- pointer with size > 0x8 is a fixed array).
+-- SECOND failure mode (2026-07-16, screen_dialog WL_LvTextList): a native FIXED C-array member
+-- (e.g. `UCFUIXcmnMultiLineText* X[7]`) collapses to a RemoteObject that PASSES the IsValid
+-- check below, and GetArrayNum on it raises the "UObject instance is nullptr" C++ error THROUGH
+-- the pcall — the process survives (UE4SS catches it at its callback boundary) but the whole Lua
+-- tick aborts mid-function, through every enclosing pcall, leaving half-updated module state
+-- (that is how a stale notice got spoken for 13 debugging rounds).
+-- This note used to end "there is no runtime check for this: the caller must never pass a
+-- fixed-array member here — check the CXX header dump". THERE IS ONE NOW, and it comes from the
+-- engine's own metadata rather than from a human remembering to check a dump: the per-class
+-- property walk (see prop_set) records each member's PROPERTY TYPE, and a real TArray is an
+-- `ArrayProperty` while a fixed C array is a single ObjectProperty with ArrayDim > 1. So if the
+-- class is known and the member is not an ArrayProperty, we refuse before touching it. Fails
+-- open like every other guard here: an unknown class or an unenumerated member proceeds as before.
 function Core.array_of(owner, name)
     if not Core.valid(owner) then return nil, nil end
+    local set = prop_set(owner)
+    local declared = set and set[name]
+    if declared and declared ~= "ArrayProperty" and not custom_props[name] then
+        local mark = "arr:" .. tostring(name) .. ":" .. declared
+        if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
+            blocked_seen[mark] = true
+            blocked_logged = blocked_logged + 1
+            print(string.format("[KakarotAccess] array gate: '%s' is a %s, not a TArray (not read)\n",
+                tostring(name), declared))
+        end
+        return nil, nil
+    end
     local arr
-    if not pcall(function() arr = owner[name] end) or not Core.valid(arr) then return nil, nil end
+    -- valid_REF, not valid: `arr` is a TArray wrapper, and asking one for its address raises an
+    -- error that pierces pcall and kills this whole tick (see Core.valid_ref). The OWNER above is
+    -- a UObject and does go through the full check.
+    if not pcall(function() arr = owner[name] end) or not Core.valid_ref(arr) then return nil, nil end
     local n
     if not pcall(function() n = arr:GetArrayNum() end) or type(n) ~= "number" or n < 0 then
         return nil, nil
@@ -289,12 +474,42 @@ local SCANS_PER_TICK = 2   -- was 3: three FindAllOf in one tick was the measure
 -- means "per registry tick" here.
 local service_watches   -- forward decl — assigned below the watch lane (Core.watch_for)
 
+-- WORLD-EPOCH POLL — the transition gate's only signal since 2026-07-25 (it replaced the
+-- GameMode construction notify: see transition.lua for why a notify was the wrong door).
+-- MUST run even while the gate is already up: that is how the new world gets noticed.
+-- Cost: one validity check on the cached GameInstance plus a GetWorld() call, no scan.
+--
+-- Kept SEPARATE from begin_scan_tick (which also resets the per-tick scan budget) because
+-- every loop that touches UObjects has to poll it, and not every such loop wants to reset
+-- the budget: nav_tracker runs on its own cadence outside the registry step. begin_scan_tick
+-- calls this first thing; nav_tracker calls it directly.
+-- Forward declaration. `dir_mod` is DEFINED further down, next to the directory cache it
+-- belongs to, but it is USED here — and a `local function` only enters scope at its own
+-- statement, so without this line the call below would compile to a GLOBAL lookup, be nil at
+-- runtime, and raise on every tick from a spot ABOVE the loops' pcall: the whole mod silent
+-- from boot, with nothing in the log. `luac -p` cannot see it (a global call is valid syntax).
+local dir_mod
+
+function Core.poll_world()
+    -- Refilled HERE and not in begin_scan_tick, because nav_tracker calls only this one — and
+    -- it is the loop that fetches members on the pooled per-level minimap icons that level
+    -- streaming frees, i.e. the path with the most to gain from the member gate. Refilling in
+    -- begin_scan_tick left that budget permanently at zero whenever the reader was toggled off,
+    -- so the gate was open exactly where it mattered most.
+    prop_budget = PROP_SETS_PER_TICK
+    local d = dir_mod()
+    if not d then return end
+    local ok, e = pcall(d.world_epoch)
+    if ok then Transition.note_epoch(e) end
+end
+
 function Core.begin_scan_tick()
     scan_budget = SCANS_PER_TICK
     os_memo = {}
     -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
-    -- thread). It is the reference the remaining NotifyOnNewObject — the transition gate — checks
-    -- itself against, so we can never again ASSUME a callback is on the right thread.
+    -- thread). Kept now that the mod registers NO construction notify at all (2026-07-25): it is
+    -- the reference any future callback must check itself against, so we can never again ASSUME
+    -- a callback is delivered on the right thread — that assumption cost two crashed sessions.
     if _G.__KakarotGameTid == nil then _G.__KakarotGameTid = Mem.thread_id() end
     -- Serve armed watches FIRST, before the adapter sweep can spend the budget: a
     -- watched class queried at the tail of the sweep was starved on every contended
@@ -302,6 +517,12 @@ function Core.begin_scan_tick()
     -- flow 2026-07-16: zero watched scans ran in the whole 5s window), and the sweep's
     -- first-active short-circuit can stop its adapter being polled at all.
     if service_watches then service_watches() end
+    -- The world poll goes AFTER the watch lane, not before it. It can need a scan slot (the
+    -- GameInstance root is re-found once per map, since a transition wipes the root cache), and
+    -- taking that slot ahead of an armed watch is precisely the starvation measured on the
+    -- soul-emblems flow in 2026-07-16. Being one tick late to notice a map switch costs nothing;
+    -- world_epoch answers `false` ("could not look"), which is not an event, when it is denied.
+    Core.poll_world()
 end
 local function scan_allowed()
     if scan_budget <= 0 then return false end
@@ -354,7 +575,9 @@ function Core.take_scan_slot() return scan_allowed() end
 -- same tick. Lazily required (ui_directory requires ui_core back, so a top-level require
 -- here would cycle). Returns nil for unmapped classes — those keep the scan path.
 local Dir = nil
-local function directory_list(cls_name)
+-- Assignment, not `local function`: the local is declared far above (see the forward
+-- declaration next to Core.poll_world, which calls this).
+dir_mod = function()
     if Dir == nil then
         local ok, m = pcall(require, "ui_directory")
         Dir = (ok and m) or false
@@ -362,8 +585,12 @@ local function directory_list(cls_name)
             print("[KakarotAccess] ui_directory unavailable, scan-only mode\n")
         end
     end
-    if not Dir then return nil end
-    return Dir.resolve(cls_name)
+    return Dir or nil
+end
+local function directory_list(cls_name)
+    local d = dir_mod()
+    if not d then return nil end
+    return d.resolve(cls_name)
 end
 
 -- Real-time tick clock (100ms units). Backoffs used to run on each ADAPTER's private tick
@@ -800,6 +1027,11 @@ Transition.on_begin("ui_core", function()
     all_cache, all_next = {}, {}
     pool_dead, probe_next = {}, {}
     probes_armed = true   -- a map load happened: from here on, in-place deaths may probe
+    -- The property-name sets are keyed by CLASS ADDRESS, and a map switch is exactly when
+    -- Blueprint classes get unloaded — a new class could land on a freed one's address and
+    -- inherit its member list, which would make the gate reject real members. Cheap to drop
+    -- (one enumeration per class on first use) and it removes the whole staleness question.
+    prop_sets, blocked_seen = {}, {}
     -- probe_info / gi_prefix survive on purpose: GameInstance-child menus persist across
     -- maps, so their recorded paths let the probe rebuild the caches without scans right
     -- after a load. Per-level classes just miss and re-record on their next sighting.

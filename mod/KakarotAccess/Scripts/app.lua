@@ -209,6 +209,26 @@ function App.nav_dump_levels() Nav.dump_levels() end
 -- stays hot-reloadable; the keybind in main.lua only delegates).
 function App.read_objective() QuestObjective.read() end
 
+-- Ctrl+G (dev): flip the two reflection gates in ui_core off/on without editing source, so a screen
+-- that has gone quiet can be attributed to them or cleared of them in one keypress. Announced in
+-- English like the other diagnostic keys. The state survives Ctrl+Shift+R (it lives in _G).
+function App.toggle_gates()
+    local on = require("ui_core").toggle_gates()
+    Speech.say(on and "Reflection gates on" or "Reflection gates off", true)
+    return on
+end
+
+-- Ctrl+Shift+G (dev): flip the SEH memory pre-check (Mem.alive) off/on. This is the crash fix, so it
+-- normally stays on — but its failure mode is invisible (refuse a live object and whatever was
+-- reading it goes quiet, with no error and only a rising rejection count that looks like success), so
+-- there has to be a way to rule it out in one press. If a screen comes back with this off, the
+-- pre-check was the cause. Announced in English like the other diagnostic keys.
+function App.toggle_precheck()
+    local on = require("mem").toggle_precheck()
+    Speech.say(on and "Memory pre-check on" or "Memory pre-check off", true)
+    return on
+end
+
 -- F11 / Shift+F11: walk the character status page's stat blocks (HP, Ki, the five attributes),
 -- reading one at a time. Touches live widgets, so it runs on the game thread and stays inert
 -- during a level transition (same teardown-abort risk as the loops). Silent off that screen.

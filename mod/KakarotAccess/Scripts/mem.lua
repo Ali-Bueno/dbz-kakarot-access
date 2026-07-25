@@ -39,9 +39,202 @@ function Mem.thread_id()
     return nil
 end
 
--- Absolute base VA of a live UObject, or nil. Guards every hop (stale objects error).
+-- The STORED pointer behind a handle, WITHOUT dereferencing it — the only question that is
+-- safe to ask about a possibly-freed UObject. `Mem.addr` below cannot be used for that: it
+-- calls `obj:IsValid()` first, and IsValid is ITSELF a dereference — UE4SS evaluates
+-- `!obj->IsUnreachable()` (a read of the object's flags) BEFORE consulting its own set of
+-- known objects (RE-UE4SS `UE4SS/include/LuaType/LuaUObject.hpp:610`), so on a freed pointer
+-- the access violation happens inside the very call that was supposed to detect it. That is
+-- why the mod's guards kept failing: the safe check sat behind the unsafe one.
+-- `GetAddress()` is the one UObject method that touches nothing (same header) — everything
+-- else in the Lua API derefs. Returns nil when the handle cannot answer at all, which callers
+-- must treat as "unknown", never as "dead" (see Core.alive).
+function Mem.raw_addr(obj)
+    if not obj then return nil end
+    local ok, a = pcall(function() return obj:GetAddress() end)
+    if ok and type(a) == "number" then return a end
+    return nil
+end
+
+-- ---- the memory pre-check ---------------------------------------------------------------
+--
+-- The guard that runs BEFORE UE4SS dereferences anything. Source-verified against RE-UE4SS
+-- v3.0.1: Lua `UObject:IsValid()` is `m_cpp_object && !m_cpp_object->IsUnreachable() &&
+-- is_object_in_global_unreal_object_map(m_cpp_object)` (`LuaType/LuaUObject.hpp:610`), so the
+-- only part that could catch a freed handle — the lookup in UE4SS's own object set — sits
+-- BEHIND `IsUnreachable()`, which reads the object. On a freed pointer the access violation
+-- happens inside the very call meant to detect it. And UE4SS never clears the raw pointer in a
+-- Lua handle: its delete listener only erases a hash from a set (`LuaUObject.cpp:59-66`), so a
+-- freed object — or one whose ADDRESS a new object recycled, re-inserting the same hash —
+-- passes and dies later at `prepare_to_handle` → `GetClassPrivate()` (UObjectBase+0x10: the
+-- 0x10 access violations in every user crash report).
+--
+-- So the check must happen outside UE4SS, in memory we read ourselves under SEH — mem_bridge
+-- returns nil for an unreadable address instead of faulting the process. Ask the handle for its
+-- stored pointer (no deref), then read the object's class pointer and that class's own class
+-- pointer through the bridge. Freed or garbage memory fails one of those reads or yields
+-- something that is not a UObject; a live object passes both. Not a liveness PROOF (an address
+-- recycled by another live object still reads fine), but it converts the whole dangling/garbage
+-- class from "kills the process" into "returns nil", which is the crash users actually hit.
+--
+-- FAILS OPEN by design (the 2026-07-25 regression rule): no bridge, no derivable offset, or a
+-- handle that cannot answer GetAddress ⇒ true, and the old path runs unchanged. A guard that
+-- fails closed on a shared substrate silently blanks whole screens.
+local CLASS_OFF = nil       -- UObjectBase::ClassPrivate offset — DERIVED at runtime, never guessed
+-- The probe needs the bridge loaded AND /Script/UMG.UserWidget resolvable. A single early
+-- attempt would latch "unavailable" for the session and silently disable the pre-check, so it
+-- retries — but the retry budget is measured in TIME, not in calls: Mem.alive runs dozens of
+-- times per tick from Core.valid, so a per-call budget would burn through inside one or two
+-- ticks, which is exactly the boot window where the probe is expected to fail. Retry at most
+-- once every RETRY_EVERY_S, give up after DEADLINE_S, and SAY SO — a silent give-up would leave
+-- the whole crash fix inert with nothing in the log but the absence of a line nobody looks for.
+local class_off_next = 0
+local class_off_deadline = nil
+local class_off_gave_up = false
+local CLASS_OFF_RETRY_EVERY_S = 0.5
+local CLASS_OFF_DEADLINE_S = 30.0
+
+-- Derive it by asking the engine for both halves of the answer and matching them: take a
+-- UObject guaranteed to be alive (a UClass found by path), get its class pointer through
+-- reflection, and find that exact value in the first bytes of the object. Whatever offset holds
+-- it IS ClassPrivate on this build — so an engine or game patch re-derives it instead of
+-- trusting a stale constant.
+local function class_off()
+    if CLASS_OFF then return CLASS_OFF end
+    if class_off_gave_up or not loaded then return nil end
+    local t = os.clock()
+    if class_off_deadline == nil then class_off_deadline = t + CLASS_OFF_DEADLINE_S end
+    if t < class_off_next then return nil end
+    class_off_next = t + CLASS_OFF_RETRY_EVERY_S
+    -- Every exit below is a RETRY, never a give-up: only the deadline stops the probe, and it
+    -- announces itself when it does.
+    local function give_up_check()
+        if os.clock() >= class_off_deadline and not class_off_gave_up then
+            class_off_gave_up = true
+            print("[KakarotAccess] class-pointer offset NOT derivable after "
+                .. math.floor(CLASS_OFF_DEADLINE_S) .. "s — MEMORY PRE-CHECK DISABLED\n")
+        end
+    end
+    local probe
+    if not pcall(function() probe = StaticFindObject("/Script/UMG.UserWidget") end)
+        or not probe then give_up_check() return nil end
+    local base, want
+    if not pcall(function()
+        base = probe:GetAddress()
+        want = probe:GetClass():GetAddress()
+    end) then give_up_check() return nil end
+    base, want = math.tointeger(base), math.tointeger(want)
+    if base == nil or want == nil or base == 0 or want == 0 then give_up_check() return nil end
+    for off = 0, 0x40, 8 do
+        local ok, v = pcall(function() return m.read_ptr(base, off) end)
+        if ok and v == want then
+            CLASS_OFF = off
+            print(string.format("[KakarotAccess] UObject class pointer at +0x%X (derived)\n", off))
+            return CLASS_OFF
+        end
+    end
+    give_up_check()
+    return nil
+end
+
+-- Rejections are the interesting signal in both directions: silence means the pre-check never
+-- fires (and a screen going quiet is NOT its fault), a rising count means it is catching
+-- handles that would have killed the process. One line per REJECT_LOG_EVERY, so it costs
+-- nothing in the normal case and still shows up in a user's UE4SS.log.
+local rejects = 0
+local REJECT_LOG_EVERY = 200
+
+-- SELF-DISABLING GUARD. `GetAddress` is overridden only on the UObject family; on any other
+-- RemoteObject UE4SS raises `Call to RemoteObject:GetAddress on polymorphic type is not allowed`,
+-- and that error PIERCES pcall — it unwinds to UE4SS's callback boundary, killing the caller's
+-- whole tick mid-function with nothing catchable anywhere. On 2026-07-25 exactly one such call
+-- site (the array check in Core.array_of) silenced seven menus for a whole session.
+-- The call site is fixed, but a guard whose failure mode is "several screens die silently forever"
+-- must not depend on nobody ever making that mistake again. So the attempt is TRANSACTIONAL: mark
+-- it pending before the call, clear it after. If the tick dies, the mark survives in _G and the
+-- next call concludes the last attempt was fatal, disables the pre-check for the session and SAYS
+-- SO. Worst case becomes one lost tick plus a log line, instead of a broken mod.
+local guard = _G.__KakarotAliveGuard
+if not guard then guard = { pending = false, disabled = false }; _G.__KakarotAliveGuard = guard end
+
+-- MANUAL KILL SWITCH (Ctrl+Shift+G, 2026-07-25). Separate from `guard.disabled`, which is the
+-- automatic self-protection. This one exists because the pre-check's failure mode is invisible: if
+-- it ever rejects a LIVE object it silences whatever was reading it, with no error and nothing in
+-- the log but a rising rejection count that looks exactly like success. The user hit "first dialogue
+-- reads, later ones do not" — the shape of a guard that starts refusing — and a count of 401
+-- rejections cannot distinguish real dead handles from false positives. One keypress can: turn this
+-- off, and if the screen comes back, the pre-check was the cause. State in _G so it survives
+-- Ctrl+Shift+R (mem.lua itself is protected from reloads, but the flag should be readable anyway).
+if _G.__KakarotPrecheck == nil then _G.__KakarotPrecheck = true end
+function Mem.set_precheck(on) _G.__KakarotPrecheck = on and true or false end
+function Mem.toggle_precheck()
+    _G.__KakarotPrecheck = not _G.__KakarotPrecheck
+    return _G.__KakarotPrecheck
+end
+function Mem.precheck_on() return _G.__KakarotPrecheck end
+
+-- Is this handle safe to hand to UE4SS at all? See the block comment above.
+-- CONTRACT: pass only UObject-family handles. TArray/struct wrappers go through Core.valid_ref.
+function Mem.alive(obj)
+    if obj == nil then return false end
+    if not _G.__KakarotPrecheck then return true end   -- Ctrl+Shift+G: off = pre-2026-07-25 behaviour
+    if guard.disabled then return true end
+    if guard.pending then
+        guard.disabled = true
+        print("[KakarotAccess] memory pre-check DISABLED: GetAddress raised THROUGH pcall — a "
+            .. "non-UObject handle reached Mem.alive. Reads continue unguarded; find the caller.\n")
+        return true
+    end
+    local off = class_off()
+    if off == nil then return true end                    -- cannot check → do not block
+    guard.pending = true
+    local a = Mem.raw_addr(obj)
+    guard.pending = false
+    if a == nil then return true end                      -- handle cannot answer → do not block
+    a = math.tointeger(a)
+    if a == nil then return true end                      -- not an address we can read → open
+    if a == 0 then return false end                       -- a real null: never touch it
+    -- No pcall around these two: read_ptr is SEH-guarded (an unreadable address returns nil,
+    -- it cannot fault), and its only Lua-level failure mode is a non-integer argument, which
+    -- is ruled out above (`a` went through math.tointeger, `off` is our own derived integer,
+    -- and read_ptr itself pushes an integer). This is the hottest path in the mod — each
+    -- `pcall(function() … end)` allocates a fresh closure, so the check must not add any.
+    local bad
+    local cls = m.read_ptr(a, off)
+    if cls == nil or cls == 0 then                        -- base unreadable or classless
+        bad = true
+    else
+        local meta = m.read_ptr(cls, off)
+        bad = (meta == nil or meta == 0)                  -- that "class" is not a UObject
+    end
+    if bad then
+        rejects = rejects + 1
+        -- The COUNT alone was useless: 401 rejections reads the same whether they were genuinely
+        -- dead handles or live objects being wrongly refused. So log the raw evidence — the stored
+        -- address and the class pointer we read off it. No dereference, so this is as safe as the
+        -- check itself. A REPEATING address means a live object is being rejected over and over
+        -- (a false positive); addresses that never repeat are ordinary churn. `cls == 0` with a
+        -- plausible-looking address is the signature of GetAddress not pointing at a UObject base,
+        -- which would make the whole pre-check wrong rather than unlucky.
+        if rejects % REJECT_LOG_EVERY == 1 or rejects <= 5 then
+            print(string.format(
+                "[KakarotAccess] memory pre-check: %d rejected (addr=0x%X cls=%s)\n",
+                rejects, a, tostring(m.read_ptr(a, off))))
+        end
+        return false
+    end
+    -- The address comes back as a SECOND value so callers that need it (Core.nonnull) never have
+    -- to call GetAddress themselves — every such call in the mod then sits behind this function's
+    -- transactional guard, which is the point. It is nil on every "cannot check" path above, so a
+    -- caller that must fail CLOSED simply requires it to be present.
+    return true, a
+end
+
+-- Absolute base VA of a live UObject, or nil. Guards every hop (stale objects error) — and
+-- pre-checks the memory first, because the IsValid below is itself a dereference.
 function Mem.addr(obj)
     if not loaded or not obj then return nil end
+    if not Mem.alive(obj) then return nil end
     local ok, a = pcall(function()
         if obj.IsValid and not obj:IsValid() then return nil end
         return obj:GetAddress()
