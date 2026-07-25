@@ -453,10 +453,17 @@ local recent, recent_set = {}, {}
 -- popup that stays on screen for many minutes) re-announce itself once ~24 other texts
 -- evicted its marks — the "desbloqueaste superataque" repeating on its own in free-roam
 -- (user 2026-07-24; the FIFO-eviction hole already noted at fresh_notice's node_rt comment).
--- A text stays pinned for the whole epoch, so its parked window can never re-compose as
--- "fresh" again; a genuinely NEW notice differs in text (or carries fresh content ROWS,
--- checked separately from the pin) and still speaks.
+-- SCOPE (fixed 2026-07-25, user regression): pins last for THIS WINDOW PRESENCE, not for
+-- the whole map epoch. Epoch-wide pinning silenced every notice that legitimately repeats
+-- inside one map — the save confirmations in Options ("¿Guardar?", "Guardando…") speak once
+-- and were then mute for the rest of the session. The parked-window bug the pin exists for
+-- happens while the window STAYS on screen, so presence scope still fixes it; the pins are
+-- released only after the window has been CONTINUOUSLY off screen for PIN_CLEAR_S, which is
+-- far longer than the tick-to-tick blink the recent-set was built for (so a blink can never
+-- unpin, and a genuine reopen always can).
 local pinned_set = {}
+local PIN_CLEAR_S = 2.0    -- sustained absence that counts as a real close
+local gone_since = nil     -- os.clock of the falling edge, nil while on screen
 local function was_recent(m) return m ~= nil and (recent_set[m] == true or pinned_set[m] == true) end
 local function pin(m) if m then pinned_set[m] = true end end
 local function mark_recent(m)
@@ -567,8 +574,14 @@ function Dialog.is_active()
     if not Core.on_screen(win) then
         window_gone()
         was_on = false
+        -- Sustained absence = a real close: release the per-presence pins (see pinned_set).
+        gone_since = gone_since or os.clock()
+        if (os.clock() - gone_since) >= PIN_CLEAR_S and next(pinned_set) ~= nil then
+            pinned_set = {}
+        end
         return false
     end
+    gone_since = nil
     if not was_on then
         was_on = true
         appear_t = os.clock()
@@ -740,7 +753,7 @@ Transition.on_begin("screen_dialog", function()
     spoken, notice_msg, notice_full, notice_extra = nil, nil, nil, nil
     choice_prompt, choice_key, choice_marked = nil, nil, nil
     dlg_last, enum_last, state, win = nil, nil, nil, nil
-    was_on, appear_t = false, -1e9
+    was_on, appear_t, gone_since = false, -1e9, nil
 end)
 
 return Dialog

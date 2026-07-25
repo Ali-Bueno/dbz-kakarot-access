@@ -116,16 +116,29 @@ function Discover.run()
         -- fetched ONCE (see perf note)
         local ALLTEXT = FindAllOf("CFUIMultiLineTextBox") or {}
 
-        local function valid(o) return o ~= nil and o:IsValid() == true end
+        -- Guarded, NOT a bare IsValid (fixed 2026-07-25). This dev tool had its own private
+        -- helpers that skipped the mod's guards, and it cost a whole dump: the GAME OVER section
+        -- died at `isvis(bar)` on a `List_Bar0N` that was non-nil but wrapped a NULL UObject —
+        -- `IsVisible()` then raised "Tried calling a member function but the UObject instance is
+        -- nullptr", which PIERCES pcall and killed the block (UE4SS.log 11:40:55). Core.valid runs
+        -- the SEH-guarded memory pre-check first, which is exactly what catches a NULL-wrapping
+        -- handle before anything dereferences it. A diagnostic that can die is worse than useless:
+        -- it destroys the evidence it was written to collect.
+        local valid = Core.valid
         local function live(o) return valid(o) and o:GetFullName():find("/Engine/Transient", 1, true) ~= nil end
         local function cname(o) return valid(o) and o:GetClass():GetFName():ToString() or "?" end
         local function short(fn) return fn:match("([^%.]+%.?[^%.]*)$") or fn end
 
+        -- Every one of these asks Core.valid FIRST. On a handle that wraps NULL, the member call
+        -- itself is a pcall-piercing abort (see the note on `valid` above), so "wrapped in pcall"
+        -- is no protection at all — the validity gate is.
         local function isvis(o)
+            if not valid(o) then return "dead" end
             local ok, v = pcall(function() return o:IsVisible() end)
             return ok and tostring(v) or "err"
         end
         local function vis_enum(o)
+            if not valid(o) then return "dead" end
             local ok, v = pcall(function() return o:GetVisibility() end)
             if not ok then return "err" end
             local n = tonumber(v)
@@ -133,10 +146,14 @@ function Discover.run()
             return tostring(v)
         end
         local function opacity(o)
+            if not valid(o) then return "dead" end
             local ok, v = pcall(function() return o.RenderOpacity end)
             return ok and v ~= nil and string.format("%.2f", v) or "-"
         end
         local function color_a(o)
+            -- The CHAINED read is the dangerous part: `o.ColorAndOpacity` can hand back a handle
+            -- wrapping NULL and `.A` on that is the piercing abort, so gate the owner first.
+            if not valid(o) then return "dead" end
             local ok, v = pcall(function() return o.ColorAndOpacity.A end)
             return ok and v ~= nil and string.format("%.2f", v) or "-"
         end
@@ -433,9 +450,20 @@ function Discover.run()
         -- Press F7 while the defeat menu is on screen.
         out[#out + 1] = "==== GAME OVER (Gameover_C: detection + read path) ===="
         flush()
+        -- STEP MARKERS + a flush after each (2026-07-25). The first run of this section produced a
+        -- dump that ENDED at the header above: the block died somewhere before the next flush, and
+        -- with 35 lines between them the dump could not say where. An abort here pierces pcall, so
+        -- the only way to localise it is to make the file itself the breadcrumb trail — each step
+        -- is written to disk before the risky call that follows it.
+        local function step(msg)
+            out[#out + 1] = "   [step] " .. msg
+            flush()
+        end
         do
+            step("FindAllOf(Gameover_C)")
             local hosts = FindAllOf("Gameover_C") or {}
             out[#out + 1] = string.format("-- FindAllOf(Gameover_C) = %d", #hosts)
+            flush()
             for _, h in pairs(hosts) do
                 if valid(h) and not h:GetFullName():find("Default__", 1, true) then
                     out[#out + 1] = "-- HOST " .. short(h:GetFullName())
@@ -444,9 +472,11 @@ function Discover.run()
                             local ok, o = pcall(function() return h:GetRenderOpacity() end)
                             return ok and tostring(o) or "-"
                         end)()
+                    flush()
                     -- positional rows (what the adapter probes first)
                     for i = 0, 5 do
                         local nm = "List_Bar0" .. i
+                        step("List_Bar0" .. i)
                         local bar = Core.member(h, nm)
                         if bar ~= nil then
                             out[#out + 1] = string.format("     .%s reflected=yes valid=%s vis=%s txt=%q",
@@ -454,7 +484,13 @@ function Discover.run()
                                 tostring(Core.text_of(Core.member(bar, "Txt_List"))))
                         end
                     end
-                    -- the native selection array + index (reflected first, then raw)
+                    -- the native selection array + index (reflected first, then raw).
+                    -- PRIME SUSPECT for the death of the first run: if SelectionWidgetArray is a
+                    -- FIXED C array rather than a TArray, GetArrayNum on it is the 2026-07-16
+                    -- pcall-piercing throw. Core.array_of now refuses non-ArrayProperty members —
+                    -- but only once the class's property set has been built, and F7 runs outside
+                    -- the poll where that budget lives, so the gate may well be open right here.
+                    step("array_of(SelectionWidgetArray)")
                     local arr, n = Core.array_of(h, "SelectionWidgetArray")
                     out[#out + 1] = "     SelectionWidgetArray = " .. tostring(n)
                     if arr and n then
@@ -465,6 +501,7 @@ function Discover.run()
                                 tostring(Core.text_of(Core.member(row, "Txt_List"))))
                         end
                     end
+                    step("CurrentSelectIndex")
                     out[#out + 1] = string.format("     CurrentSelectIndex reflected=%s  native@0x%x=%s",
                         tostring(Core.member(h, "CurrentSelectIndex")),
                         OFF.gameover.selectedIndex,
