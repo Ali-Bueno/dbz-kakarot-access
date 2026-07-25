@@ -285,8 +285,11 @@ Prefer **event-driven** over polling — it's cheaper and more responsive:
 
 1. **Level/mode changes** → `RegisterLoadMapPostHook`, `RegisterBeginPlayPostHook`,
    `RegisterInitGameStatePostHook`.
-2. **A screen/widget appearing** → `NotifyOnNewObject("/Script/UMG.UserWidget", cb)` (fires per
-   construction, subclasses included). Cache the ref on first sight.
+2. **A screen/widget appearing** → `NotifyOnNewObject` on the **specific** `WBP_*_C` class you care about
+   (fires per construction, subclasses included). Cache the ref on first sight. **Do NOT register on the
+   `UserWidget`/`TextBlock` base classes** — that fires for every widget in the game and crashes on
+   mid-construction access during a construction burst (see §9 "firehose"); use a throttled `FindAllOf`
+   for any "any-widget" need instead.
 3. **A value/text/selection changing** → `RegisterHook` on the game's setter (e.g. a `SetText`-equivalent
    or a cursor-move UFunction). Fires for **all instances** of the class; `self` is the instance. Read
    wrapped params with `param:Get()`.
@@ -340,6 +343,25 @@ function cached_all(cls, tick) ... end
 ```
 Prefer the **top-level instance** (direct GameInstance child) when a class has several live copies (a real
 window + a nested collapsed one) — caching the wrong one makes detection silently fail.
+
+### Broad `NotifyOnNewObject` on a base widget class is a FIREHOSE → crash
+`NotifyOnNewObject` fires **by inheritance**, so registering on a base class runs your callback for **every
+subclass instance**. `NotifyOnNewObject("/Script/UMG.UserWidget", …)` (and `TextBlock`/`RichTextBlock`)
+fires for **every widget/text block in the game** — hundreds constructed in a burst when a dialog or menu
+opens. Touching each object **mid-construction** in that burst (even just `GetFullName()`) hard-crashed a
+UE4.26 game (DBZ Sparking Zero) the instant the first save-data dialog appeared — a native abort pcall
+can't catch. A per-tick `FindAllOf` is slow but does NOT crash there, because it only ever sees
+**already-constructed** objects; the crash is specific to the construction-time callback × volume.
+**Rules:**
+- Register `NotifyOnNewObject` **only on the narrow, specific classes you act on** (`WBP_Dialog_000_C`, a
+  named HUD/loading class), never on `UserWidget`/`TextBlock`/`RichTextBlock`. The working **DBZK_Fix** mod
+  (same UE4 AT engine) confirms this: it only ever notifies on `LocalPlayer`, `CameraComponent`,
+  `ATCheatManager`, and specific scene classes — and touching the fresh object in the callback (`IsValid()`
+  then read/write) is fine at that low volume/breadth.
+- If you genuinely need "any widget" (focus tracking), use a **throttled, load-gated `FindAllOf`** for that
+  one path, or the engine's focused-widget accessor — not a base-class notify.
+- Save/menu flows often have a clean UFunction hook point instead of watching widgets: DBZK_Fix triggers
+  off `RegisterHook("/Script/AT.ATSaveManager:Load"/"Save")`. Look for the game's save-manager class.
 
 ### Some property reads ABORT UNCATCHABLY (pcall can't save you)
 Calling a method on a null/dangling UObject, and **nested struct reads like `widget.RenderTransform

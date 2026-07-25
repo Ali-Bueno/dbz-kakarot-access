@@ -10,17 +10,33 @@ see what the Live View shows live.
 
 ## 1. The dumpers (offline class/property maps)
 
-All are triggered by a keybind while the game runs (defaults; rebindable in `Mods/Keybinds/Scripts/main.lua`)
-and write next to `UE4SS.dll`. Toggle "load all assets first" per dumper in `UE4SS-settings.ini` so
-lazily-loaded UI classes are included.
+Each dumper has **three** triggers: a keybind, a button in the GUI's *Dumpers* tab, and a **global Lua
+function**. The function is the important one — it means a dump is something you fire from a console
+command or a hook, mid-session, without stopping ([`ue4ss-live-workflow.md`](ue4ss-live-workflow.md) §2).
+Output goes next to `UE4SS.dll`. Keybinds are declared in `Mods/Keybinds/Scripts/main.lua` (rebindable),
+which is also the ground truth for which globals your build exposes.
 
-| Dumper | Keybind | Output | Contains | Config section |
-|---|---|---|---|---|
-| **Object dump** | `Ctrl+J` | `UE4SS_ObjectDump.txt` | every live UObject: name, class, outer, flags, property offsets | `[ObjectDumper]` |
-| **C++ headers (CXX)** | `Ctrl+H` | `CXXHeaderDump/*.hpp` (+ `_enums`) | full class/struct definitions: **every UPROPERTY + UFUNCTION signature**, per Blueprint/base class | `[CXXHeaderGenerator]` |
-| **UHT headers** | `Ctrl+Numpad 9` | UHT-compatible `.hpp` | headers for a mirror `.uproject` (C++ modding) | `[UHTHeaderGenerator]` |
-| **.usmap** | `Ctrl+Numpad 6` | `.usmap` | property mappings for unversioned-property tools | — |
-| **.umap actor CSV** | `Ctrl+Numpad 7` | `ue4ss_static_mesh_data.csv` | actor transforms for in-editor level rebuild | — |
+| Dumper | Keybind | Global function | Output | Contains | Config section |
+|---|---|---|---|---|---|
+| **Object dump** | `Ctrl+J` | `DumpAllObjects()` | `UE4SS_ObjectDump.txt` | every live UObject: name, class, outer, flags, property offsets | `[ObjectDumper]` |
+| **C++ headers (CXX)** | `Ctrl+H` | `GenerateSDK()` | `CXXHeaderDump/*.hpp` (+ `_enums`) | full class/struct definitions: **every UPROPERTY + UFUNCTION signature**, per Blueprint/base class | `[CXXHeaderGenerator]` |
+| **UHT headers** | `Ctrl+Num9` | `GenerateUHTCompatibleHeaders()` | `UHTHeaderDump/` | headers for a mirror `.uproject` (C++ modding) | `[UHTHeaderGenerator]` |
+| **.usmap** | `Ctrl+Num6` | `DumpUSMAP()` | `Mappings.usmap` | property mappings for unversioned-property tools (FModel) | — |
+| **All actors** | `Ctrl+Num7` | `DumpAllActors()` | `<timestamp>-ue4ss_actor_data.csv` | every loaded actor | — |
+| **Static meshes** | `Ctrl+Num8` | `DumpStaticMeshes()` | `<timestamp>-ue4ss_static_mesh_data.csv` | mesh transforms for in-editor level rebuild (needs `zMapGenBP.zip` from Releases) | — |
+| **Lua type bindings** | — | `GenerateLuaTypes()` (GUI: *Dump Lua Bindings*) | `Mods/shared/types/` | LuaCATS annotations for the game's own classes → editor autocompletion | — |
+
+*Verified on UE4SS **v3.0.1**: the first six globals are exactly what the built-in `Keybinds` mod calls.
+`GenerateLuaTypes` is not keybound there — use the GUI button on that version.*
+
+**Accuracy warnings that matter:**
+- The CXX generator is described by its own authors as *"a very shoddily made generator"* — no UHT
+  macros, no correct includes, and **the memory layout is not accurate** (`KeepMemoryLayout=1` is
+  documented as having no purpose yet). Bitfields are always emitted as `uint8` even when the original is
+  `uint32` — spot them by two bitfields sharing an offset with the next property 4 bytes later. Treat CXX
+  headers as a **property catalogue**, never as a memory map.
+- `LoadAllAssetsBefore…=1` makes a dump complete but costs **gigabytes of RAM** and, per the official
+  warning, **crashes the game if you keep playing past the main menu afterwards**. One-shot only.
 
 ### Which one to use for UI work
 - **`Ctrl+H` (CXX headers) is the authoritative source for a widget's structure.** Want to know if
@@ -54,14 +70,32 @@ GuiConsoleFontScaling = 1     ; bump if the text is tiny
 No mod is required — the console + Live View are core UE4SS. (You can keep them **off** for shipping/play
 and only turn them on for a discovery session.)
 
+> **Accessibility caveat — read this first.** The Live View is an **ImGui GUI**: a blind developer
+> cannot use it. Every capability below has a text equivalent driven from console commands and files —
+> see [`ue4ss-reflection-cookbook.md`](ue4ss-reflection-cookbook.md) and
+> [`templates/ue4ss-inspector/`](../../../templates/ue4ss-inspector/). This section is kept for sighted
+> collaborators and for cross-checking.
+
 ### Find an object
 Right-click the search bar for filters:
 - **Instances only** — live actors/widgets/components with real-time values (what you usually want).
-- **Non-instances / CDOs only** — loaded defaults, read-only.
-- **Regex**, **class-name filter**, **property-name/type filter** — narrow to e.g. `Pause`, `Xcmn_Win`,
-  `Battle_Tips`.
+  Named `<package>_C` or `<package>_C_<instance id>`.
+- **Non-instances only** — loaded package defaults not present in the level; **not editable**.
+- **CDOs only** / **Include CDOs** — class default objects (`…_GEN_VARIABLE`, `Default__<package>`).
+- **Include inheritance** — also match children of the results.
+- **Use Regex for search**.
+- **Exclude class names** / **Include class names** — comma-separated list, e.g.
+  `CanvasPanelSlot, StaticMeshComponent, Package, Function`.
+- **Has property** — objects owning a property with that exact name (only applies with search text).
+- **Has property type** — e.g. `BoolProperty`, `MulticastInlineDelegateProperty`.
+- **Function parameter flags** — filter functions by parameter/return flags.
+- **Match Memory Address** — if the query is a valid hex address, resolve the object there (needs
+  `[General] bEnableSeachByMemoryAddress`, which does not exist in the 3.0.1 ini).
+- **Save filters** — persisted to `<working dir>/liveview/filters.meta.json` and restored on restart.
 
-Expand an instance to walk its children (WidgetTree → panels → nodes).
+Expand an instance to walk its children (WidgetTree → panels → nodes). `<<` / `>>` navigate the history
+of inspected objects. `[Debug] LiveViewObjectsPerGroup` (default `32768`) trades group count for lag
+when a group is expanded.
 
 ### Watch a property change live — THE technique for "which field is the selection?"
 1. Open the menu in-game, find its container instance in Live View (e.g. `Xcmn_Pause_C_0`).
@@ -70,7 +104,12 @@ Expand an instance to walk its children (WidgetTree → panels → nodes).
 4. **Move the cursor in-game and watch which value flips.** That's your selection signal — no colour, no
    guessing. If nothing in reflection flips, the highlight is material/animation-driven (read the menu
    behaviourally instead).
-5. Watches can **write to a file on exit** and persist to `watches/watches.meta.json`.
+5. Each watch has two checkboxes (enable/disable, **write to file** → a `.txt` under
+   `<working dir>/watches/` when the game closes) and a save option that re-adds it on the next launch,
+   persisted in `watches/watches.meta.json`.
+
+**Text equivalent:** `probe <Class>` in the inspector template — snapshot the scalar properties, move the
+cursor, snapshot again, print the diff. Same answer, no GUI ([cookbook §4](ue4ss-reflection-cookbook.md)).
 
 ### Call any function
 The **"Find functions"** button opens a search over the object's UFUNCTIONs and lets you **call them**
@@ -85,13 +124,19 @@ state won't appear.
 
 ## 3. Recommended discovery flow (replaces most custom dumping)
 
-1. Enable the GUI console (settings above), launch.
-2. **`Ctrl+H`** with `LoadAllAssets…=1` → read the target class's `.hpp` for its real property/function list.
-3. **Live View** → find the live instance, **add watches**, navigate the menu, see what changes.
-4. Only if reflection can't express the state, fall back to a Lua read (behavioural) — and if you must
-   write a throwaway dumper, guard **every** deref with `IsValid` and avoid `RenderTransform`/nested-struct
-   reads (they can abort uncatchably; see [accessibility-patterns](accessibility-patterns.md)).
-5. Iterate with **hot reload** (`Ctrl+R`).
+Full version — including how to avoid restarting at all — in
+**[`ue4ss-live-workflow.md`](ue4ss-live-workflow.md)**. In short:
+
+1. Enable the console + hot reload (settings above), launch.
+2. **One** `Ctrl+H` / `GenerateSDK()` with `LoadAllAssets…=1` → the offline property catalogue.
+   (This is the one dump that justifies a restart afterwards.)
+3. From then on ask the **running game**: `find` / `dumpclass` / `props` / `probe` from a console command
+   or the command file, output to a text file you read live
+   ([cookbook](ue4ss-reflection-cookbook.md)). Sighted alternative: Live View + watches.
+4. Only if reflection can't express the state, fall back to §4 below — and guard **every** deref with
+   `IsValid`, avoiding `RenderTransform`/nested-struct reads (they can abort uncatchably; see
+   [accessibility-patterns](accessibility-patterns.md)).
+5. Iterate with **hot reload** (`Ctrl+R`), never a relaunch.
 
 ---
 
@@ -149,6 +194,6 @@ with a one-shot probe: `Mem.ptr(host, base)` must equal `Mem.addr(host.Name)` (e
 
 ### Related helper — pooled instances whose active copy alternates
 Unrelated to the above but a common "found but silent" cause: some screens have **several pooled instances**
-(`Start_Char_C_3`/`_4`) and only one is on-screen at a time, alternating. Caching a single instance
-(`cached_live`) locks onto one and goes mute when the other is live. Pick the on-screen one each tick
-instead (`Core.first_on_screen` = `cached_all` + `on_screen` filter).
+(`Start_Char_C_3`/`_4`) and only one is on-screen at a time, alternating. Caching a single instance locks
+onto one and goes mute when the other is live. Pick the on-screen one each tick instead (find-all +
+`on_screen` filter), not a single cached ref.
