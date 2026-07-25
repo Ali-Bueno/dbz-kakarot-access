@@ -55,6 +55,10 @@ local prev_btn = 0        -- previous button bitmask (edge detection)
 local tk = 0              -- step counter (double-tap timing)
 local last_r3_tk = nil    -- tick of the previous R3 press
 local pending_open_tk = nil   -- R3 pressed; holding to see if a 2nd tap makes it a toggle
+-- Opened from the KEYBOARD. Decides one thing only: whether "no pad snapshot" means the
+-- picker must be torn down (pad-opened: the pad went away mid-menu) or is the normal state
+-- (keyboard-opened on a machine with no pad at all).
+local kb_open = false
 
 local B = Input.BTN
 
@@ -101,6 +105,7 @@ end
 -- residual press that closed the menu never reaches the game.
 local function do_close(mode)
     open = false
+    kb_open = false
     if mode == "select" then
         local cat = cats[ci]
         local it = cat and cat.items[ii]
@@ -118,6 +123,53 @@ local function do_close(mode)
     draining = true
 end
 
+-- ---- keyboard control (the picker without a pad) ------------------------------------
+--
+-- The picker is a pad modal: everything below lives in step(), which bails out the moment
+-- Input.read() has no snapshot — so on a keyboard-only setup the menu could not be opened
+-- at all, and with a pad merely idle it could not be driven. These commands drive the SAME
+-- state machine, and they are QUEUED rather than executed where the keybind fires: a
+-- RegisterKeyBind callback is not the game thread, and do_open() reads the world
+-- (Nav.list_targets). step() already runs on the game thread every 20 ms, so consuming the
+-- command there costs nothing and keeps every world read where it belongs.
+local kb_cmd = nil
+
+-- Called from main.lua's keybinds (via App). One pending command is enough — a human
+-- cannot outrun a 20 ms poll, and dropping the older of two same-tick presses is the
+-- right behaviour anyway.
+function Menu.key(cmd) kb_cmd = cmd end
+
+local function handle_kb(cmd)
+    if cmd == "toggle" then
+        if open then
+            do_close("cancel")
+        elseif Nav.field_ready() then
+            -- Respect the pad-modal mutex exactly as the R3 path does: if the config menu
+            -- owns the pad, the picker must not steal it.
+            local modal = _G.__KakarotPadModal
+            if not modal or modal == "radar" then do_open(); kb_open = true end
+        end
+        return
+    end
+    if not open then return end
+    if cmd == "select" then do_close("select") return end
+    if cmd == "stop" then do_close("stop") return end
+    if #cats == 0 then return end
+    -- A real picker session: a later R3 must read as cancel, not as the second half of an
+    -- explore double-tap (same reason the pad navigation clears it).
+    last_r3_tk = nil
+    local n = #cats
+    if cmd == "cat_next" then ci = ci % n + 1; ii = 1; announce_item(true) return end
+    if cmd == "cat_prev" then ci = (ci - 2) % n + 1; ii = 1; announce_item(true) return end
+    local m = #cats[ci].items
+    if m == 0 then return end
+    if cmd == "next" then
+        ii = ii % m + 1; announce_item(false)
+    elseif cmd == "prev" then
+        ii = (ii - 2) % m + 1; announce_item(false)
+    end
+end
+
 -- ---- per-tick step (game thread) ----------------------------------------------------
 
 local function step()
@@ -127,7 +179,7 @@ local function step()
     -- pad blocked across a level change.
     if Transition.active() then
         if blocked then Input.block(false) end
-        blocked, open, draining = false, false, false
+        blocked, open, draining, kb_open = false, false, false, false
         cats = {}
         prev_btn = 0
         last_r3_tk, pending_open_tk = nil, nil
@@ -135,14 +187,29 @@ local function step()
         return
     end
 
+    -- Keyboard commands FIRST: they must work with no pad attached, and the snapshot check
+    -- right below returns early in exactly that case.
+    if kb_cmd then
+        local cmd = kb_cmd
+        kb_cmd = nil
+        handle_kb(cmd)
+    end
+
     local snap = Input.read()
     if not snap then
-        -- pad lost — never leave the game blocked
+        -- No pad snapshot. The pad side is always torn down (never leave the game blocked),
+        -- but this is ALSO the steady state of a keyboard-only player, and blindly clearing
+        -- `open` here would kill a keyboard-opened picker 20 ms after it opened. So only a
+        -- PAD-opened menu counts as "pad lost".
         if blocked then Input.block(false) end
-        blocked, open, draining = false, false, false
+        blocked, draining = false, false
         prev_btn = 0
         last_r3_tk, pending_open_tk = nil, nil
-        if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
+        if not kb_open then open = false end
+        -- The keyboard picker still needs the field safety the pad path gets below: a
+        -- battle or cutscene starting while it is open must close it.
+        if open and not Nav.field_ready() then do_close("cancel") end
+        if not open and _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         return
     end
 
@@ -248,7 +315,7 @@ function Menu.start()
     PadPoll.register("radar_menu", step, function()
         -- never strand the pad in a blocked state on an error
         if blocked then Input.block(false) end
-        blocked, open, draining = false, false, false
+        blocked, open, draining, kb_open = false, false, false, false
         if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
     end)
 end
@@ -257,7 +324,7 @@ function Menu.stop()
     running = false
     PadPoll.unregister("radar_menu")
     if blocked then Input.block(false) end
-    blocked, open, draining = false, false, false
+    blocked, open, draining, kb_open = false, false, false, false
     cats = {}
     if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
 end

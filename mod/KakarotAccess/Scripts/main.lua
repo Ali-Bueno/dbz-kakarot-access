@@ -76,6 +76,29 @@ RegisterKeyBind(Key.F3, function() App.nav_toggle() end)
 -- Shift+F3: toggle NavMesh route guidance (beacon follows path corners vs straight line).
 RegisterKeyBind(Key.F3, { ModifierKey.SHIFT }, function() App.nav_route_toggle() end)
 
+-- === Radar target picker from the KEYBOARD ====================================
+-- The picker is normally an R3 pad modal, so a keyboard-only player could not reach it at
+-- all (its step() bails out when there is no pad snapshot). These keys drive the same menu;
+-- each one only QUEUES a command, which the picker consumes on the game thread.
+-- Ctrl+F3 completes the radar family: F3 = radar on/off, Shift+F3 = route, Ctrl+F3 = picker.
+RegisterKeyBind(Key.F3, { ModifierKey.CONTROL }, function() App.radar_key("toggle") end)
+-- Move within the category. PageUp/PageDown are the RECOMMENDED pair: the game itself
+-- leaves them unbound, while its default keyboard layout puts mount/dismount on the up and
+-- down ARROWS (save InputAssign: Ride = Up, Ride_Off = Down). UE4SS keybinds do not swallow
+-- the key, so an arrow press while the picker is open still reaches the game and could
+-- dismount you. The arrows are bound anyway because they were asked for, and they are
+-- perfectly safe on foot.
+RegisterKeyBind(Key.PAGE_DOWN, function() App.radar_key("next") end)
+RegisterKeyBind(Key.PAGE_UP, function() App.radar_key("prev") end)
+RegisterKeyBind(Key.DOWN_ARROW, function() App.radar_key("next") end)
+RegisterKeyBind(Key.UP_ARROW, function() App.radar_key("prev") end)
+-- Change category (the pad's R1 / L1).
+RegisterKeyBind(Key.RIGHT_ARROW, function() App.radar_key("cat_next") end)
+RegisterKeyBind(Key.LEFT_ARROW, function() App.radar_key("cat_prev") end)
+-- Track the focused target (the pad's A). Every one of these is a no-op while the picker
+-- is closed, so none of them changes anything outside it.
+RegisterKeyBind(Key.RETURN, function() App.radar_key("select") end)
+
 -- F5: announce the tracked objective on demand (type, distance, clock direction).
 RegisterKeyBind(Key.F5, function() App.nav_where() end)
 

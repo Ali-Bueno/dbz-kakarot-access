@@ -68,6 +68,14 @@ end
 -- registry (probing a widget mid-teardown is an uncatchable abort).
 function W.update()
     if not armed then return end
+    -- Wait out an important line (Speech.protected()) before probing or speaking. These
+    -- prompts are queued, so they cannot cut a notice themselves — but the registry re-arms
+    -- this watcher on the screen change that happens when a notice's screen releases, so the
+    -- whole action bar landed on the reader's queue while the notice was still playing, and
+    -- the player hears the notice buried under "A: confirmar, B: atrás…" (user 2026-07-25:
+    -- the map's "new area available" and the skill-tree popups). Returning changes no state,
+    -- so the bar is still announced once the window clears.
+    if Speech.protected() then return end
     tick = tick + 1
     if tick % POLL_EVERY ~= 0 then return end
 

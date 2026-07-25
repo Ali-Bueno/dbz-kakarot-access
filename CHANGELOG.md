@@ -2,6 +2,43 @@
 
 ---
 
+## v0.1.2 - July 25, 2026
+
+### Bug Fixes
+- **Remapped controller buttons are now announced correctly.** If you changed your button
+  layout in Options, the mod kept naming the buttons the game shipped with - melee moved
+  from B to X was still read as "B". This affected far more than the settings screen:
+  every button prompt in the game, the on-screen action bar and every tutorial line was
+  telling you the wrong button. The mod now reads your actual layout from your save.
+- **Messages are no longer cut off mid-sentence.** When a notice appeared - a new area
+  unlocked on the map, a skill acquired, the popup explaining what a skill needs - the
+  screen underneath announced itself again a moment later and silenced the message before
+  it finished. Notices are now allowed to finish; whatever was going to be read waits its
+  turn instead of interrupting.
+- **A dialog you trigger again is read again.** The same message shown a second time - by
+  picking the same option, or a different option with the same text - stayed silent,
+  because the mod remembered having said those words. It now only remembers for as long
+  as that window is on screen: closing it and opening it again is a new message.
+
+### Improvements
+- **Keyboard players can use the radar target picker.** It used to be reachable only by
+  clicking the right stick. **Ctrl+F3** opens and closes it, **Page Up / Page Down** (or
+  the up and down arrows) move through targets, the left and right arrows change category,
+  and **Enter** locks onto the focused one.
+- **The button-config screen reads keyboard keys.** On the keyboard tabs it used to
+  announce the equivalent controller button, because the key itself looked unreadable.
+  It now says the real key - "tecla: barra espaciadora", "tecla: clic izquierdo".
+
+### Notes
+- The new keyboard shortcuts need the game restarted once after updating (keybinds are
+  registered when the game starts).
+- The up and down arrows move through the picker because they were requested, but the
+  game's own default keyboard layout puts mount/dismount on those two keys, and the mod
+  does not take keys away from the game. **Page Up / Page Down are the safer pair** while
+  you are riding something.
+
+---
+
 ## v0.1.1 - July 21, 2026
 
 ### Bug Fixes

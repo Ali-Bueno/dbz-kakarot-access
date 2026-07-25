@@ -1207,7 +1207,22 @@ end
 -- screen = the menu's own name, spoken ONLY when entering the screen (context
 -- change), before the focused item. tab = the current tab/section, spoken on tab
 -- change. Either may be nil.
+-- DEFER the whole readout while an IMPORTANT line is still playing (Speech.protected()).
+-- This is the shared half of the priority rule that speech.lua documents and that only two
+-- adapters (quest_objective, screen_community) had wired up by hand. Why it belongs here
+-- (user report 2026-07-25: reward/area notices cut off in the skill tree and on the map):
+-- a notice is spoken by screen_dialog with say_protected (interrupt=true + a protection
+-- window), and screen_dialog then RELEASES the screen the very next poll. The adapter below
+-- it re-commits, the registry calls its reset() — which clears Announcer.open — and the next
+-- focus() therefore takes the "entering the screen" branch and speaks with interrupt=true,
+-- which clears the reader's whole queue and shreds the notice mid-sentence. The offender is
+-- never the notice's own screen, so fixing it adapter by adapter is whack-a-mole; every menu
+-- reader goes through this one function. Deferring (rather than dropping) costs nothing:
+-- focus() is called every tick with the CURRENT state, so the moment the window clears the
+-- announcement fires with whatever is focused then — and moves made during a notice collapse
+-- into one readout instead of a burst. Bounded by speak_seconds' 6 s cap, so it cannot hang.
 function Announcer:focus(screen, tab, name, value, tooltip_fn)
+    if Speech.protected() then return end
     self.t = self.t + 1
     local function tip() return tooltip_fn and tooltip_fn() or nil end
 

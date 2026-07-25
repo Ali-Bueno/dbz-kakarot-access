@@ -28,7 +28,9 @@ changing how the game plays for everyone else.
 ## Requirements
 
 - **DRAGON BALL Z: KAKAROT** (Steam).
-- A **controller** (required — see above).
+- A **controller** (still recommended — see above). Keyboard support is growing: the button-config
+  screen now reads your actual keyboard keys, and the radar target picker can be driven entirely
+  from the keyboard (see Controls). The config menu and the status sheet still want a pad.
 - A **screen reader** running on Windows — NVDA, JAWS, or the built-in SAPI voice.
 - **UE4SS** (the Unreal script loader) — the installer sets this up for you.
 
@@ -135,6 +137,11 @@ Handy shortcuts that mirror or complement the controller — not required to pla
 | **Ctrl+F2** | Toggle automatic button-help announcements |
 | **F3** | Toggle the navigation radar |
 | **Shift+F3** | Toggle NavMesh route guidance |
+| **Ctrl+F3** | Open / close the radar **target picker** (the R3 menu, from the keyboard) |
+| **Page Down / Page Up** (picker open) | Move through targets (nearest first) |
+| **↓ / ↑** (picker open) | Same — but note the game binds mount/dismount to these by default, so Page Up/Down is the safer pair |
+| **← / →** (picker open) | Previous / next category |
+| **Enter** (picker open) | Lock onto the focused target |
 | **F5** | Announce the tracked objective (distance, clock direction) |
 | **Shift+F5** | Cycle companion tracking |
 | **F8** | Speech test (also names the active screen reader) |

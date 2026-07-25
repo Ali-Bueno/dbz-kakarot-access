@@ -67,8 +67,257 @@ end
 -- index 0=Casa de Goku, 1=Ciénaga Blake. Real feature now lives in screen_map.lua.)
 local MAP_INPUT_TEST = false
 
+-- =====================================================================================
+-- KEYCONFIG PROBE (2026-07-25) — the button-config rows are read with the DEFAULT button
+-- after the player remaps (user: melee B->X and ki X->B, still announced as B and X).
+--
+-- Two hypotheses, and NO static dump can separate them — hence one capture instead of
+-- more guessing (CLAUDE.md §8):
+--   (a) the game REWRITES CFTextIconData.KeyConfigList on a rebind, and we simply speak a
+--       stale cached map (cleared only on Options screen entry) or short-circuit the direct
+--       Controller_Btn_* ids before ever consulting it (ui_archetypes.row_binding);
+--   (b) KeyConfigList stays at the factory values (that is what DefaultKeyConfigList is
+--       there for) and the LIVE assignment lives somewhere else entirely — in which case
+--       every path we have reads the wrong object and the fix is a different data source.
+-- The DIFF between the two arrays answers that outright: entries marked "<<< DIFF" mean
+-- (a); an identical pair with the remap active means (b).
+--
+-- Also captured, because both fixes need it: what each row actually shows (its rich-text
+-- <inputicon> markup is the id we resolve) and any glyph widget under the screen, whose
+-- CurrentDynamicAssignInputControllerId is a LIVE per-widget field that would sidestep the
+-- asset entirely if it answers.
+--
+-- HOW TO RUN: open Options -> the controller/button-config tab with the remap applied, put
+-- the cursor on a remapped action, press F7. Falls through to the normal census when the
+-- Options screen isn't up, so it costs nothing when it isn't wanted.
+-- =====================================================================================
+-- ANSWERED 2026-07-25 (dump_keyconfig_1784989557_001.txt) — the ids are SLOTS and the live
+-- layout is in UATSaveSystem.InputAssign; fix shipped in ui_archetypes.physical_token. Kept
+-- (switched OFF, so F7 is the normal census again) because it is the cheapest way to re-derive
+-- this if a patch moves the save layout: flip to true, open Options, press F7.
+local KEYCONFIG_PROBE = false
+
+local function keyconfig_probe(outfile_for)
+    local A = require("ui_archetypes")
+    local valid = Core.valid
+
+    local host
+    for _, o in pairs(FindAllOf("Start_Option_C") or {}) do
+        if valid(o) and Core.on_screen(o) then host = o break end
+    end
+    if not host then return false end   -- not on Options -> let the normal dump run
+
+    local out, outfile = {}, outfile_for()
+    local function flush() write_lines(outfile, out) end
+    local function add(s) out[#out + 1] = s end
+
+    -- Guarded readers. Every one asks Core.valid FIRST: on this engine a member call on a
+    -- handle wrapping NULL is an abort that PIERCES pcall, and a diagnostic that dies takes
+    -- the evidence with it — so each risky step also gets a marker line + a flush.
+    local function txt(node)
+        if not valid(node) then return "" end
+        local ok, s = pcall(function() return node.Text:ToString() end)
+        if not ok or not s then
+            ok, s = pcall(function() return node:GetText():ToString() end)
+        end
+        return (ok and s) and s:gsub("%s+", " ") or ""
+    end
+    local function sfield(e, f)
+        local ok, v = pcall(function() return e[f] end)
+        if not ok or v == nil then return "" end
+        if type(v) == "userdata" then
+            local oks, s = pcall(function() return v:ToString() end)
+            return oks and s or ""
+        end
+        return tostring(v)
+    end
+    local function short(o)
+        if not valid(o) then return "?" end
+        local ok, s = pcall(function() return o:GetFullName() end)
+        return ok and (s:match("([^%.]+%.?[^%.]*)$") or s) or "?"
+    end
+
+    add("==== KEYCONFIG PROBE — Options / button config ====")
+    add("host: " .. short(host))
+    flush()
+
+    -- 1) The rows as WE read them: label, the rich markup carrying the <inputicon> id, the
+    --    plain sibling (known to hold stale recycled values), and what row_binding returns.
+    add("")
+    add("---- 1) option rows (Xlist_Bar03_C under Start_Option_C) ----")
+    flush()
+    for _, row in pairs(FindAllOf("Xlist_Bar03_C") or {}) do
+        if valid(row) and row:GetFullName():find("Start_Option_C", 1, true) then
+            add("  [step] row " .. short(row))
+            flush()
+            local ok = pcall(function()
+                local tm = Core.member(row, "Txt_Mode")
+                local rich = valid(tm) and tm.ExMainTxt or nil
+                local cursor = Core.is_visible(Core.member(row, "Ins_Cursor_Fad"))
+                add(string.format("    idx=%s cursor=%s name=%q",
+                    tostring(A.row_index(row)), tostring(cursor),
+                    Core.text_of(Core.member(row, "Txt_List")) or ""))
+                add(string.format("    rich(visible=%s)=%q  plain=%q",
+                    tostring(Core.is_visible(rich)), txt(rich),
+                    Core.text_of(tm) or ""))
+                add(string.format("    keyconfig=%s  ->  row_binding=%s",
+                    tostring(A.row_keyconfig(row)), tostring(A.row_binding(row))))
+            end)
+            if not ok then add("    (read failed)") end
+            flush()
+        end
+    end
+
+    -- 2) Any live glyph widget under the screen. CurrentDynamicAssignInputControllerId is
+    --    written per-widget by the game, so if these carry the REMAPPED button they are the
+    --    authoritative live source and no asset lookup is needed at all.
+    add("")
+    add("---- 2) glyph widgets under the screen (live per-widget ids) ----")
+    flush()
+    for _, cls in ipairs({ "Xcmn_Btn_Plat_C", "UAT_UIXcmnPlatBtn", "AT_UIXcmnPlatBtn" }) do
+        for _, w in pairs(FindAllOf(cls) or {}) do
+            if valid(w) and w:GetFullName():find("Start_Option_C", 1, true) then
+                add("  [step] " .. cls .. " " .. short(w))
+                flush()
+                pcall(function()
+                    local ids = {}
+                    local arr, n = Core.array_of(w, "CurrentDynamicAssignInputControllerId")
+                    if arr then
+                        for i = 1, n do
+                            local oks, s = pcall(function() return arr[i]:ToString() end)
+                            ids[#ids + 1] = oks and s or "?"
+                        end
+                    end
+                    add(string.format("    ctrlIds=[%s] action=%s token=%s",
+                        table.concat(ids, ","), sfield(w, "CurrentActionID"),
+                        tostring(A.platbtn_token(w))))
+                end)
+                flush()
+            end
+        end
+    end
+
+    -- 3) THE PLAYER'S ACTUAL LAYOUT, from the save. FATSaveSystemInputAssign (ATExt.hpp:750,
+    --    held at UATSaveSystem+0x720) carries one FName per ACTION plus one per PHYSICAL
+    --    controller button (Controller_Btn_B/X/A/Y/…) — i.e. exactly the remap the player made,
+    --    persisted across sessions. Reached through the game's own ownership chain, the same
+    --    one screen_dialogue uses for the subtitles option (never "first instance found": the
+    --    object array holds several save systems and the pristine template answers first).
+    --    Property NAMES come from the struct's own reflection, not a hardcoded list.
+    add("")
+    add("---- 3) save: UATSaveSystem.InputAssign (the live remap) ----")
+    flush()
+    do
+        local Dir = require("ui_directory")
+        local savesys
+        local mgr = Dir and Dir.peek("gi", "SaveManager")
+        if valid(mgr) then pcall(function() savesys = mgr.SaveSystem end) end
+        if not valid(savesys) then
+            add("  GameInstance.SaveManager.SaveSystem unreachable")
+        else
+            add("  savesys: " .. short(savesys))
+            flush()
+            local ia
+            local got = pcall(function() ia = savesys.InputAssign end)
+            if not got or ia == nil then
+                add("  InputAssign NOT REFLECTED (property read failed) — needs a native read")
+            else
+                local sdef
+                for _, path in ipairs({ "/Script/ATExt.ATSaveSystemInputAssign",
+                                        "/Script/AT.ATSaveSystemInputAssign" }) do
+                    if not valid(sdef) then sdef = StaticFindObject(path) end
+                end
+                if not valid(sdef) then
+                    add("  struct ATSaveSystemInputAssign not found by path — cannot enumerate members")
+                else
+                    local names = {}
+                    pcall(function()
+                        sdef:ForEachProperty(function(p)
+                            local ok, n = pcall(function() return p:GetFName():ToString() end)
+                            if ok and n then names[#names + 1] = n end
+                        end)
+                    end)
+                    add(string.format("  %d members", #names))
+                    flush()
+                    for _, n in ipairs(names) do
+                        add(string.format("    %-32s = %s", n, sfield(ia, n)))
+                    end
+                end
+            end
+        end
+        flush()
+    end
+
+    -- 4) live KeyConfigList vs DefaultKeyConfigList, entry by entry: does the rebind rewrite
+    --    the icon-data asset we currently resolve through, or leave it at the factory values?
+    add("")
+    add("---- 4) CFTextIconData: KeyConfigList vs DefaultKeyConfigList ----")
+    flush()
+    local ICON_DATA = "/Game/CFramework/DataAssets/CFTextIconData.CFTextIconData"
+    local ico = StaticFindObject(ICON_DATA)
+    if not valid(ico) then
+        pcall(function() LoadAsset(ICON_DATA) end)
+        ico = StaticFindObject(ICON_DATA)
+    end
+    if not valid(ico) then
+        add("  asset NOT LOADED — nothing to compare")
+        flush()
+        return true
+    end
+    local live, ln = Core.array_of(ico, "KeyConfigList")
+    local def, dn = Core.array_of(ico, "DefaultKeyConfigList")
+    add(string.format("  KeyConfigList=%s entries, DefaultKeyConfigList=%s entries",
+        tostring(ln), tostring(dn)))
+    flush()
+    local diffs = 0
+    for i = 1, (ln or 0) do
+        local lline, dline = "?", "?"
+        pcall(function()
+            local e = live[i]
+            lline = string.format("%-34s icon=%-16s dyn=%-24s ctrl=%s",
+                sfield(e, "ConfigName"), sfield(e, "IconName"),
+                sfield(e, "DynamicAssignInputId"), sfield(e, "DynamicAssignInputControllerId"))
+        end)
+        if def and i <= (dn or 0) then
+            pcall(function()
+                local e = def[i]
+                dline = string.format("%-34s icon=%-16s dyn=%-24s ctrl=%s",
+                    sfield(e, "ConfigName"), sfield(e, "IconName"),
+                    sfield(e, "DynamicAssignInputId"), sfield(e, "DynamicAssignInputControllerId"))
+            end)
+        end
+        if lline ~= dline then
+            diffs = diffs + 1
+            add(string.format("  %3d  live: %s", i, lline))
+            add(string.format("       def : %s   <<< DIFF", dline))
+        else
+            add(string.format("  %3d  %s", i, lline))
+        end
+        if i % 20 == 0 then flush() end
+    end
+    add(string.format("  == %d entr%s differ from the defaults ==",
+        diffs, diffs == 1 and "y" or "ies"))
+    flush()
+    return true
+end
+
 function Discover.run()
     ExecuteInGameThread(function()
+        -- --- keyconfig branch: only bites when the Options screen is up (see the block
+        -- above); otherwise falls straight through to the normal census.
+        if KEYCONFIG_PROBE then
+            local outfile_for = function()
+                _G.__dumpN = (_G.__dumpN or 0) + 1
+                local stamp = 0; pcall(function() stamp = os.time() end)
+                return string.format("%sdump_keyconfig_%d_%03d.txt", OUT_DIR, stamp, _G.__dumpN)
+            end
+            local ok_kc, handled = pcall(function() return keyconfig_probe(outfile_for) end)
+            if ok_kc and handled then
+                require("speech").say("Volcado de configuración de botones", true)
+                return
+            end
+        end
+
         -- --- world-map confirm-test branch (returns early; no dump on the map) ---
         if MAP_INPUT_TEST then
             local ok_test, handled = pcall(function()

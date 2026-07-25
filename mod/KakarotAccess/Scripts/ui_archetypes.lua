@@ -30,16 +30,131 @@ local function gauge_value(row)
     return math.floor(on / GAUGE_SEGMENTS * 100 + 0.5) .. "%"
 end
 
+-- ---- SLOT -> PHYSICAL button (the player's remap) --------------------------
+--
+-- Every controller id this game hands us — the `<inputicon>` markup ids, the KeyConfig
+-- asset's `DynamicAssignInputControllerId`, a glyph widget's
+-- `CurrentDynamicAssignInputControllerId` — names a **slot**, not a button. A slot keeps
+-- its FACTORY name forever: melee lives in the slot called `Controller_Btn_B` no matter
+-- what the player later binds it to. So speaking the token out of the id announces the
+-- PRE-REMAP button (user 2026-07-25: melee moved B->X and ki X->B, both still read as
+-- their old buttons).
+--
+-- The live layout is in the SAVE: `UATSaveSystem.InputAssign` (`FATSaveSystemInputAssign`,
+-- ATExt.hpp:750 @ +0x720) holds, per slot, the PHYSICAL key it currently drives. Reached
+-- by the game's own ownership chain — `GameInstance.SaveManager` -> `SaveSystem` — the same
+-- one screen_dialogue uses for the subtitles option, and for the same reason: a
+-- "first instance found" pick lands on a pristine template (the F7 dump answered from
+-- `ATSaveSystem_4`, the user's real one).
+--
+-- PROVEN by the F7 keyconfig dump taken with that remap applied (dumps/dump_keyconfig_*):
+--     save: Controller_Btn_B = Gamepad_FaceButton_Left    (physically X)
+--           Controller_Btn_X = Gamepad_FaceButton_Right   (physically B)
+--     asset: Battle_Attack (melee) -> ctrl = Controller_Btn_B   <- unchanged by the rebind
+-- The asset is NOT rewritten on a rebind (its only live-vs-default difference is that the
+-- game fills `ctrl` in at runtime), so no amount of cache-clearing there could have fixed
+-- this — the data source was simply the wrong one.
+--
+-- With a DEFAULT config every slot maps to its own button, so this layer is the identity
+-- and cannot change what an unmodified pad announces. That self-check is also why the
+-- table below is safe: these are Unreal's own `EKeys` gamepad names, and the factory
+-- pairing (`Controller_Btn_LB` = `Gamepad_LeftShoulder`, …) is exactly what the dump shows
+-- for every slot the player did not touch.
+local FKEY_TOKEN = {
+    Gamepad_FaceButton_Bottom = "A",     Gamepad_FaceButton_Right = "B",
+    Gamepad_FaceButton_Left   = "X",     Gamepad_FaceButton_Top   = "Y",
+    Gamepad_LeftShoulder      = "LB",    Gamepad_RightShoulder    = "RB",
+    Gamepad_LeftTrigger       = "LT",    Gamepad_RightTrigger     = "RT",
+    Gamepad_LeftThumbstick    = "L3",    Gamepad_RightThumbstick  = "R3",
+    Gamepad_Special_Right     = "Start", Gamepad_Special_Left     = "Back",
+}
+
+-- The live InputAssign struct: two guarded pointer hops, no scans and no cache — the value
+-- is read at the moment it is spoken, so a rebind is announced correctly on the very next
+-- readout (which, on the button-config screen, is the one readout that matters).
+local function input_assign()
+    local Dir = require("ui_directory")
+    local mgr, savesys, ia = Dir and Dir.peek("gi", "SaveManager"), nil, nil
+    if Core.valid(mgr) then pcall(function() savesys = mgr.SaveSystem end) end
+    if not Core.valid(savesys) then return nil end
+    if not pcall(function() ia = savesys.InputAssign end) or ia == nil then return nil end
+    return ia
+end
+
+-- MEMBER GATE. Fetching a member a struct does not declare is an uncatchable abort
+-- (CLAUDE.md §8) and `Core.member`'s gate only covers UObjects, so the legal names come from
+-- the struct's OWN reflection — built once, because a struct layout cannot change at
+-- runtime. A failed build leaves the set nil so the next call retries rather than latching
+-- a permanent "no".
+local INPUT_ASSIGN_PATHS = { "/Script/ATExt.ATSaveSystemInputAssign",
+                             "/Script/AT.ATSaveSystemInputAssign" }
+local assign_names = nil
+
+local function assign_declares(name)
+    if assign_names == nil then
+        local sdef
+        for _, p in ipairs(INPUT_ASSIGN_PATHS) do
+            if not Core.valid(sdef) then sdef = StaticFindObject(p) end
+        end
+        if not Core.valid(sdef) then return false end
+        local set = {}
+        pcall(function()
+            sdef:ForEachProperty(function(p)
+                local ok, n = pcall(function() return p:GetFName():ToString() end)
+                if ok and n then set[n] = true end
+            end)
+        end)
+        if next(set) == nil then return false end
+        assign_names = set
+    end
+    return assign_names[name] == true
+end
+
+-- What a declared InputAssign member holds, as a string, or nil. FAIL OPEN on "don't know"
+-- (CLAUDE.md §8): every caller below keeps what it already had rather than going silent.
+local function assign_value(name)
+    if not name or not assign_declares(name) then return nil end
+    local ia = input_assign()
+    if ia == nil then return nil end
+    local v
+    if not pcall(function() v = ia[name] end) or v == nil then return nil end
+    local ok, s = pcall(function() return v:ToString() end)
+    if not ok or not s or s == "" or s == "None" then return nil end
+    return s
+end
+
+-- The button a slot token currently DRIVES ("B" -> "X" on the remap above). Identity when
+-- the save can't be read, or for anything that is already a physical button.
+function A.physical_token(tok)
+    if not tok then return nil end
+    local fk = assign_value("Controller_Btn_" .. tok)
+    return (fk and FKEY_TOKEN[fk]) or tok
+end
+
+-- The literal KEYBOARD/MOUSE key an ACTION is bound to, localized — the other half of the
+-- same struct (`Battle_MeleeAtk = LeftMouseButton`, `Jump = SpaceBar`). Accepts either the
+-- options-tab ConfigName (`KeyConfig_Battle_MeleeAtk`) or the bare dynamic id
+-- (`Battle_MeleeAtk`). nil for a controller SLOT id (those name a pad button, not a key)
+-- and when the save can't be read.
+function A.action_key(id)
+    if not id then return nil end
+    local dyn = id:match("^KeyConfig_(.+)$") or id
+    if dyn:match("^Controller_Btn_") then return nil end
+    local fk = assign_value(dyn)
+    return fk and I18n.key(fk) or nil
+end
+
 -- ---- Button binding (controller-config "Ajustes del mando" tab) ------------
 
 -- Localized name for a controller-button KeyConfigId (e.g. "KeyConfig_Controller_Btn_B"
--- -> "botón B"). Returns nil if the id carries no Btn_ token. The token after "Btn_" is
--- the game's canonical (Xbox-style) button id, the SAME regardless of the connected
--- device — only the on-screen glyph changes. Spoken words come from the i18n layer.
+-- -> "botón B", or "botón X" once melee has been rebound onto X). Returns nil if the id
+-- carries no Btn_ token. This is the ONE funnel every controller id passes through — the
+-- options rows, the inline `<inputicon>` markup and the alias resolver all end up here —
+-- so the slot->physical step belongs here and nowhere else. Spoken words come from i18n.
 function A.button_name(keyconfigid)
     local tok = keyconfigid:match("Btn_(.+)$")
     if not tok then return nil end
-    return I18n.button(tok)
+    return I18n.button(A.physical_token(tok))
 end
 
 -- ---- KeyConfig resolver (controller button behind an action alias) ---------
@@ -174,6 +289,14 @@ function A.row_binding(row)
     if not kc then return nil end
     local direct = A.button_name(kc)
     if direct then return direct end
+    -- KEYBOARD tabs. These rows configure a KEY and the glyph on screen IS that key, so
+    -- since 2026-07-25 we say the key itself — the save turned out to hold it after all
+    -- (`InputAssign.Battle_MeleeAtk = LeftMouseButton`), which the old "not recoverable"
+    -- note ruled out from the icon data alone. Prefixed like the controller case so the
+    -- two can never be confused. Falls back to the controller EQUIVALENT (the previous
+    -- behaviour) when the save can't be read, so a lookup failure loses nothing.
+    local key = A.action_key(kc)
+    if key then return I18n.t("keyboard_prefix") .. key end
     local ctrl = resolve_ctrl(kc)
     local name = ctrl and A.button_name(ctrl)
     return name and (I18n.t("controller_prefix") .. name) or nil
@@ -269,7 +392,11 @@ local function platbtn_id_token(id)
         if FACE_TOKEN[id] then return FACE_TOKEN[id] end
         if not bindings then bindings = build_bindings() end
         local ctrl = bindings and bindings.idxToCtrl[id]
-        return ctrl and ctrl:match("Btn_(.+)$") or nil
+        -- idxToCtrl pairs a DRAWN glyph index with a SLOT, so the slot still has to be
+        -- resolved to the button it currently drives. (The FACE_TOKEN path above already
+        -- returns a physical button — the glyph index IS what the pad shows — so only this
+        -- asset-derived fallback needs the hop.)
+        return ctrl and A.physical_token(ctrl:match("Btn_(.+)$")) or nil
     end
     return nil
 end
@@ -308,7 +435,8 @@ function A.platbtn_token(plat)
         pcall(function()
             for i = 1, n do
                 local s = arr[i]:ToString()
-                local t = s and s:match("Btn_(.+)$")
+                -- a SLOT id ("Controller_Btn_X") -> the button it currently drives
+                local t = s and A.physical_token(s:match("Btn_(.+)$"))
                 if t then tok = t return end
             end
         end)
@@ -318,7 +446,7 @@ function A.platbtn_token(plat)
         local act = plat.CurrentActionID:ToString()
         if act and act ~= "" and act ~= "None" then
             local ctrl = resolve_ctrl(act) or act
-            tok = ctrl:match("Btn_(.+)$")
+            tok = A.physical_token(ctrl:match("Btn_(.+)$"))
         end
     end)
     if tok then return tok end

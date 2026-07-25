@@ -68,13 +68,65 @@ Two id shapes:
 
    Resolve: `ctrl = configToCtrl[id] or dynToCtrl[ configToDyn[id] ]` → strip `Controller_Btn_` → token.
 
+## The player's REMAP lives in the save, not in this asset (2026-07-25)
+
+`CFTextIconData.KeyConfigList` is the resolution table the *renderer* uses. The layout the **player**
+configured in Options is elsewhere, and it persists across sessions:
+
+- **`FATSaveSystemInputAssign`** (`ATExt.hpp:750`), held at **`UATSaveSystem+0x720`** — reached by the
+  same chain as the subtitles option: `GameInstance.SaveManager` → `.SaveSystem` → `.InputAssign`
+  (never "first instance found": the object array holds several save systems and the pristine template
+  answers first — see `screen_dialogue.subtitles_on`).
+- It carries **two directions**: one `FName` per **action** (`Battle_MeleeAtk`, `Battle_KiAtk`,
+  `Boost`, … 48 of them — the keyboard side) and one per **physical controller button**
+  (`Controller_Btn_B/X/A/Y/LB/LT/L3/RB/RT/R3/Start/Back`) holding the action currently bound to it.
+  Plus `Keyboard_Type` (`ECFKeyboardLayoutType` — QWERTY/QWERTZ/AZERTY, whose defaults live in
+  `UATDataAssetGlobal.DefaultInputAssignParam`, `AT.hpp:1033`).
+
+### Every `Controller_Btn_*` id is a SLOT, not a button (proven 2026-07-25)
+
+This is the whole trap, and it is invisible until someone remaps their pad. `Controller_Btn_B` is the
+*name of a slot* — "the slot melee shipped on" — and it **keeps that name forever**. The save says which
+physical key the slot currently drives. Evidence, one F7 dump taken with melee moved to X and ki to B
+(`dumps/dump_keyconfig_1784989557_001.txt`):
+
+| what | value after the remap |
+|---|---|
+| melee row's markup | `<inputicon KeyConfigId="KeyConfig_Controller_Btn_B"/>` — **unchanged** |
+| asset entry `Battle_Attack` (dyn `Battle_MeleeAtk`) | `ctrl = Controller_Btn_B` — **unchanged** |
+| save `InputAssign.Controller_Btn_B` | `Gamepad_FaceButton_Left` → physically **X** |
+| save `InputAssign.Controller_Btn_X` | `Gamepad_FaceButton_Right` → physically **B** |
+
+So resolving the markup or the asset alone reports the **pre-remap** button, and no cache invalidation
+can help — the asset is *not* rewritten on a rebind. (All 68 live-vs-`DefaultKeyConfigList` differences
+in that dump are one single thing: the game fills `DynamicAssignInputControllerId` in at runtime and the
+default copy has it blank. `DefaultKeyConfigList` is at 0x2C8, live `KeyConfigList` at 0x48.)
+
+**Rule: slot id → `InputAssign["Controller_Btn_" .. token]` → `FKey` name → spoken button.** The FKey
+names are Unreal's own `EKeys` (`Gamepad_FaceButton_Bottom/Right/Left/Top` = A/B/X/Y,
+`Gamepad_Left|RightShoulder` = LB/RB, `…Trigger` = LT/RT, `…Thumbstick` = L3/R3,
+`Gamepad_Special_Right|Left` = Start/Back). Under a default config every slot maps to its own button, so
+the whole hop is the identity — which is also the self-check that the table above is right.
+Implemented once, in `ui_archetypes.A.physical_token`, behind `A.button_name` (the single funnel all
+controller ids reach) — do not re-derive it per screen.
+
+Related but NOT the mechanism here: `UCFExtendRichTextBlock::SetIconToKeyConfigByName(SearchConfigName,
+SetIconName)` (`CFramework.hpp:678`) can repoint an icon without touching the markup. The dump shows the
+icons unchanged, so the game is not using it for the remap.
+
 ## What is and isn't recoverable
 
 - **Controller button: YES**, for every action, on every tab/screen, device-independent (via `ctrl`).
-- **Keyboard key: NO.** For keyboard the glyph is still an **indexed** `IconName` (`Btn_Key_6`), there is
-  no key field, and UE's `UPlayerInput.ActionMappings`/`AxisMappings` are **empty (count 0)** — the game
-  uses a **proprietary CFramework input system**. Reading the literal key would need native RE of the exe.
-  → Keyboard config tabs can announce the controller-equivalent button, not the literal key.
+- **Keyboard key: YES since 2026-07-25** (this reverses the old verdict below, which was true only of the
+  *icon* data). The literal key is in the same save struct, one `FName` per action:
+  `InputAssign.Battle_MeleeAtk = LeftMouseButton`, `Jump = SpaceBar`, `Move_Up = W`, … plus
+  `Keyboard_Type` (`ECFKeyboardLayoutType`, QWERTY/QWERTZ/AZERTY — factory values in
+  `UATDataAssetGlobal.DefaultInputAssignParam`, `AT.hpp:1033`). Not wired into any reader yet; the mod
+  currently speaks the controller side only.
+  - *Why it looked unrecoverable:* from the ICON side the keyboard glyph is an **indexed** `IconName`
+    (`Btn_Key_6`) with no key field, and UE's `UPlayerInput.ActionMappings`/`AxisMappings` are **empty
+    (count 0)** — the game uses a proprietary CFramework input system. The data was never in the icon
+    asset; it was in the save all along.
 
 ## Face-button GLYPH INDEX order (`EATPlatBtnId`) — the A/B mirror trap
 

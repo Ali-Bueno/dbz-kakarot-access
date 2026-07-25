@@ -445,6 +445,11 @@ local choice_key = nil    -- signature (labels+msg) the latched prompt belongs t
 -- while the genuinely new "Emblemas…" still speaks the first time it appears.
 -- Sized for ~8 notices of history: fresh_notice() marks each spoken NODE text plus the
 -- composed utterance (up to ~3 marks per notice), not one entry per notice.
+-- SCOPE: this set lives for THIS WINDOW PRESENCE only. It used to survive until either the
+-- FIFO evicted a text or the map changed, which made re-opening a dialog silent — the marks
+-- are keyed per TEXT, so identical words could never speak twice however deliberately the
+-- player asked for them (user 2026-07-25). It is now cleared alongside the pins on a real
+-- close; see CLOSED_CLEAR_S below.
 local RECENT_MAX = 24
 local recent, recent_set = {}, {}
 -- PINNED notice texts: like recent_set but IMMUNE to the FIFO's RECENT_MAX eviction and to
@@ -458,11 +463,22 @@ local recent, recent_set = {}, {}
 -- inside one map — the save confirmations in Options ("¿Guardar?", "Guardando…") speak once
 -- and were then mute for the rest of the session. The parked-window bug the pin exists for
 -- happens while the window STAYS on screen, so presence scope still fixes it; the pins are
--- released only after the window has been CONTINUOUSLY off screen for PIN_CLEAR_S, which is
+-- released only after the window has been CONTINUOUSLY off screen for CLOSED_CLEAR_S, which is
 -- far longer than the tick-to-tick blink the recent-set was built for (so a blink can never
 -- unpin, and a genuine reopen always can).
 local pinned_set = {}
-local PIN_CLEAR_S = 2.0    -- sustained absence that counts as a real close
+-- Sustained absence that counts as a REAL CLOSE (as opposed to the tick-to-tick blink of a
+-- pooled window). Wall clock, never a call count — is_active is polled at two different
+-- rates depending on whether another adapter holds the screen (CLAUDE.md §8).
+-- 2026-07-25: was 2.0 s and released only the pins. Both were wrong for the same reason and
+-- the user hit it immediately: re-triggering a dialog (the same menu option again, or another
+-- option showing the same text) was SILENT. See the recent-set note above — suppression was
+-- keyed per TEXT with no way back, while a close+reopen is a NEW EVENT that must always
+-- speak. Now a real close releases BOTH suppressors, and the threshold is the smallest one
+-- that still cannot be reached by a blink: 0.7 s is 7 poll ticks, where the blink this
+-- machinery was built for lasts one or two. The parked-window repeat that the pins exist for
+-- is unaffected — that window never leaves the screen, so no absence is ever measured.
+local CLOSED_CLEAR_S = 0.7
 local gone_since = nil     -- os.clock of the falling edge, nil while on screen
 local function was_recent(m) return m ~= nil and (recent_set[m] == true or pinned_set[m] == true) end
 local function pin(m) if m then pinned_set[m] = true end end
@@ -574,10 +590,17 @@ function Dialog.is_active()
     if not Core.on_screen(win) then
         window_gone()
         was_on = false
-        -- Sustained absence = a real close: release the per-presence pins (see pinned_set).
+        -- Sustained absence = a real close, and a real close ENDS THE EVENT: release BOTH
+        -- suppressors, the per-presence pins and the recent-text FIFO. The next appearance is
+        -- a new event by definition — the player closed the window and did something to open
+        -- one again — so it must speak even when it says exactly the same words. Everything
+        -- these two tables exist for happens WITHIN one presence (a pooled window's
+        -- tick-to-tick blink, a title flickering present/empty, a parked window re-firing),
+        -- which is why scoping them to the presence loses nothing.
         gone_since = gone_since or os.clock()
-        if (os.clock() - gone_since) >= PIN_CLEAR_S and next(pinned_set) ~= nil then
-            pinned_set = {}
+        if (os.clock() - gone_since) >= CLOSED_CLEAR_S
+            and (next(pinned_set) ~= nil or next(recent_set) ~= nil) then
+            pinned_set, recent, recent_set = {}, {}, {}
         end
         return false
     end

@@ -66,7 +66,7 @@ function I18n.refresh() lang = nil end
 -- ---- external string files (lang/<code>.txt) -------------------------------
 -- Users can override any string by dropping an editable text file next to the mod. A
 -- line is `key = value`; '#' starts a comment; blank lines ignored. Nested tables use a
--- dotted prefix: `buttons.A`, `keyhelp.Btn_L1`, `header.7`, `startlist.2` (header/startlist
+-- dotted prefix: `buttons.A`, `keys.SpaceBar`, `keyhelp.Btn_L1`, `header.7`, `startlist.2` (header/startlist
 -- indices are numbers). `\n` in a value becomes a newline. Missing file or missing key →
 -- the built-in table → English → the key. The file wins over the built-in table, so the
 -- shipped lang/es.txt and lang/en.txt are the editable source of truth for those two.
@@ -79,7 +79,7 @@ local function ext_dir()
 end
 
 local NESTED_NUM = { header = true, startlist = true }
-local NESTED_STR = { buttons = true, keyhelp = true }
+local NESTED_STR = { buttons = true, keyhelp = true, keys = true }
 
 local function load_ext(code)
     local t
@@ -135,6 +135,28 @@ local S = {
         },
         button_fallback = "botón %s",
         controller_prefix = "mando: ",
+        keyboard_prefix = "tecla: ",
+        -- KEYBOARD / MOUSE keys, by Unreal EKeys name (what the save's InputAssign stores).
+        -- Only the ones a letter/digit doesn't already say out loud need an entry: an
+        -- unmapped token is spoken raw, which is exactly right for "W" or "F" and never
+        -- drops a binding. Arrow keys live here and not in `buttons` (where Up/Down/Left/
+        -- Right mean the d-pad).
+        keys = {
+            SpaceBar = "barra espaciadora", Tab = "tabulador", Enter = "intro",
+            BackSpace = "retroceso", Escape = "escape", CapsLock = "bloq mayús",
+            LeftShift = "mayúsculas izquierda", RightShift = "mayúsculas derecha",
+            LeftControl = "control izquierdo", RightControl = "control derecho",
+            LeftAlt = "alt izquierdo", RightAlt = "alt derecho",
+            Up = "flecha arriba", Down = "flecha abajo",
+            Left = "flecha izquierda", Right = "flecha derecha",
+            LeftMouseButton = "clic izquierdo", RightMouseButton = "clic derecho",
+            MiddleMouseButton = "clic central",
+            ThumbMouseButton = "botón lateral 1 del ratón",
+            ThumbMouseButton2 = "botón lateral 2 del ratón",
+            MouseScrollUp = "rueda arriba", MouseScrollDown = "rueda abajo",
+            Zero = "0", One = "1", Two = "2", Three = "3", Four = "4",
+            Five = "5", Six = "6", Seven = "7", Eight = "8", Nine = "9",
+        },
         -- Keyhelp-bar glyphs, by texture token.
         keyhelp = {
             Btn_L1 = "L1", Btn_R1 = "R1", Btn_L2 = "L2", Btn_R2 = "R2",
@@ -377,6 +399,23 @@ local S = {
         },
         button_fallback = "%s button",
         controller_prefix = "controller: ",
+        keyboard_prefix = "key: ",
+        keys = {
+            SpaceBar = "space bar", Tab = "tab", Enter = "enter",
+            BackSpace = "backspace", Escape = "escape", CapsLock = "caps lock",
+            LeftShift = "left shift", RightShift = "right shift",
+            LeftControl = "left control", RightControl = "right control",
+            LeftAlt = "left alt", RightAlt = "right alt",
+            Up = "up arrow", Down = "down arrow",
+            Left = "left arrow", Right = "right arrow",
+            LeftMouseButton = "left click", RightMouseButton = "right click",
+            MiddleMouseButton = "middle click",
+            ThumbMouseButton = "mouse side button 1",
+            ThumbMouseButton2 = "mouse side button 2",
+            MouseScrollUp = "scroll up", MouseScrollDown = "scroll down",
+            Zero = "0", One = "1", Two = "2", Three = "3", Four = "4",
+            Five = "5", Six = "6", Seven = "7", Eight = "8", Nine = "9",
+        },
         keyhelp = {
             Btn_L1 = "L1", Btn_R1 = "R1", Btn_L2 = "L2", Btn_R2 = "R2",
             Btn_L3 = "L3", Btn_R3 = "R3",
@@ -625,6 +664,20 @@ function I18n.button(token)
     if b then return b end
     local fb = (e and e.button_fallback) or t.button_fallback or S[DEFAULT].button_fallback or "%s"
     return string.format(fb, token)
+end
+
+-- Localized KEYBOARD/MOUSE key name for an Unreal EKeys token (SpaceBar, LeftMouseButton,
+-- W, …). Unlike I18n.button there is no "%s" template: an unmapped token is returned RAW,
+-- because the tokens that have no entry are exactly the letters and digits that already
+-- speak correctly on their own. Never nil for a non-empty token, so a binding is never lost.
+function I18n.key(token)
+    if token == nil or token == "" then return nil end
+    local L = I18n.language()
+    local e = ext(L)
+    if e and e.keys and e.keys[token] then return e.keys[token] end
+    local t = S[L]
+    return (t and t.keys and t.keys[token])
+        or (S[DEFAULT].keys and S[DEFAULT].keys[token]) or token
 end
 
 -- Localized keyhelp glyph name for a texture token (Btn_L1, Btn_Options, …), or nil

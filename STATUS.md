@@ -54,6 +54,10 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | NPC subtitles / dialogue — earlier rounds | done | `screen_dialogue.lua`. 2026-07-15: `Xcmn_Subtitles_C` gated on the game's OWN subtitles option (FAIL-OPEN if unreadable); `Field_Talk_Win_C` (dialogue box) never gated. 2026-07-16 night: the gate read a DEAD TEMPLATE — the object array holds several ATSaveSystem instances (_0/_1 pristine EnableSubtitle=1, _4 = the user's real settings) and first-non-CDO picked _0, so it always read 1. Now resolved through the game's own pointer `UATSaveManager.SaveSystem` @0x108 (AT.hpp:29391), manager cached, pointer re-read per query. Pending verify with the option off |
 | Boot agreement viewer (EULA / privacy / data analysis) | done | `screen_agreement.lua` — `AT_UIXcmnAgreement` (AT.hpp:37902): ONE viewer cycles the consent documents; every page is a TEXTURE, no readable text exists (two F7 censuses), so it announces a localized screen label + "shown as an image" note; the actions bar comes from the automatic keyhelp read. DOC + PAGE named NATIVELY (2026-07-17 Ghidra, `native_offsets.agreement`): docId @0x5B4 → "Política de privacidad"/"Análisis de datos"/"Acuerdo de licencia", "página N de M" from @0x5A8/@0x5B0, sanity-checked, silent-degrade if a patch moves them. The earlier brush-texture heuristic is REMOVED (piercing nullptr — see Derived facts). Detection = pointer reads: cached `Gametitle_C` → `ActorTitle` → `AgreementDialog` @0x340, fallback budgeted scan; `pane_live`-gated. Registered below screen_dialog — the Accept/Reject consent popup is a pooled `Xcmn_Win01` and belongs to the dialog reader. VERIFIED in-game 2026-07-17 (user): entry, native document naming ("Política de privacidad" / "Análisis de datos") and page N-of-M readout |
 | Difficulty / choice lists | done | `screen_choicelist.lua`, `screen_choice.lua` |
+| Notices no longer cut off by the screen underneath | done | **VERIFIED in game 2026-07-25 (user).** `Announcer:focus` + `keyhelp_watch` defer while `Speech.protected()` — the shared fix for "the map/skill-tree readout talks over a popup". The offender is never the notice's own screen, so this belongs in the substrate, not per adapter |
+| Dialog re-trigger reads again | done (unverified) | 2026-07-25. `recent_set`/`pinned_set` are now scoped to the window PRESENCE (cleared after `CLOSED_CLEAR_S` = 0.7 s of continuous absence), not to the map epoch. Suppression was keyed per TEXT while every "new open" signal was per APPEARANCE |
+| Keyboard: radar picker + key names | done (unverified) | 2026-07-25. `radar_menu.Menu.key(cmd)` (queued, consumed on the game thread; `kb_open` so "no pad" ≠ "pad lost") + keybinds Ctrl+F3 / PageUp-PageDown / arrows / Enter — **needs a game RESTART**. Button-config keyboard tabs speak the literal key via `A.action_key` + `I18n.key`. Documented conflict: the game binds mount/dismount to ↑/↓ |
+| Controller REMAP honoured everywhere | done (unverified) | 2026-07-25. Every controller id the game exposes names a **SLOT**, not a button, and a slot keeps its factory name forever — so we were announcing the pre-remap button (user: melee B→X, ki X→B, both still read as B/X). F7 dump proved it in one pass: save `Controller_Btn_B = Gamepad_FaceButton_Left` / `Controller_Btn_X = Gamepad_FaceButton_Right` while the asset still pairs melee with slot `Controller_Btn_B`; the asset is NOT rewritten on rebind (its only live-vs-default delta is `ctrl` being filled in at runtime), so cache-clearing there could never have fixed it. New slot→physical layer in `ui_archetypes` reading `UATSaveSystem.InputAssign` via `gi.SaveManager→SaveSystem` (0.5 s TTL, fail-open to the slot name), applied in the single funnel `A.button_name` plus the three raw-token paths (`platbtn_token` ×2, `platbtn_id_token`'s idxToCtrl fallback). Identity under a default config, so it can only change a remapped pad. Fixes Options rows AND every `<inputicon>` prompt, keyhelp and tutorial glyph |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua`. Title 2026-07-17: SETTLE GATE — the boot-check dialogs re-commit the title on every gap and each re-commit re-announced "Menú principal, continuar"; the title now stays silent until it holds the screen 2.5 s with no dispatcher reset (no reflected boot-phase field exists on AAT_Title/AATTitleLevelScriptActor — swept), a cursor move lifts the gate at once, F1 bypasses it via `reannounce()`. Verified in-game 2026-07-17 (announced once, after the boot dialogs; 4 s felt sluggish → tuned to 2.5 s) |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
 | Items inventory + Party + Characters | done | Party/Characters done. Items list reads populated categories (via `Txt_Title00` detail-pane live name; reflected index tracks). EMPTY categories: the whole item UI goes STALE (row/detail/visible-count keep the last item), so emptiness is read from the native flag `itemMenu.hasItems = 0x620` (F4-confirmed; 0 = empty) and announced ("vacío") via `screen_list.lua` factory `empty_off` param. Verified in-game 2026-07-11 |
@@ -119,6 +123,76 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-25 (l): the rest of the batch — one user-VERIFIED fix, three new ones.**
+
+- **VERIFIED by the user: the notice-interruption fix works** (entry (k) below). That is the
+  first confirmation that `Speech.protected()` wired into `Announcer:focus` does what it was
+  designed to do. Keep it in mind as the standard lever for "X talked over Y".
+- **A re-triggered dialog stayed silent** (user, straight after that fix). Cause found by
+  mapping the novelty machine: suppression is keyed **per TEXT** (`recent_set` FIFO of 24, no
+  TTL, wiped only by a map transition) while every "this is a new open" signal the adapter owns
+  (`was_on`, `appear_t`, `gone_since`) is **per APPEARANCE**, and the two were never joined —
+  so identical words could never be spoken twice however deliberately the player asked. Fix:
+  a REAL CLOSE (window continuously off screen for `CLOSED_CLEAR_S`) now clears the recent set
+  as well as the pins, and the threshold drops 2.0 s → 0.7 s so a normal dismiss-and-retrigger
+  qualifies. Everything those tables exist for happens WITHIN one presence, so presence scope
+  loses nothing. Lesson worth keeping: **a dedup key must carry the thing that makes the event
+  new.** Text alone never does.
+- **Keyboard bindings are readable after all** — the same `InputAssign` struct holds them
+  (`Battle_MeleeAtk = LeftMouseButton`, `Jump = SpaceBar`, …). `A.action_key` + `I18n.key`
+  (new `keys` table, es/en, `keys.` prefix in the lang TXT overlay) and the keyboard tabs of the
+  button-config screen now say the literal key instead of the controller equivalent. The
+  "keyboard key is NOT recoverable" note in the reference doc was true only of the ICON data
+  and has been corrected.
+- **Radar target picker from the keyboard** (user request: people are asking to play on KB).
+  It was a pad modal whose `step()` bails out with no pad snapshot, so a keyboard-only player
+  could not open it at all. `Menu.key(cmd)` queues a command that `step()` consumes ON THE GAME
+  THREAD (a keybind callback is not the game thread and `do_open` reads the world); `kb_open`
+  distinguishes "no pad because there is none" from "the pad went away mid-menu", which the old
+  teardown could not tell apart. Keys: Ctrl+F3 toggle, PageUp/PageDown + ↑/↓ move, ←/→ category,
+  Enter select. **Needs a game RESTART** (main.lua). Known conflict, deliberate and documented:
+  the game's own default keyboard layout binds mount/dismount to ↑/↓ and UE4SS keybinds do not
+  swallow keys, so PageUp/PageDown is the recommended pair.
+
+**2026-07-25 (k): two user reports — one FIXED centrally, one waiting on a single capture.**
+
+1. **Notices cut off mid-sentence** (user: the map's "zone available" popup and the skill-tree
+   acquire / "what you need" popups get interrupted, in the tree by the focused node being
+   re-spoken). Mechanism, no guessing needed: `screen_dialog` speaks a notice with
+   `say_protected` (interrupt=true **+ a protection window**) and then RELEASES the screen on the
+   very next poll; the adapter below re-commits, the registry calls its `reset()` — which clears
+   `Announcer.open` — and the next `focus()` takes the "entering the screen" branch and speaks
+   with `interrupt=true`, **which clears the reader's whole queue**. `Speech.protected()` was
+   written for exactly this and NOTHING consulted it except two hand-wired adapters
+   (`quest_objective`, `screen_community`). Fixed in the shared substrate, not per screen:
+   `Announcer:focus` and `keyhelp_watch.update` now DEFER while the window is open (both are
+   polled every tick, so the readout fires with the CURRENT state the moment it clears; bounded
+   by `speak_seconds`' 6 s cap). Source-only, luac + globals-lint clean, **unverified in game**.
+2. **The button-config rows announced the DEFAULT button after a remap — FIXED, and the F7
+   capture settled it in ONE pass** (the rule earns its keep again: three sessions of guessing
+   were on the table, one dump answered everything). What the dump
+   (`dumps/dump_keyconfig_1784989557_001.txt`, taken with melee on X and ki on B) proved:
+   - The row markup is **`KeyConfig_Controller_Btn_B`** for the melee row *even after the
+     rebind* — because every controller id in this game names a **SLOT**, and a slot keeps its
+     factory name forever. `row_binding` faithfully spoke the slot: "botón B".
+   - The asset is **not** rewritten on a rebind. All 68 live-vs-default differences are the same
+     one thing — the game fills `DynamicAssignInputControllerId` in at runtime, and
+     `DefaultKeyConfigList` simply has it blank. `Battle_Attack` still pairs with slot
+     `Controller_Btn_B`. So no cache TTL or `clear_binding_cache` timing could ever have fixed
+     this; the data source was wrong.
+   - **`UATSaveSystem.InputAssign` IS reflected** (60 members, read off the user's real
+     `ATSaveSystem_4`) and carries the live layout: `Controller_Btn_B = Gamepad_FaceButton_Left`
+     (physically X), `Controller_Btn_X = Gamepad_FaceButton_Right` (physically B) — exactly the
+     swap the player made. The 48 action FNames alongside them are the **keyboard** side
+     (`Battle_MeleeAtk = LeftMouseButton`), which is also the first time the keyboard binding has
+     ever been readable in this project — the old "keyboard key is NOT recoverable" note in
+     [input-icons-and-keyconfig.md](reference/dbz-kakarot/input-icons-and-keyconfig.md) is
+     obsolete and a keyboard readout is now possible if wanted.
+   Fix: a slot→physical layer in `ui_archetypes` (`A.physical_token`, save-backed, 0.5 s TTL,
+   fail-open) applied in the one funnel every controller id passes through, `A.button_name`,
+   plus the three paths that return a raw token. Identity under a default config.
+   Source-only, luac + globals-lint clean, **unverified in game**.
 
 **2026-07-25 (j): the bubble trace settled two things and left ONE open — and the open one needs a
 dump, not another guess.** The log for the Krillin scene contains exactly ONE `bubble[…]` line in the
