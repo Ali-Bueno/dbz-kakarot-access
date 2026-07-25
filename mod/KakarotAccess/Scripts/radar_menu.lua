@@ -97,6 +97,12 @@ local function do_open()
     end
 end
 
+-- How long each keyboard-block lease lasts. The step runs every 20 ms, so this is ~15
+-- ticks of slack: long enough to ride out a frame hitch, short enough that if the mod
+-- stops renewing it (a crash, a reload, an error) the player has their keyboard back
+-- almost immediately. See Input.kb_block.
+local KB_BLOCK_MS = 300
+
 -- Close the menu. mode:
 --   "select" — commit the focused item to the radar
 --   "stop"   — stop tracking the current target (B / Circle)
@@ -106,6 +112,8 @@ end
 local function do_close(mode)
     open = false
     kb_open = false
+    -- Give the keyboard back at once rather than waiting for the lease to lapse.
+    Input.kb_block(0)
     if mode == "select" then
         local cat = cats[ci]
         local it = cat and cat.items[ii]
@@ -179,6 +187,7 @@ local function step()
     -- pad blocked across a level change.
     if Transition.active() then
         if blocked then Input.block(false) end
+        Input.kb_block(0)
         blocked, open, draining, kb_open = false, false, false, false
         cats = {}
         prev_btn = 0
@@ -195,6 +204,13 @@ local function step()
         handle_kb(cmd)
     end
 
+    -- RENEW the keyboard block while the menu is up — the same idea as blocking the pad,
+    -- so a Page Down that moves the picker doesn't also reach the game. It has to be
+    -- renewed here, every tick, and it must sit ABOVE the no-pad early return: on a
+    -- keyboard-only machine that return is the only path this function ever takes.
+    -- Renewal is what makes the block crash-proof (Input.kb_block).
+    if open or draining then Input.kb_block(KB_BLOCK_MS) end
+
     local snap = Input.read()
     if not snap then
         -- No pad snapshot. The pad side is always torn down (never leave the game blocked),
@@ -202,6 +218,7 @@ local function step()
         -- `open` here would kill a keyboard-opened picker 20 ms after it opened. So only a
         -- PAD-opened menu counts as "pad lost".
         if blocked then Input.block(false) end
+        Input.kb_block(0)
         blocked, draining = false, false
         prev_btn = 0
         last_r3_tk, pending_open_tk = nil, nil
@@ -229,6 +246,7 @@ local function step()
     if draining then
         if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH then
             Input.block(false); blocked = false; draining = false
+            Input.kb_block(0)
             if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         end
         prev_btn = snap.buttons
@@ -315,6 +333,7 @@ function Menu.start()
     PadPoll.register("radar_menu", step, function()
         -- never strand the pad in a blocked state on an error
         if blocked then Input.block(false) end
+        Input.kb_block(0)
         blocked, open, draining, kb_open = false, false, false, false
         if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
     end)
@@ -324,6 +343,7 @@ function Menu.stop()
     running = false
     PadPoll.unregister("radar_menu")
     if blocked then Input.block(false) end
+    Input.kb_block(0)
     blocked, open, draining, kb_open = false, false, false, false
     cats = {}
     if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end

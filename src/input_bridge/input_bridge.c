@@ -23,11 +23,15 @@
  * found), poll() still works by falling back to a LoadLibrary'd XInputGetState,
  * and block() is simply a no-op (read-only mode).
  *
+ * The KEYBOARD gets the same treatment through a second hook (user32!PeekMessageW); see
+ * the block comment above hookPeekMessageW for the evidence behind that choice.
+ *
  * Lua usage:
  *   local ib = require("input_bridge")
- *   ib.install()                 -- hook XInput (idempotent); returns true/false
+ *   ib.install()                 -- hook XInput + the message pump (idempotent)
  *   local b, lt, rt, lx, ly = ib.poll()  -- wButtons, triggers 0..255, L-stick -1..1
  *   ib.block(true|false)         -- hide/show the pad from the GAME
+ *   ib.kb_block(ms)              -- hide the KEYBOARD for ms (a lease: renew every tick)
  */
 
 #include <windows.h>
@@ -64,6 +68,70 @@ static int              g_hooked = 0;
 static volatile LONG    g_injTTL = 0;
 static volatile LONG    g_injLX = 0;             /* injected left-stick X (-32767..32767) */
 static volatile LONG    g_injLY = 0;
+
+/* ---- KEYBOARD blocking ---------------------------------------------------------------
+ * Same goal as block() above, for the keyboard: while the radar menu is open, our Lua must
+ * still see the keys while the GAME sees nothing (so Page Down doesn't also dismount you).
+ *
+ * WHERE we intercept, and why it is safe (investigated 2026-07-25 against this exe and the
+ * RE-UE4SS v3.0.1 source, not assumed):
+ *   - This exe pumps messages with user32!PeekMessageW (6 call sites; GetMessageW is not
+ *     even imported), and it registers RawInput for the MOUSE ONLY (the single
+ *     RegisterRawInputDevices call passes usUsagePage=1, usUsage=2). It imports no
+ *     DirectInput. So every keystroke reaches the game as a POSTED WM_KEY... / WM_CHAR
+ *     message, and draining those from the pump hides the keyboard completely.
+ *   - UE4SS does NOT read those messages: Input/Handler.cpp polls GetAsyncKeyState on its
+ *     own UE4SS-UpdateThread. Draining the game's queue therefore cannot break our own
+ *     keybinds — which matters more than it sounds, since the key that CLOSES the menu is
+ *     one of them. (This is also why hooking GetAsyncKeyState itself would be a disaster:
+ *     it is exactly what UE4SS polls, so it would silence the mod process-wide.)
+ *
+ * A LEASE, NOT A LATCH. If the mod dies or a Lua error unwinds while the block is set, a
+ * plain flag would leave the game permanently deaf to the keyboard — including its own
+ * pause and Escape — with no way out but killing the process. So the block carries a
+ * wall-clock DEADLINE that Lua must keep renewing (radar_menu renews it every 20 ms tick);
+ * anything that stops the mod releases the keyboard by itself within a few hundred ms.
+ * Set from Lua on the game thread, read on the pump thread -> interlocked. */
+typedef BOOL (WINAPI *PeekMessageW_t)(LPMSG, HWND, UINT, UINT, UINT);
+static PeekMessageW_t   g_realPeek = NULL;
+static volatile LONG64  g_kbUntil = 0;           /* GetTickCount64 deadline; 0 = not blocking */
+static int              g_kbHooked = 0;
+
+static int kb_blocking(void) {
+    LONG64 until = InterlockedCompareExchange64((volatile LONG64 *)&g_kbUntil, 0, 0);
+    return until != 0 && (LONG64)GetTickCount64() < until;
+}
+
+/* WM_KEYDOWN..WM_UNICHAR — the whole keyboard block, including the WM_CHAR messages
+ * TranslateMessage synthesises (swallowing only the key-downs would still let text
+ * through). Written as literals: WM_KEYLAST differs between SDK versions. */
+static int is_key_msg(UINT m) { return m >= 0x0100 && m <= 0x0109; }
+
+/* Our replacement pump entry. Swallows keyboard messages while the lease is live and
+ * returns the next NON-keyboard message instead, so the game's frame still gets its
+ * paint/input/timer traffic. */
+static BOOL WINAPI hookPeekMessageW(LPMSG lpMsg, HWND hWnd, UINT minMsg, UINT maxMsg, UINT rm) {
+    int guard;
+    if (!g_realPeek) return FALSE;
+    /* Bounded: a queue that somehow only ever yields keys must not spin the game thread. */
+    for (guard = 0; guard < 256; ++guard) {
+        BOOL got = g_realPeek(lpMsg, hWnd, minMsg, maxMsg, rm);
+        if (!got || !lpMsg) return got;
+        if (!is_key_msg(lpMsg->message) || !kb_blocking()) return got;
+        /* Alt+F4 always reaches the game: no accessibility feature may take away the
+         * player's ability to quit. (WM_SYSCOMMAND / WM_CLOSE / WM_ACTIVATE are not
+         * keyboard messages, so they were never candidates for swallowing.) */
+        if (lpMsg->wParam == VK_F4) return got;
+        /* PM_NOREMOVE peeks (this exe has three) leave the message queued, and a filter
+         * that only hides it would let the whole burst hit the game the instant we
+         * unblock. Consume it for real, then look for the next message. */
+        if (!(rm & PM_REMOVE)) {
+            MSG tmp;
+            g_realPeek(&tmp, lpMsg->hwnd, lpMsg->message, lpMsg->message, PM_REMOVE);
+        }
+    }
+    return FALSE;
+}
 
 /* Our replacement for XInputGetState: read the truth, cache it, optionally blank it. */
 static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
@@ -160,6 +228,19 @@ static void *iat_hook_any(const char *dll, const char *func, void *repl) {
  * back to a plain LoadLibrary'd XInputGetState (read-only, no blocking) if the
  * import can't be patched. */
 static int l_install(lua_State *L) {
+    /* The keyboard hook is independent of the XInput one (a keyboard player may have no
+     * pad at all), so it is installed on every call until it takes, and never removed.
+     * PIN our own module first: the IAT slot points into this DLL, so unloading it while
+     * the game's pump is live would be an instant crash. */
+    if (!g_kbHooked) {
+        /* C89 build (see build.ps1): every declaration at the top of its block. */
+        HMODULE self = NULL;
+        void *pk = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                           (LPCWSTR)(void *)&hookPeekMessageW, &self);
+        pk = iat_hook_any("USER32.dll", "PeekMessageW", (void *)hookPeekMessageW);
+        if (pk) { g_realPeek = (PeekMessageW_t)pk; g_kbHooked = 1; }
+    }
     if (g_hooked) { lua_pushboolean(L, 1); return 1; }
     void *orig = iat_hook_any("XINPUT1_3.dll", "XInputGetState", (void *)hookGetState);
     if (orig) {
@@ -233,19 +314,39 @@ static int l_inject_off(lua_State *L) {
     return 0;
 }
 
-/* is_hooked() -> bool */
+/* kb_block(ms) : hide the KEYBOARD from the game for the next `ms` milliseconds. This is a
+ * LEASE — call it again every tick to hold the block; ms <= 0 releases it at once. See the
+ * note above hookPeekMessageW for why it expires instead of latching. Returns whether the
+ * block can actually take effect (i.e. the pump is hooked). */
+static int l_kb_block(lua_State *L) {
+    lua_Integer ms = luaL_optinteger(L, 1, 0);
+    LONG64 until = (ms > 0) ? (LONG64)GetTickCount64() + (LONG64)ms : 0;
+    InterlockedExchange64((volatile LONG64 *)&g_kbUntil, until);
+    lua_pushboolean(L, g_kbHooked && ms > 0);
+    return 1;
+}
+
+/* is_hooked() -> bool  (the pad hook) */
 static int l_is_hooked(lua_State *L) {
     lua_pushboolean(L, g_hooked);
     return 1;
 }
 
+/* kb_is_hooked() -> bool  (the keyboard/pump hook) */
+static int l_kb_is_hooked(lua_State *L) {
+    lua_pushboolean(L, g_kbHooked);
+    return 1;
+}
+
 static const luaL_Reg input_funcs[] = {
-    {"install",    l_install},
-    {"poll",       l_poll},
-    {"block",      l_block},
-    {"inject",     l_inject},
-    {"inject_off", l_inject_off},
-    {"is_hooked",  l_is_hooked},
+    {"install",      l_install},
+    {"poll",         l_poll},
+    {"block",        l_block},
+    {"inject",       l_inject},
+    {"inject_off",   l_inject_off},
+    {"is_hooked",    l_is_hooked},
+    {"kb_block",     l_kb_block},
+    {"kb_is_hooked", l_kb_is_hooked},
     {NULL, NULL}
 };
 

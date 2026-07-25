@@ -77,6 +77,21 @@ function Input.block(on)
     if loaded then ib.block(on and true or false) end
 end
 
+-- Hide the KEYBOARD from the game for `ms` milliseconds — the keyboard twin of block(),
+-- used while the radar picker is open so its keys don't also reach the game (the arrows
+-- are mount/dismount in the game's default layout).
+--
+-- It is a LEASE, not a switch: it EXPIRES unless renewed, so call it every tick while the
+-- menu is open and pass 0 (or simply stop calling) to release. That is deliberate — a
+-- latched keyboard block would survive a mod crash and leave the player unable to press
+-- anything, pause and Escape included, with no way back but killing the game. Renewing is
+-- one cheap native call per tick. Returns true if the block can actually take effect.
+-- Guarded with `ib.kb_block` present so an older input_bridge.dll simply does nothing.
+function Input.kb_block(ms)
+    if loaded and ib.kb_block then return ib.kb_block(ms or 0) == true end
+    return false
+end
+
 -- Drive the game's LEFT stick to (lx, ly) in -1..1 for the next few frames (auto-releases
 -- if not refreshed). Used by the world-map cursor auto-move. Returns true if it can take
 -- effect (hook installed). No-op / false otherwise.

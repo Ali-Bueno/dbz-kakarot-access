@@ -56,7 +56,7 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Difficulty / choice lists | done | `screen_choicelist.lua`, `screen_choice.lua` |
 | Notices no longer cut off by the screen underneath | done | **VERIFIED in game 2026-07-25 (user).** `Announcer:focus` + `keyhelp_watch` defer while `Speech.protected()` — the shared fix for "the map/skill-tree readout talks over a popup". The offender is never the notice's own screen, so this belongs in the substrate, not per adapter |
 | Dialog re-trigger reads again | done (unverified) | 2026-07-25. `recent_set`/`pinned_set` are now scoped to the window PRESENCE (cleared after `CLOSED_CLEAR_S` = 0.7 s of continuous absence), not to the map epoch. Suppression was keyed per TEXT while every "new open" signal was per APPEARANCE |
-| Keyboard: radar picker + key names | done (unverified) | 2026-07-25. `radar_menu.Menu.key(cmd)` (queued, consumed on the game thread; `kb_open` so "no pad" ≠ "pad lost") + keybinds Ctrl+F3 / PageUp-PageDown / arrows / Enter — **needs a game RESTART**. Button-config keyboard tabs speak the literal key via `A.action_key` + `I18n.key`. Documented conflict: the game binds mount/dismount to ↑/↓ |
+| Keyboard: radar picker + key names + INPUT BLOCK | done (unverified) | 2026-07-25. `radar_menu.Menu.key(cmd)` (queued, consumed on the game thread; `kb_open` so "no pad" ≠ "pad lost") + keybinds Ctrl+F3 / PageUp-PageDown / arrows / Enter — **needs a game RESTART** (main.lua + a rebuilt DLL). Button-config keyboard tabs speak the literal key via `A.action_key` + `I18n.key`. The mount/dismount conflict on ↑/↓ is GONE: `input_bridge.kb_block(ms)` now hides the keyboard from the game exactly like the pad block does |
 | Controller REMAP honoured everywhere | done (unverified) | 2026-07-25. Every controller id the game exposes names a **SLOT**, not a button, and a slot keeps its factory name forever — so we were announcing the pre-remap button (user: melee B→X, ki X→B, both still read as B/X). F7 dump proved it in one pass: save `Controller_Btn_B = Gamepad_FaceButton_Left` / `Controller_Btn_X = Gamepad_FaceButton_Right` while the asset still pairs melee with slot `Controller_Btn_B`; the asset is NOT rewritten on rebind (its only live-vs-default delta is `ctrl` being filled in at runtime), so cache-clearing there could never have fixed it. New slot→physical layer in `ui_archetypes` reading `UATSaveSystem.InputAssign` via `gi.SaveManager→SaveSystem` (0.5 s TTL, fail-open to the slot name), applied in the single funnel `A.button_name` plus the three raw-token paths (`platbtn_token` ×2, `platbtn_id_token`'s idxToCtrl fallback). Identity under a default config, so it can only change a remapped pad. Fixes Options rows AND every `<inputicon>` prompt, keyhelp and tutorial glyph |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua`. Title 2026-07-17: SETTLE GATE — the boot-check dialogs re-commit the title on every gap and each re-commit re-announced "Menú principal, continuar"; the title now stays silent until it holds the screen 2.5 s with no dispatcher reset (no reflected boot-phase field exists on AAT_Title/AATTitleLevelScriptActor — swept), a cursor move lifts the gate at once, F1 bypasses it via `reannounce()`. Verified in-game 2026-07-17 (announced once, after the boot dialogs; 4 s felt sluggish → tuned to 2.5 s) |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
@@ -151,9 +151,29 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
   THREAD (a keybind callback is not the game thread and `do_open` reads the world); `kb_open`
   distinguishes "no pad because there is none" from "the pad went away mid-menu", which the old
   teardown could not tell apart. Keys: Ctrl+F3 toggle, PageUp/PageDown + ↑/↓ move, ←/→ category,
-  Enter select. **Needs a game RESTART** (main.lua). Known conflict, deliberate and documented:
-  the game's own default keyboard layout binds mount/dismount to ↑/↓ and UE4SS keybinds do not
-  swallow keys, so PageUp/PageDown is the recommended pair.
+  Enter select. **Needs a game RESTART** (main.lua + a rebuilt DLL).
+- **The keyboard is now hidden from the GAME while the picker is open**, the exact twin of the
+  pad block (user asked "¿no podemos hacer lo mismo que con el mando?" — yes, and it removes the
+  ↑/↓ mount-dismount conflict entirely instead of documenting it). Two facts had to be settled
+  first, and both were, from sources rather than assumption:
+  1. **UE4SS POLLS `GetAsyncKeyState`** on its own `UE4SS-UpdateThread`
+     (`deps/first/Input/src/Handler.cpp:91/108/135`, v3.0.1; `UE4SSProgram.cpp:922` at ~200 Hz).
+     It never reads window messages. So draining the game's message queue cannot break our own
+     keybinds — which is what makes this safe at all, since the key that CLOSES the picker is one
+     of them. Corollary: **NEVER hook `GetAsyncKeyState`** — that is precisely what UE4SS polls,
+     and hooking it would silence the mod process-wide.
+  2. **The exe pumps with `user32!PeekMessageW`** (6 call sites; `GetMessageW` is not imported)
+     and registers RawInput for the **mouse only** (its single `RegisterRawInputDevices` passes
+     usUsagePage=1/usUsage=2), with no DirectInput. So every keystroke arrives as a posted
+     `WM_KEY…`/`WM_CHAR` and draining the pump hides the keyboard completely.
+  Implementation: `input_bridge.kb_block(ms)` + an IAT hook on `PeekMessageW` that removes and
+  discards keyboard messages while the lease is live (three of the exe's peeks are PM_NOREMOVE,
+  so a filter that merely hides them would dump the whole burst on the game at unblock).
+  **It is a LEASE, not a latch** — a wall-clock deadline renewed every 20 ms tick by
+  `radar_menu.step`; if the mod dies mid-block the keyboard frees itself in ~300 ms instead of
+  leaving the player unable to press anything. Alt+F4 is never swallowed, and the module is
+  PINNED (`GET_MODULE_HANDLE_EX_FLAG_PIN`) because the IAT slot points into our DLL.
+  Trap that cost a build: `WM_KEY*/WM_CHAR` inside a C block comment — the `*/` closes it.
 
 **2026-07-25 (k): two user reports — one FIXED centrally, one waiting on a single capture.**
 

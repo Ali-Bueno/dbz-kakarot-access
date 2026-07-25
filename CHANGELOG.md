@@ -24,18 +24,20 @@
 - **Keyboard players can use the radar target picker.** It used to be reachable only by
   clicking the right stick. **Ctrl+F3** opens and closes it, **Page Up / Page Down** (or
   the up and down arrows) move through targets, the left and right arrows change category,
-  and **Enter** locks onto the focused one.
+  and **Enter** locks onto the focused one. While it is open the game no longer receives
+  your keystrokes at all - exactly what the mod already did with the controller - so
+  moving through the list cannot make your character do anything.
 - **The button-config screen reads keyboard keys.** On the keyboard tabs it used to
   announce the equivalent controller button, because the key itself looked unreadable.
   It now says the real key - "tecla: barra espaciadora", "tecla: clic izquierdo".
 
 ### Notes
-- The new keyboard shortcuts need the game restarted once after updating (keybinds are
-  registered when the game starts).
-- The up and down arrows move through the picker because they were requested, but the
-  game's own default keyboard layout puts mount/dismount on those two keys, and the mod
-  does not take keys away from the game. **Page Up / Page Down are the safer pair** while
-  you are riding something.
+- This version updates one of the mod's own libraries (the input bridge), so it needs the
+  game **restarted once** after updating - the new keyboard shortcuts are registered at
+  startup too.
+- If anything ever goes wrong while the picker is open, the keyboard block releases itself
+  automatically within a fraction of a second. It cannot leave you unable to type, and
+  Alt+F4 is never blocked.
 
 ---
 

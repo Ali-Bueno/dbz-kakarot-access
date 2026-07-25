@@ -138,10 +138,12 @@ Handy shortcuts that mirror or complement the controller — not required to pla
 | **F3** | Toggle the navigation radar |
 | **Shift+F3** | Toggle NavMesh route guidance |
 | **Ctrl+F3** | Open / close the radar **target picker** (the R3 menu, from the keyboard) |
-| **Page Down / Page Up** (picker open) | Move through targets (nearest first) |
-| **↓ / ↑** (picker open) | Same — but note the game binds mount/dismount to these by default, so Page Up/Down is the safer pair |
+| **Page Down / Page Up** or **↓ / ↑** (picker open) | Move through targets (nearest first) |
 | **← / →** (picker open) | Previous / next category |
 | **Enter** (picker open) | Lock onto the focused target |
+
+While the picker is open the game does not receive your keystrokes at all — the same thing the mod
+already did with the controller — so moving through the list can't trigger anything in the game.
 | **F5** | Announce the tracked objective (distance, clock direction) |
 | **Shift+F5** | Cycle companion tracking |
 | **F8** | Speech test (also names the active screen reader) |
