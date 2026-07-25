@@ -37,6 +37,7 @@
 
 local Core = require("ui_core")
 local Transition = require("transition")
+local Mem = require("mem")   -- Mem.raw_addr: an object's stored pointer without dereferencing it
 
 local Directory = {}
 
@@ -147,6 +148,60 @@ function getters.bm() return prop(find_hud(), "UIBattleManager") end
 function getters.cm() return prop(find_hud(), "UICommManager") end
 function getters.wm() return prop(getters.gi(), "WindowManager") end
 
+-- ---- the world epoch (the transition gate's only signal) ---------------------------------
+--
+-- Identity of the world we are in right now, as a plain number, polled from the game thread
+-- by ui_core.begin_scan_tick and handed to Transition.note_epoch. Returns:
+--   number -> this world's identity
+--   nil    -> no world (boot, or a map switch in progress) → arm the gate
+--   false  -> could not read it → not an event, change nothing
+--
+-- WHY THE GameInstance's WORLD and not a controller. The obvious candidate was the
+-- PlayerController, but this game has SEVERAL (`find_hud` above documents handing back
+-- TwinFootController, the ride/mount controller) and they come and go DURING a world as the
+-- player mounts and dismounts. An epoch that flaps mid-world would fire a spurious cache
+-- flush every time — worse than no gate. The GameInstance is the one object that never dies
+-- (so it is cached after a single lookup and costs nothing per poll) and `GetWorld()` on it
+-- answers with the CURRENT world, which changes only on a real map switch. During a switch
+-- it either still points at the freed old world — which Core.valid now rejects safely, since
+-- Mem.alive pre-checks the memory before UE4SS dereferences — or at the new one, and both
+-- outcomes are the event we want.
+-- The nil/false distinction is load-bearing and easy to get wrong: `nil` ARMS THE GATE, so it
+-- must mean "there is genuinely no world", never "I could not look this tick". A budget denial,
+-- a root back-off or an unreadable address all return FALSE — otherwise a spent scan budget
+-- would flush every cache and freeze the reader for the grace period, repeatedly.
+local world_warned = false
+function Directory.world_epoch()
+    local gi = roots["gi"]
+    if not Core.valid(gi) then
+        roots["gi"] = nil
+        -- Never scan while the gate is up: object-array walks mid-load are the boot-hang class
+        -- of bugs, and the answer would not change anything (the gate is already armed).
+        if Transition.active() then return false end
+        gi = getters.gi()                 -- budgeted + backed off like every other root
+        if not Core.valid(gi) then return false end
+    end
+    local w, ok
+    ok = pcall(function() w = gi:GetWorld() end)
+    if not ok then
+        -- Losing this signal is not fatal (the memory pre-check protects the reads) but it
+        -- does leave the gate inert, so it must never be silent.
+        if not world_warned then
+            world_warned = true
+            print("[KakarotAccess] GetWorld() unavailable — transition gate is INERT\n")
+        end
+        return false
+    end
+    if not Core.valid(w) then return nil end
+    -- ACCEPTED HOLE: if no poll ever lands in the window where the WorldContext's world is null
+    -- (UE4 nulls it before CollectGarbage) AND the new UWorld is allocated at the freed one's
+    -- address, the epoch reads unchanged and the gate never arms for that switch. It is the one
+    -- hole the removed GameModeBase notify did not have. Judged acceptable: the notify's own
+    -- holes (foreign-thread delivery, arming after the objects were already freed) were worse
+    -- and NOT rare, and the memory pre-check now catches the freed handles this would leak.
+    return math.tointeger(Mem.raw_addr(w)) or false
+end
+
 -- ---- the map: adapter class -> pointer chains --------------------------------
 -- Chain = { root_key, field, [field2] }. Several chains when the game keeps several
 -- copies (save vs load menu, field tips vs pause tips) — the resolver returns every
@@ -226,6 +281,22 @@ local MAP = {
     ["AT_UIMiniMapRadar"]      = { {"fm", "MapMng", "MinimapIns"} },
     ["Field_Memory_C"]         = { {"fm", "FieldMemory"} },
     ["Quest_Main_Clear_C"]     = { {"fm", "QuestMainClear"} },
+    -- Defeat menu. The owner field was FOUND by the F7 probe's owner hunt on 2026-07-25
+    -- (`OWNER FIELD: AT_UIFieldManager.Gameover -> this host`), which retires the whole scan
+    -- path for this screen: no FindAllOf, no watch lane, no ABSENT_BACKOFF, and immune to
+    -- cinematic quiet mode — which is what kept it silent, since a defeat happens with the
+    -- gameplay world up, no battle HUD, no minimap and no user press, i.e. exactly the state
+    -- quiet mode defers scans in. This is also what makes the flapping battle-HUD edge harmless:
+    -- a watch on a MAPPED class resolves through the directory and never costs a scan.
+    ["Gameover_C"]             = { {"fm", "Gameover"} },
+    -- Free/event SPEECH BUBBLES (UAT_UIFieldTalkFree, AT.hpp:33181) — the third dialogue surface,
+    -- and the one that was missing: `fm.FieldTalkFree` @0x658. Holds two TArrays of
+    -- UAT_UIFieldTalkFreeCore, whose `TextBox` carries the line.
+    ["AT_UIFieldTalkFree"]     = { {"fm", "FieldTalkFree"} },
+    -- The NAVI WINDOW (UAT_UIFieldNaviWin, AT.hpp:33020) — the portrait pop-up a character speaks
+    -- through when they are not physically present, which the player reads as "on the phone".
+    -- `fm.FieldNaviWin` @0x550. This was the FOURTH dialogue surface and the mod never looked at it.
+    ["Field_Navi_Win_C"]       = { {"fm", "FieldNaviWin"} },
     ["Quest_Sub_C"]            = { {"fm", "QuestSub"} },
     -- The quest-objective HUD (flag panel above the minimap). fm.QuestNavigation
     -- (AT.hpp UIFieldManager 0x568); Quest_Navi_C is its BP subclass (Quest_Navi.hpp).
