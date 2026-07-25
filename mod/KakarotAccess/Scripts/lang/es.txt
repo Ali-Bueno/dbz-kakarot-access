@@ -129,6 +129,7 @@ radar_cat_collectibles = Coleccionables
 radar_cat_sites = Sitios
 radar_cat_enemies = Enemigos
 radar_cat_hunt = Caza
+radar_cat_exit = Salidas
 radar_cat_other = Otros
 cat_memory = recuerdo
 cat_item = objeto

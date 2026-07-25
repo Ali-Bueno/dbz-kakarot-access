@@ -129,6 +129,7 @@ radar_cat_collectibles = Collectibles
 radar_cat_sites = Sites
 radar_cat_enemies = Enemies
 radar_cat_hunt = Hunt
+radar_cat_exit = Exits
 radar_cat_other = Other
 cat_memory = memory
 cat_item = item

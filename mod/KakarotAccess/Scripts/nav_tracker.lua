@@ -98,8 +98,13 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- EMapIcon (AT_enums.hpp) grouped into the player-facing categories the R3 menu
 -- cycles with L1/R1. Anything unmapped falls into "other". The group order is the
 -- L1/R1 tab order (empty groups are skipped when cycling).
+-- "exit" sits SECOND, right after quests. It is the get-me-out-of-here category (user 2026-07-25:
+-- stuck inside Goku's house with no way to find the door), so it has to be reachable in one R1 —
+-- but making it FIRST would displace quests as the default tab everywhere, since doors exist all
+-- over the outdoors too. Inside a building this costs nothing anyway: nearly every other group is
+-- empty there and empty groups are skipped when cycling.
 local GROUP_ORDER = {
-    "quests", "collectibles", "npc", "companions", "enemies", "hunt", "sites", "fishing",
+    "quests", "exit", "collectibles", "npc", "companions", "enemies", "hunt", "sites", "fishing",
     "gathering", "shops", "minigames", "dragonball", "other",
 }
 local ICON_GROUP = {
@@ -231,7 +236,16 @@ local WORLD_DROP_TICKS = 50    -- ~5 s hidden -> assume level change/battle, dro
 -- state proved inconsistent across item kinds): advance when the reached actor is
 -- gone/hidden/Taken OR when the player simply walks away from the reached spot. A
 -- visited-key set guarantees forward progress even when an item never reports collected.
-local function chainable(grp) return grp ~= nil and grp ~= "quests" end
+-- "exit" is NOT chainable either, and that exclusion is load-bearing twice over (user 2026-07-25:
+-- "dice salidas pero el radar no las rastrea"). `sweeping` = manual + chainable, and it gates the
+-- ghost filter below at line ~1531, which drops a reached target whose `bHidden` is true. That
+-- filter was added 2026-07-17 for the parked future-story CHARACTERS the game hides near the
+-- player — but a door is an `ATriggerBox`, i.e. an INVISIBLE VOLUME whose bHidden is true as its
+-- normal state. So the first tick after picking a door chained straight over it to the next door,
+-- also hidden, also dropped: a door could never be tracked at all. Making exits non-chainable also
+-- gets the semantics right — on reaching an exit you walk THROUGH it and the world changes, so
+-- sweeping to "the next door" is not a thing anyone wants.
+local function chainable(grp) return grp ~= nil and grp ~= "quests" and grp ~= "exit" end
 local chain_wait = nil         -- { actor, key, grp, stateful } while at the reached item
 local chain_seen = {}          -- keys already visited in this sweep (never re-targeted)
 
@@ -1872,6 +1886,11 @@ function Nav.start()
                 -- must not leave the guard stuck and the radar silent for the session
                 -- (see ui_core.loop for the full rationale).
                 busy = false
+                -- This loop is the only one that touches UObjects without going through
+                -- Core.begin_scan_tick, so it polls the world epoch itself — otherwise, with
+                -- the menu reader toggled off (Ctrl+M stops the registry loop), the radar
+                -- would keep walking cached actors with the transition gate never arming.
+                Core.poll_world()
                 -- Cost telemetry (like ui_core.loop's step stats): this loop runs
                 -- OUTSIDE the registry step, so its game-thread cost was invisible to
                 -- the Ctrl+F5 numbers until the 2026-07-16 mods.txt A/B forced the
@@ -2251,7 +2270,14 @@ function Nav.list_targets()
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
-            local cap = (src == "questchar" or src == "collectible" or src == "enemy")
+            -- Doors take the TIGHT cap: they are level geometry scattered over the whole
+            -- outdoors, and a door a kilometre away is noise. Unlike the other tight-capped
+            -- sources they ARE eligible for the empty-group rescue below — that exclusion exists
+            -- because beyond the cap lies the parked CHARACTER preload pool, and a door volume is
+            -- not a pooled character. Rescuing the nearest door is exactly right for someone who
+            -- cannot find the way out.
+            local cap = (src == "questchar" or src == "collectible" or src == "enemy"
+                or src == "door")
                 and RADAR_CAP.npc or math.max(RADAR_CAP.map, range or 0)
             if d > cap then kept = false end
         end
@@ -2530,6 +2556,39 @@ function Nav.list_targets()
     for _, a in pairs(FindAllOf("ATWindRoad") or {}) do
         if Core.valid(a) then
             add_target(a, "sites", "cat_windroad", nil, "collectible")
+        end
+    end
+    -- 4b2) DOORS / area transitions (AATDoorVolume < ATriggerBox, AT.hpp:13004). The thing you
+    -- walk into to leave a building — requested 2026-07-25 after being trapped inside Goku's house
+    -- with no way to find the exit. The class is an ACTOR, so it drops straight into add_target and
+    -- needs no new tracking machinery (the radar cannot follow a bare position — see the target
+    -- shape in set_manual_target — which is why the "remember where you came in" fallback was NOT
+    -- built: it would have meant rewriting that core).
+    --
+    -- No filtering beyond distance and validity, deliberately. The doors are bidirectional (a
+    -- single AATDoorVolume pairs with its `DestinationDoor`), so the nearest one when you are
+    -- indoors IS the way out, and outdoors the same list reads as "ways in" — both useful. There
+    -- are flags here whose meaning is not established (`bOnlyUsedInRoom`, `bUseDialog`), and
+    -- guessing at them could hide the very door the player needs.
+    for _, a in pairs(FindAllOf("ATDoorVolume") or {}) do
+        if Core.valid(a) then
+            -- `AreaName` (FName @0x378) names the destination, so the picker can say WHERE the
+            -- door goes instead of just "exit". It may be an internal identifier rather than
+            -- display text; that is still far better than nothing when you are lost, and it falls
+            -- back to DoorName and then to the bare category noun.
+            local label
+            for _, prop in ipairs({ "AreaName", "DoorName" }) do
+                if label == nil then
+                    pcall(function()
+                        local n = Core.member(a, prop)
+                        if n then
+                            local s = n:ToString()
+                            if s and s ~= "" and s ~= "None" then label = s end
+                        end
+                    end)
+                end
+            end
+            add_target(a, "exit", "radar_cat_exit", nil, "door", label)
         end
     end
     -- 4c) FIELD POINTS (UFieldPointComponent.FieldPointIconType — FIELD_POINT_TYPE,
@@ -3353,6 +3412,45 @@ function Nav.dump()
         f:write(string.format("resolved player: %s pos=%s %s %s\n",
             pawn and pawn:GetFullName() or "NONE", tostring(px), tostring(py), tostring(pz)))
         px, py, pz = px or 0, py or 0, pz or 0
+        -- DOORS (2026-07-25). The user reports the picked exit sits exactly where the player is, so
+        -- the target is useless as a "walk here" beacon. This section answers WHY without guessing.
+        -- The suspicion: AATDoorVolume is a TriggerBox, and a volume large enough to cover the room
+        -- has its ORIGIN near the middle of that room — i.e. near the player — while the door itself
+        -- is at the edge. If that is what the numbers show, the right target is not the actor origin
+        -- but `PlayerStartTransform` (@0x390), the spot the game itself places the player on when
+        -- arriving through this door. FTransform is {FQuat Rotation 0x00, FVector Translation 0x10,
+        -- FVector Scale3D 0x20} (size 0x30, which the header confirms), so the translation is at
+        -- 0x390+0x10 = 0x3A0 — read NATIVELY through mem_bridge rather than as a nested struct
+        -- property, because chained struct reads are a documented uncatchable abort here.
+        pcall(function()
+            local doors = FindAllOf("ATDoorVolume") or {}
+            f:write(string.format("doors: n=%d (player at %.0f %.0f %.0f)\n", #doors, px, py, pz))
+            for i, a in ipairs(doors) do
+                if Core.valid(a) then
+                    local ax, ay, az = actor_pos(a)
+                    local nm = {}
+                    for _, prop in ipairs({ "AreaName", "DoorName" }) do
+                        local s
+                        pcall(function()
+                            local v = Core.member(a, prop)
+                            if v then s = v:ToString() end
+                        end)
+                        nm[#nm + 1] = prop .. "=" .. tostring(s)
+                    end
+                    local sx = Mem.float(a, 0x3A0)
+                    local sy = Mem.float(a, 0x3A4)
+                    local sz = Mem.float(a, 0x3A8)
+                    local d = ax and math.sqrt((ax - px) ^ 2 + (ay - py) ^ 2 + (az - pz) ^ 2) or -1
+                    local room
+                    pcall(function() room = tostring(a.bOnlyUsedInRoom) end)
+                    f:write(string.format(
+                        "  door[%d] d=%.0f origin=%s %s %s  playerStart=%s %s %s  onlyInRoom=%s %s\n",
+                        i, d / 100, tostring(ax), tostring(ay), tostring(az),
+                        tostring(sx), tostring(sy), tostring(sz), tostring(room),
+                        table.concat(nm, " ")))
+                end
+            end
+        end)
         local icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
         local n = 0
         for _, icon in pairs(icons) do
