@@ -1,7 +1,262 @@
 # dbz-kakarot-crash-bug
 
-> DBZ Kakarot mod crash ledger. LATEST (2026-07-24 c): AV mid-COMBAT reading 0x10 after a huge lag spike (= engine GC/streaming). KEY BREAKTHROUGH: crash CLASS A is guardable after all — obj:GetAddress() returns the stored pointer WITHOUT dereferencing, so new Core.nonnull() gates every Brush.ResourceObject read (keyhelp first, as this ledger predicted); Core.valid also rejects NULL-handle wrappers; battle_monitor (the only 250ms combat loop) finally migrated to Core.member. Earlier: end-user AV browsing COOKING recipes = SAME 07-21 dangling-UObject __index class but in steady-state menu browsing (pooled ListView/detail widget recycled on scroll), NOT a transition — menu adapters ARE exposed; migrated screen_cooking + shared A.list_selected_row to Core.member. Earlier: two end-user AVs from the ExecuteInGameThread flush during teardown; naked member fetch as a call argument; fixed C-array through array_of pierces pcall; nav_tracker raw #arr on streaming-freed objects.
+> DBZ Kakarot mod crash ledger. LATEST (2026-07-25 d): the batch of silenced menus was
+> `GetAddress()` called on a **non-UObject** RemoteObject (the TArray in `Core.array_of`) — UE4SS
+> raises "polymorphic type is not allowed" and that error **pierces pcall**, killing the adapter's
+> function mid-flight. 510 tracebacks in the user's log named every affected screen; three rounds of
+> code-only reasoning had got the mechanism wrong. Fix: `Core.valid_ref` (IsValid only) for array
+> and struct handles; `Core.valid`/`Mem.alive` are for UObjects only. **Read UE4SS.log before
+> theorising about a silent screen.** Also 2026-07-25:
+ the root cause of the whole access-violation
+> family is settled from the UE4SS source — **`IsValid()` dereferences the object before it checks
+> anything**, so it faults on exactly the handles it exists to reject, and UE4SS never clears the
+> raw pointer inside a Lua handle. Fix: `Mem.alive()`, an SEH-guarded memory pre-check that runs
+> BEFORE UE4SS touches the object (class-pointer offset derived at runtime). `bUseUObjectArrayCache
+> = false` is a documented dead end. Same day: the 07-24 hardening had silenced screens (load-game,
+> Options save confirmations) because `Core.valid` failed CLOSED on an unanswerable `GetAddress` and
+> `ui_directory` gates every pointer hop on it — guards must fail OPEN on "don't know".
+>
+> Previously (2026-07-24 c): AV mid-COMBAT reading 0x10 after a huge lag spike (= engine GC/streaming). KEY BREAKTHROUGH: crash CLASS A is guardable after all — obj:GetAddress() returns the stored pointer WITHOUT dereferencing, so new Core.nonnull() gates every Brush.ResourceObject read (keyhelp first, as this ledger predicted); Core.valid also rejects NULL-handle wrappers; battle_monitor (the only 250ms combat loop) finally migrated to Core.member. Earlier: end-user AV browsing COOKING recipes = SAME 07-21 dangling-UObject __index class but in steady-state menu browsing (pooled ListView/detail widget recycled on scroll), NOT a transition — menu adapters ARE exposed; migrated screen_cooking + shared A.list_selected_row to Core.member. Earlier: two end-user AVs from the ExecuteInGameThread flush during teardown; naked member fetch as a call argument; fixed C-array through array_of pierces pcall; nav_tracker raw #arr on streaming-freed objects.
 
+
+**2026-07-25 (c) — NEW VALIDATION STEP: `luac -p` IS NOT ENOUGH. Lint the compiled GLOBALS.**
+The adversarial review of the same day's work caught a change that would have made the mod
+**completely silent from boot**: `Core.poll_world` called `dir_mod()` 74 lines ABOVE the
+`local function dir_mod` that defines it. In Lua a local's scope starts at its own statement, so
+that call compiled to a GLOBAL lookup, was nil at runtime, and raised from a spot ABOVE the
+loops' `pcall(step)` — every tick dead, nothing in the log. **`luac -p` accepts it: a call to an
+undefined global is valid syntax.** The check that finds it reads the bytecode:
+```
+luac.exe -l -p FILE.lua | grep -oE '_ENV "[A-Za-z_][A-Za-z0-9_]*"' | sort -u
+```
+Everything listed is a global access; anything not a Lua builtin or a UE4SS global (`FindAllOf`,
+`FindFirstOf`, `StaticFindObject`, `LoadAsset`, `LoopAsync`, `ExecuteInGameThread`,
+`NotifyOnNewObject`, `RegisterHook`, `RegisterKeyBind`, `RegisterCustomProperty`,
+`PropertyTypes`, `Key`, `ModifierKey`) is a bug. **Run it over every file after any edit, next to
+`luac -p`.** The first sweep found two PRE-EXISTING ones nobody had noticed:
+* `screen_community.lua`: `clear_state()` assigned `last_sub`, declared local ~530 lines later —
+  so it wrote a global and the link-bonus subtitle latch was NEVER cleared. A link bonus shown
+  twice in a session announced only the first time. Fixed with a forward declaration.
+* `header_hook.lua`: the dead `_install_experimental` still iterated `CANDIDATES`, renamed to
+  `TRIED` long ago — harmless today (never called), fatal the day someone re-enables it.
+This is the same failure shape as the guards themselves: **the tool you trust does not check the
+thing you assumed it checked.** Same lesson as `IsValid()`.
+
+**2026-07-25 (b) — THE OTHER TWO UNCATCHABLE CLASSES ARE NOW GUARDED BY THE ENGINE'S OWN
+METADATA, and the last construction notify is GONE.**
+1. **"member the class does not have"** (the 2026-07-17 `bar.Txt00` kill, a member of the SIBLING
+   bar class): `Core.member` now consults a per-class PROPERTY-NAME SET built with
+   `UStruct:ForEachProperty` plus a `GetSuperStruct()` walk — ForEachProperty lists a class's OWN
+   properties only, so the walk is what makes inherited members resolvable. Cached by class
+   address, cleared on transition (a map switch is exactly when BP classes unload and an address
+   can be reused), at most ONE class enumerated per tick (this codebase's whole perf history is
+   about not letting per-class work cluster), fails open. Blocked fetches log
+   `member gate: <Class> has no '<Member>'`, capped at 50 — an over-rejection must be visible.
+   **TRAP FOUND WHILE BUILDING IT: `RegisterCustomProperty` members are INVISIBLE to
+   ForEachProperty** (UE4SS keeps them in its own map, consulted by `__index` as a fallback; they
+   are never added to the UClass). The mod uses them to recover collapsed FIXED C arrays —
+   screen_party's party slots 1/2, screen_community's skill parts 1..9. Those sites fetch raw
+   today so nothing was broken, but the standing "route fetches through Core.member" rule would
+   have silently killed both screens. They now declare themselves with `Core.allow_member()` at
+   registration time; **anyone adding a custom property must do the same.**
+2. **The FIXED C-ARRAY pierce** (2026-07-16, `screen_dialog.WL_LvTextList`): the property walk
+   records each member's TYPE for free (it already asked `prop:GetClass():GetFName()`), and a real
+   TArray is an `ArrayProperty` while a fixed C array is one ObjectProperty with ArrayDim > 1. So
+   `Core.array_of` refuses anything the class declares as a non-ArrayProperty. That code's own
+   comment used to read "there is no runtime check for this: the caller must never pass a
+   fixed-array member here — check the CXX header dump." There is one now, and it does not depend
+   on a human remembering. Logs `array gate: '<Member>' is a <Type>, not a TArray`.
+3. **`NotifyOnNewObject("/Script/Engine.GameModeBase")` REMOVED** — the last construction notify
+   in the mod, i.e. the last place mod Lua could run on the engine's async loading thread and race
+   the poll loop on the shared `lua_State`. It also armed too LATE (the GameMode is constructed
+   after the old world's objects are freed, and our tick DOES run in between — LoadMap fires dozens
+   of UFunctions through ProcessEvent, each draining our queue). Replaced by
+   `Directory.world_epoch()`: GameInstance (never dies, cached after one lookup) → `GetWorld()` →
+   address, polled by `Core.poll_world()` from `begin_scan_tick` (every loop) and directly from
+   nav_tracker (the only loop touching UObjects outside it — with the reader toggled off the
+   registry loop stops and the gate would never arm). Deliberately NOT the PlayerController: this
+   game has several and they swap mid-world when mounting, so the epoch would flap and flush caches
+   spuriously. 60 s failsafe releases the gate if no world is ever found — a MUTE mod is worse than
+   an unguarded one, and the memory pre-check now protects the reads. This also retires the
+   "root_ok is CIRCULAR" blocker from 2026-07-21: probing a dead root is safe now.
+
+**2026-07-25 — ROOT CAUSE OF THE WHOLE AV FAMILY, READ OFF THE UE4SS SOURCE. `IsValid()` IS
+ITSELF THE DEREFERENCE.** Ten months of this ledger say "IsValid lies". It does not lie — it
+*faults*. RE-UE4SS v3.0.1, `UE4SS/include/LuaType/LuaUObject.hpp:610`:
+`m_cpp_object && !m_cpp_object->IsUnreachable() && is_object_in_global_unreal_object_map(m_cpp_object)`.
+`IsUnreachable()` READS THE OBJECT, and it is evaluated **before** the only part that could
+catch a freed handle — the lookup in UE4SS's own object set. So on a dangling pointer the
+access violation happens inside the very call that was supposed to reject it, and no pcall can
+catch it. Two more facts from the same source:
+* UE4SS never clears the raw pointer inside a Lua handle. Its delete listener
+  (`LuaUObject.cpp:59-66`) only erases a hash from `s_lua_unreal_objects`. A freed object — or
+  one whose ADDRESS a new object recycled, which re-inserts the same hash — passes `IsValid()`
+  and dies at `prepare_to_handle` → `GetClassPrivate()`, i.e. **UObjectBase+0x10: the exact
+  faulting address in every user report.**
+* There is NO safe liveness call in the Lua API. `GetAddress()` is the only method that does not
+  dereference; `IsA`, `GetFullName`, `HasAnyInternalFlags`, `GetClass` all touch the object.
+  `FWeakObjectPtr` is exposed but cannot be constructed from a UObject in Lua.
+**DEAD END, do not spend a session on it: `bUseUObjectArrayCache = false` is NOT a fix.**
+`IsValid()` never walks GUObjectArray in either mode; the setting only gates the LiveView
+listeners, its own ini text scopes it to *startup* crashes, and issue #772 shows Lua
+`IsA(string)` silently stops honouring inheritance when it is off. Likely a net negative.
+**THE FIX (applied): pre-check the memory OURSELVES, before UE4SS touches it.** `Mem.alive(obj)`
+(mem.lua) asks the handle only for its stored pointer (`GetAddress`, no deref), then reads the
+object's class pointer and that class's own class pointer **through mem_bridge**, whose reads
+are SEH-guarded and return nil for an unreadable address instead of faulting the process. Freed
+or garbage memory fails one of those reads or yields something that is not a UObject. It is not
+a liveness proof — an address recycled by another *live* object still reads fine — but it turns
+the dangling/garbage class from "kills the process" into "returns nil", and it is the ONLY guard
+that can run before `IsValid()`. `Core.valid` and `Core.nonnull` now go through it, and so does
+`Mem.addr` (every native offset read). The `ClassPrivate` offset is **derived at runtime**, not
+hardcoded: take a UClass found by path, get its class pointer by reflection, and find that value
+in the object's first bytes — a game/engine patch re-derives it. Fails OPEN everywhere (no
+bridge, no offset, unanswerable handle ⇒ proceed as before). Boot log says
+`UObject class pointer at +0xN (derived)`; rejections are counted and logged every 200.
+
+**2026-07-25 (g) — CRASH RECURRENCE, known signature, and the trigger was a per-tick scan I had
+just introduced.** Stack: `VCRUNTIME140` → UE4SS **+0x1482b / +0x1449b / +0xe89e** (subtract the
+UE4SS.dll base ≈ 0x7fffa3ed0000) → ~25 recursive frames in **+0x71xxxx–0x73xxxx** (the Lua-VM range)
+→ dispatcher → `AT-Win64-Shipping`. That is BYTE-IDENTICAL to the 2026-07-21 signature: property
+`__index` on a **dangling** UObject. Faulting address `0xdb6a46e8` = recycled garbage, not null and
+not 0x10 — i.e. **precisely the residual hole `Mem.alive` documents about itself**: an address
+recycled by another LIVE object passes every readability check. The pre-check is not at fault; it
+never claimed this case.
+What made it fire: `screen_options.refresh_rows` had just been changed (round 1 of the re-entry fix)
+to run whenever the staleness test failed — and the test fails for as long as the pooled host
+lingers `on_screen` after the menu closes, which is forever. **A once-per-session `FindAllOf` became
+a ~65 ms full-object scan every tick.** Two consequences, both observed: story dialogue went silent
+(it is scan-detected, and the shared 2-per-tick budget was being drained), and the dangling-object
+exposure multiplied — a full object-array walk every 100 ms is the per-tick-retry escalation this
+ledger has warned about since 2026-07-13. It also survived a mod reload, which was the tell: the
+state causing it belonged to the GAME (a parked pooled widget), not to the mod.
+Fixes: `screen_options` now gates the host on `Core.pane_live` as well as `on_screen` (it was
+violating the CLAUDE.md §8 pooled-pane rule — the only adapter of its family that did), and
+`refresh_rows` has an explicit `RESCAN_EVERY = 10` backoff.
+RULES: (1) **a scan SLOT is not a rate limit.** `Core.take_scan_slot` grants 2 per tick — it
+apportions a budget between competing callers, it does not stop one caller from asking every tick.
+Anything that can be called every tick needs its own backoff, in addition to the slot. (2) When a
+guard's failure mode is "re-scan", ask what happens if the condition is permanently true. (3) The
+residual crash hole is now precisely known and needs the CLASS-POINTER STAMP: record each cached
+object's `ClassPrivate` when it is first validated and require it to still match. A recycled address
+holding a different class is then rejected; recycled-into-the-same-class remains readable, which is
+safe. That is the next durable step.
+
+**2026-07-25 (f) — SAME BUG SHAPE, THREE PLACES IN ONE BATCH: a derived engine signal FLAPS.**
+The day's own fixes introduced two new symptoms — the result screen going silent and the audio
+cutting every ~1.5 s in cutscenes — and both were one shape:
+1. **`battle_hud_live()` in ui_registry.** Making the falling edge unconditional (needed, so a
+   battle ending behind subtitles is seen) exposed that the pooled HUD collapses/uncollapses, so the
+   raw signal fired ~5 "battle ended" events per battle. Each one opened a 3 s hot window that
+   DEFEATED cinematic quiet mode and re-armed a per-class watch: the log shows **124
+   `watch Gameover_C` lines** where one window gives ~25, i.e. a ~65 ms `FindAllOf` every 0.8 s —
+   audible as the audio stutter — while eating the 2-scans-per-tick budget. Fixed with
+   `ABSENT_TICKS = 5` on the falling edge only.
+2. **`note_epoch` in transition.lua — the same shape, one layer down and far worse.** It armed the
+   gate on a SINGLE nil epoch, and every later nil re-extended the grace. And **while the gate is
+   up, `Directory.resolve` returns an EMPTY list for EVERY mapped class** (by design: no scans
+   mid-load), so one flicker of `Core.valid(w)` around a battle end silences the entire screen
+   directory for `GRACE_S`. That is the leading explanation for the result screen. Fixed with
+   `DOWN_CONFIRM_S = 0.3` measured in WALL TIME — `note_epoch` runs from every loop several times
+   per tick, so a call counter would confirm in milliseconds and confirm nothing. Epoch CHANGES are
+   never debounced (two different valid worlds is unambiguous).
+3. `begin_transition` now LOGS its trigger (`transition gate ON (world gone|new world)`). A false
+   arm was indistinguishable from a real one in the log, which is exactly why this cost a round.
+RULES: **a derived engine signal flaps — debounce the edge that costs something, in wall time, and
+log when it fires.** And: a cheap signal that gates expensive machinery deserves more scepticism
+than the machinery does.
+
+**2026-07-25 (e) — the SEVENTH silent screen was NOT the pierce: a stale hand-rolled cache.**
+Six of the user's seven reports are the `GetAddress`-pierce below, but **Options-on-re-entry appears
+ZERO times in the 510 tracebacks** — and that absence is what identified it as a separate bug
+instead of another symptom. Cause: `screen_options` hand-rolls a module-level `rows` cache (it has
+to filter the shared `Xlist_Bar03_C` pool by owner rather than use `first_on_screen`), its staleness
+test asked only `Core.valid(rows[1])`, and `Options.reset()` never cleared it. **This game only
+COLLAPSES a submenu's widgets on close** — so visit #1's rows stay valid forever, the test passes,
+`A.scan_list` sees no visible `Ins_Cursor_Fad` on the orphaned rows, `low` is nil every tick, and
+`update()` returns before reaching the announcer. It read on the FIRST entry only because the cache
+starts empty, which is exactly what made it look intermittent. Fix: staleness test also requires
+`Core.on_screen(rows[1])` (what `first_on_screen` does for every other list screen), `reset()`
+clears `rows`, and the re-scan is budgeted via `Core.take_scan_slot()` (raw `FindAllOf` ~65 ms, and
+the test can be false several ticks running). LESSON, now a playbook rule: **a hand-rolled widget
+cache must be invalidated by `on_screen`, not by validity** — and the diagnostic signature of this
+bug class is "works the first time, silent every time after", with NOTHING in the log.
+
+**2026-07-25 (d) — THE ACTUAL MECHANISM BEHIND THE SILENCED MENUS, FROM THE USER'S LOG.
+`GetAddress()` on a NON-UObject RemoteObject raises an error that PIERCES pcall.** This
+CORRECTS the entry below, whose diagnosis (a guard failing closed on a nil answer) was the wrong
+mechanism — reasoned from the code without the log. The log says it plainly:
+```
+Error: Call to RemoteObject:GetAddress on polymorphic type is not allowed, please override GetAddress.
+  [C]: in method 'GetAddress'  →  mem.raw_addr  →  mem.alive  →  ui_core.valid
+  →  ui_core.array_of  →  screen_saveload.bar_list → … → screen_saveload.update
+```
+510 occurrences in one session, and **every single one entered through `Core.array_of`'s validity
+check on the ARRAY**. `GetAddress` is overridden only on the UObject family; on a TArray wrapper
+UE4SS's base implementation raises — and that error does NOT stop at `pcall`, it unwinds to
+UE4SS's own callback boundary, so the adapter's `update`/`is_active` **dies mid-function** while
+every enclosing pcall reports success. The screens named in the tracebacks are exactly the ones
+the user reported silent: `screen_saveload` (1248 frames), `screen_status` (1104 — the d-pad stat
+walk), `nav_tracker` aim_watch (468), `screen_skillcustom` (208 — the super-attack palette),
+`screen_community` (148 — the emblem grid), `screen_tutorials` (136), `keyhelp` (102),
+`screen_skilltree` (88 — the skill tree), `screen_dialog.choices` (56 — which is the "save
+changes?" confirm in Options). The 2026-07-24 cut put the same `GetAddress` call in `Core.valid`,
+so this is ALSO what silenced them that day — the "fail closed on nil" story was wrong, and the
+fail-open fix was correct but for the wrong reason and could not have restored them.
+FIX: **`Core.valid_ref(o)`** — `IsValid()` only, no address — and `Core.array_of` uses it for the
+ARRAY (the owner is a UObject and keeps the full check). `IsValid` on a non-UObject RemoteObject is
+a bare null-check (`LuaUObject.hpp:178`), so it is safe and cheap; the dead-owner case is already
+caught one line above. Plus a **self-disabling guard** in `Mem.alive`: the attempt is marked
+pending in `_G` before the call and cleared after, so if a future stray call pierces again, the
+next tick sees the pending mark, disables the pre-check for the session and logs it — worst case
+one lost tick and a log line instead of seven menus dead.
+RULES: (1) **only UObject-family handles go through `Core.valid`/`Mem.alive`; TArray and struct
+handles go through `Core.valid_ref`.** (2) When a batch of screens goes quiet, READ UE4SS.log
+BEFORE theorising — a pcall-piercing error always leaves a traceback naming the exact line, and
+this one named it 510 times while three rounds of code reasoning got the mechanism wrong.
+(3) `pcall` proves nothing on this game: treat "wrapped in pcall" as no protection at all.
+
+**2026-07-25 — THE 07-24 HARDENING SILENCED SCREENS (SUPERSEDED DIAGNOSIS — see the entry above
+for the real mechanism; kept because the fail-open RULE it produced is still right).**
+User report: after ecf29f3 several menus stopped reading
+(load-game screen, the save confirmations in Options). Mechanism — the new gate was
+`if oka and (a == nil or a == 0) then return false end`, i.e. it treated a `GetAddress()` call
+that RETURNS NOTHING as "the pointer is null". Those are different questions: nil means the
+wrapper cannot answer, null means the object is not there. And the blast radius is not one
+widget: **`ui_directory` gates EVERY pointer hop of every chain on `Core.valid`**
+(`prop()` at ui_directory.lua:52-58, `resolve` at :296-311), so a single unanswerable hop makes
+a directory-mapped screen resolve to NOTHING — silent, with no error logged anywhere, which
+reads exactly like "the adapter never found its host". `AT_UIStartSaveLoad` is directory-mapped
+through `mm.m_xSaveMenu/m_xLoadMenu.m_UIStartSaveLoad` (ui_directory.lua:166-175) — that is the
+load screen. FIX: reject only on `type(a) == "number" and a == 0`; `Core.nonnull` keeps the
+fail-CLOSED variant for brush resources (there the question always applies and a miss costs one
+glyph name, not a screen). Rate-limited log line added: `valid(): N NULL-handle rejections so
+far` — if the gate is ever doing real work it now says so in UE4SS.log, and if a screen goes
+silent again the absence of that line rules the gate out in one look.
+RULE (general, worth more than this fix): **a guard added to prevent a crash must fail OPEN on
+an unanswerable signal.** A crash costs one session; a guard that silently fails closed on a
+shared substrate costs every screen that depends on it, invisibly. Two other things landed the
+same day compound this: pin/dedup state scoped to the whole map epoch, and a new always-on
+probe — see the two entries below.
+**Same day, second regression — `screen_dialog`'s `pinned_set` was EPOCH-scoped.** Pins added
+07-24 to stop a long-PARKED notice window re-firing after the 24-entry recent FIFO evicted its
+marks were cleared only on a map transition, so every notice that legitimately repeats inside
+one map was mute for the rest of the session — the Options save confirmations ("¿Guardar?",
+"Guardando…"). FIX: pins are scoped to the window PRESENCE, released after the window has been
+continuously off screen for `PIN_CLEAR_S = 2.0 s` (far longer than the tick-to-tick blink the
+recent-set exists for, so a blink can never unpin and a genuine reopen always can). The parked
+window the pin was for stays ON screen, so it is still covered.
+**Same day, third — `screen_gameover` probed an unmapped per-level class in every state, from
+registry slot 4.** `Core.first_on_screen("Gameover_C")` ran on every poll: a full `FindAllOf`
+every `ABSENT_BACKOFF` forever, competing for the 2-scans-per-tick budget that the
+late-registry menus depend on (the 2026-07-15 precedent names items/**saveload**/characters/
+skill-tree going SILENT when that budget is denied), and it re-violated the 2026-07-17 rule
+"never probe a per-level pool unconditionally from an always-running adapter" — the
+return-to-title AV class. FIX: the probe runs only inside the ~8 s wall-clock window armed by
+the battle-HUD falling edge, or while the adapter already holds a live host; outside that the
+adapter costs nothing and cannot claim the tick. (Note for the diagnosis record: saveload is
+directory-mapped, so budget starvation is NOT what silenced it — the `Core.valid` gate above
+is. The gameover probe was a real cost and a real crash-surface regression regardless.)
 
 **2026-07-24 (c) — AV mid-COMBAT ("huge lag spike, then crash"), reading 0x10 again. CLASS A IS
 GUARDABLE AFTER ALL — `Core.nonnull`.** This is the recurrence this ledger predicted ("WATCH keyhelp

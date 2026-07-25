@@ -105,6 +105,11 @@ one tool against a wall the other walks around:
 - The Ghidra setup cost (unpack, 51-min analysis, 16 GB heap) is **already paid** and permanent: a new
   question now costs ~3 headless minutes. Price your decision accordingly — the old "reflection first
   because native is expensive" reflex is stale.
+- The 6 CXX/ObjectDump/SDK dumpers (`DumpAllObjects`, `GenerateSDK`, `GenerateUHTCompatibleHeaders`,
+  `DumpStaticMeshes`, `DumpAllActors`, `DumpUSMAP`) are **global Lua functions callable live** (bound to
+  Ctrl+J/H/Num9/Num8/Num7/Num6 in `Mods\Keybinds\Scripts\main.lua`) — no need to dump-and-close-the-game.
+  Default day-to-day inspection is `dumpclass`/`probe` from `tools\ue4ss-inspector\` (console or command
+  file), not a full dump pass. See `UE4ss study\docs\ue4ss-live-workflow.md` for the no-restart loop.
 
 ---
 
@@ -240,8 +245,17 @@ throw (0xe06d7363) kills the process. MEASURE the thread before trusting any cal
 `GetCurrentThreadId()` from a native bridge and compare (`mem_bridge.thread_id()`); UE4SS does not
 document it. Dead ends, do not retry: wrapping the callback body in `ExecuteInGameThread` (the wrapper is
 itself Lua, already on the foreign thread) and moving the stash into a mutex-protected C module (reaching
-C still executes Lua bytecode). Only ACTOR-spawn notifies (game thread) are safe, and they should say so
-in their own log line. A genuine event feed must be armed from a NATIVE plugin outside the VM.
+C still executes Lua bytecode). A genuine event feed must be armed from a NATIVE plugin outside the VM.
+**FINAL RULE (2026-07-25): use NO construction notify at all, not even for actors.** The earlier
+carve-out ("actor-spawn notifies are on the game thread, so they're safe, and should log which thread
+they ran on") was reasoning from *probably*: actors are normally spawned on the game thread, but UE4SS
+gives no guarantee, and the cost of being wrong is a corrupted `lua_State` that crashes minutes later
+somewhere unrelated. The Kakarot mod's last one (the transition gate,
+`NotifyOnNewObject("/Script/Engine.GameModeBase")`) was replaced by a **game-thread poll of a world
+epoch** — a persistent root's `GetWorld()` address, compared each tick — which has no thread question,
+costs one guarded read, and arms EARLIER than the notify did (a new GameMode appears only after the old
+world's objects are freed, and Lua ticks DO run in between because LoadMap drains the
+`ExecuteInGameThread` queue through ProcessEvent). Poll a persistent root; never subscribe.
 So: detect screens by **polling cached refs** — and make it fast the honest way, which costs nothing in
 the steady state: pooled widgets stay valid while a screen is merely CLOSED, so re-scan a class only when
 its cached list has NOTHING valid left in it (the screen was destroyed and will be recreated), gated by a
@@ -251,6 +265,89 @@ refresh and do not scan per tick — that is what lags navigation. Deliberately-
 **Every TArray read goes through a guarded helper** (`Core.array_of`): `owner[prop]` yields an INVALID
 RemoteObject, not nil, and a raw `GetArrayNum` on it is the uncatchable throw — `arr ~= nil` is not a
 validity check.
+**`GetAddress()` is safe ONLY on UObject-family handles.** On any other RemoteObject (a TArray
+wrapper, a struct handle) UE4SS raises *"Call to RemoteObject:GetAddress on polymorphic type is not
+allowed"*, and that error **pierces `pcall`** — it unwinds to UE4SS's own callback boundary, so the
+calling adapter function dies mid-flight while every enclosing pcall reports success. On Kakarot one
+such call inside the shared TArray helper silenced seven menus for two sessions. Keep two distinct
+validity helpers: the full one (memory pre-check + `IsValid`) for UObjects, and an `IsValid`-only one
+for array/struct handles (`IsValid` on those is a bare null-check, so it is safe and cheap).
+**A scan SLOT is not a RATE LIMIT** (rule from the Kakarot Options regression, 2026-07-25). A
+per-tick budget helper like `take_scan_slot` apportions N scans per tick *between competing callers*;
+it does nothing to stop one caller from asking every single tick. An adapter that re-scans "whenever
+its cache looks stale" therefore needs its own backoff as well — and before shipping one, ask what
+happens if that staleness condition becomes **permanently** true. Here it did (a pooled host lingers
+`on_screen` forever after its menu closes), which turned a once-per-session full-object scan into one
+every 100 ms: it starved every scan-detected screen into silence AND multiplied dangling-object
+exposure until the game crashed. The tell that the cause was GAME state rather than mod state was
+that it survived a mod reload.
+**Any signal you derive from engine state FLAPS — debounce the edge that costs something, and LOG
+when it fires** (rule from the Kakarot 2026-07-25 session, where the same shape appeared twice in one
+batch). Pooled widgets collapse and uncollapse; validity reads flicker during streaming and camera
+work. So a raw "the HUD went away" or "the world went away" edge fires several times where the real
+event happened once. Two consequences: (1) debounce the FALLING edge — require the absence to persist
+— measured in WALL TIME, never in calls, because a poll invoked from several loops confirms a call
+count in milliseconds and confirms nothing; the rising edge usually needs no debounce. (2) A false
+fire must be visible: log the transition with its trigger. In this codebase a spurious "world gone"
+armed the transition gate, and an armed gate makes the screen directory answer "absent" for EVERY
+mapped class — one flicker silenced every menu for the grace period, with nothing in the log to say
+why. Cheap signals that gate expensive machinery deserve more scepticism than the machinery.
+**When a screen is silent and static data has not named the widget in ONE pass, stop and capture.**
+An F7-style census taken WHILE the missing text is on screen names the widget path outright, and two
+or three captures seconds apart show which widget's text ADVANCES — the strongest possible signal.
+On Kakarot this settled in one pass what three rounds of header-grepping and hypothesising got wrong
+(a story conversation had a fourth dialogue surface nobody had looked at). The rule of thumb: dumps
+answer *what exists on screen right now*, headers answer *what could exist* — and "which of these
+several widgets is the live one" is only ever a dump question. Budget one capture request early
+instead of three guesses.
+**A diagnostic that can die is worse than useless — it destroys the evidence it exists to collect.**
+Dev dump tools tend to grow their own private helpers (`local valid = o ~= nil and o:IsValid()`, a
+bare `pcall` around a member call) that bypass the mod's guards, and on an engine where those calls
+abort uncatchably the dump then ends mid-section with no indication of where. Two rules: route the
+tool through the SAME validity guards as the mod, and **write the file incrementally with a step
+marker before each risky call**, so the output is a breadcrumb trail that survives the abort and
+names the line that killed it.
+**When several screens go quiet at once, READ THE HOST LOG BEFORE THEORISING.** A pcall-piercing
+error always leaves a traceback naming the exact line; on Kakarot it named it 510 times while three
+rounds of pure code reasoning produced the wrong mechanism twice.
+**`IsValid()` does not lie, it FAULTS — so no guard built on it can work** (source-verified 2026-07-25,
+RE-UE4SS v3.0.1 `LuaType/LuaUObject.hpp:610`): `IsValid` is
+`m_cpp_object && !m_cpp_object->IsUnreachable() && is_object_in_global_unreal_object_map(...)`, i.e. it
+DEREFERENCES the object before the object-set lookup that could have caught a freed handle. And UE4SS
+never clears the raw pointer inside a Lua handle (its delete listener only erases a hash), so a freed
+object — or one whose address a new object recycled — passes and dies at `GetClassPrivate()`,
+`UObjectBase+0x10`. `GetAddress()` is the ONLY UObject method that does not dereference. Therefore the
+first guard must run OUTSIDE the scripting VM: a native SEH-guarded bridge read (`Mem.alive` in the
+Kakarot mod — read the object's class pointer and that class's class pointer; freed memory fails one of
+them) called BEFORE `IsValid`. Derive the `ClassPrivate` offset at runtime (a UClass found by path, its
+class pointer by reflection, matched against the object's first bytes) — never hardcode it. Related dead
+end, do NOT spend a session on it: `bUseUObjectArrayCache = false` does not touch `IsValid`, is scoped to
+startup crashes, and breaks Lua `IsA` (issue #772).
+**Ask the class before fetching a member, and before treating one as an array.** A fetch of a member the
+class does not declare is uncatchable, and so is `GetArrayNum` on a fixed C array. Build a per-class
+property map once with `UStruct:ForEachProperty` + a `GetSuperStruct()` walk (ForEachProperty lists a
+class's OWN properties only), recording each member's NAME and property TYPE: refuse an undeclared name,
+and refuse `array_of` on anything that is not an `ArrayProperty`. Cache by class address, clear it on map
+transition (BP classes unload; addresses get reused), budget the enumeration per tick, and log what it
+blocks. Caveat that will bite you: **`RegisterCustomProperty` members are invisible to
+ForEachProperty** — they live in UE4SS's own map, so every custom property must be declared to the gate
+explicitly at registration.
+**Guards must fail OPEN on "don't know", CLOSED only on evidence.** A crash costs one session; a guard
+that silently fails closed on shared substrate costs every screen that depends on it, with no error
+anywhere. This is not hypothetical: a `Core.valid` that rejected an unanswerable `GetAddress()` took out
+every directory-mapped screen at once, because the screen directory gates every pointer hop on it.
+**A hand-rolled widget cache must be invalidated by `on_screen`, never by validity alone** (rule
+from the Kakarot Options re-entry bug, 2026-07-25). Pooled submenu widgets are only COLLAPSED on
+close, never destroyed, so a cached row from the previous visit stays `IsValid() == true` forever
+while being nowhere on screen. An adapter whose staleness test is `valid(cache[1])` therefore never
+re-scans, reads the orphaned widgets, finds no selection on them, and goes **permanently silent from
+the SECOND entry onward** — while working perfectly the first time, because the cache started empty.
+That intermittency is the tell. Adapters that fetch their host through the shared
+`first_on_screen`/`cached_live` helpers are immune (those check on-screen per entry); the bug lives
+in caches an adapter rolls itself. Two rules: the staleness test asks **`on_screen`**, and the
+adapter's `reset()` clears the cache — `reset()` runs on every screen change, so it is the free
+backstop. And budget the re-scan: a raw `FindAllOf` is ~65 ms and the test can be false for several
+consecutive ticks.
 **Every adapter for a pooled pane must gate on the pane being GENUINELY LIVE, not just rendered**
 (rule from the Kakarot cooking-latch episode, 2026-07-15 — user directive). A pooled full-screen pane
 can stay `on_screen` with readable stale content long after closing; an adapter gated only on
@@ -308,6 +405,15 @@ host is pooled.
 
 - Use the framework's logger (BepInEx/REFramework/XV Patcher/custom) for important states, patching
   errors, and service initialization. Logs in English. **Never log every frame.**
+- **On Lua mods, a syntax check is only half the validation — lint the compiled GLOBALS too.**
+  `luac -p` happily accepts a local used ABOVE its own declaration: it compiles to a global read,
+  is nil at runtime, and blows up from wherever it is called — which in a polling mod means every
+  tick, often above the loop's `pcall`, i.e. a mod that is silent from boot with nothing in the
+  log. The check is
+  `luac -l -p FILE.lua | grep -oE '_ENV "[A-Za-z_][A-Za-z0-9_]*"' | sort -u`; everything it prints
+  is a global access, and anything that is not a Lua builtin or one of the host's globals is a bug.
+  Run it over every file after any edit (Kakarot, 2026-07-25: it caught one change that would have
+  shipped a dead mod, plus two pre-existing latch bugs nobody had noticed).
 
 ### Compatibility and maintenance
 
