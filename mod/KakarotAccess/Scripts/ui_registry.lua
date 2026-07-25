@@ -65,6 +65,17 @@ local Dir = require("ui_directory")
 -- HUD leaves (no press, no minimap yet) — exactly when quiet would engage. The
 -- falling edge opens a scan window so they read on their own.
 local prev_battle = false
+-- DEBOUNCE (2026-07-25). Making the edge unconditional exposed that `battle_hud_live()` FLAPS:
+-- the pooled HUD collapses and uncollapses during cutscenes and battle phases, so the raw signal
+-- produced ~5 "battle ended" events where there was one. Each false edge opened a 3 s hot window
+-- (defeating cinematic quiet mode) and re-armed a per-class watch, and the user's log showed the
+-- cost: 124 `watch Gameover_C` lines where one window should give ~25 — a ~65 ms FindAllOf every
+-- 0.8 s, which is audible as the audio cutting every second and a half during cutscenes, and
+-- which ate the 2-scans-per-tick budget the other screens live on. So the HUD must be absent for
+-- several consecutive polls before we believe the battle ended. Only the FALLING edge is
+-- debounced; appearing is taken at face value (a battle starting is never ambiguous).
+local ABSENT_TICKS = 5      -- ~500 ms of continuous absence
+local battle_absent = 0
 
 -- Scan-free on purpose (Core.peek_all): this runs per tick while no adapter is
 -- active, and its cached_all form was itself scanning the absent HUD class every
@@ -218,13 +229,27 @@ local function step()
     -- rides on top of heavy engine work (subtitles/talk window sets scan_quiet) —
     -- or the whole camera-cutscene state (see the world predicate above) — ui_core
     -- defers steady-state scans and the 20ms pad dispatcher relaxes.
+    -- The battle-HUD edge is tracked UNCONDITIONALLY (2026-07-25). It used to be evaluated only
+    -- in the `active == nil` branch below, so the falling edge was invisible whenever any adapter
+    -- held the screen — and a battle ending with subtitles up is exactly that case, which meant
+    -- this gate's own hot window for the result screens missed the one moment it exists for.
+    -- Making it unconditional is also what exposed the flapping the debounce above now absorbs.
+    local battle_raw = battle_hud_live()
+    battle_absent = battle_raw and 0 or (battle_absent + 1)
+    -- Debounced view of the signal: present the moment it appears, absent only after
+    -- ABSENT_TICKS of continuous absence (see the note above — the raw signal flaps).
+    local battle = battle_raw or battle_absent < ABSENT_TICKS
+    if battle ~= prev_battle then
+        prev_battle = battle
+        -- Falling edge = a battle ended: open a scan window so the result screens, which appear
+        -- EVENT-LESS right then (no press, no minimap yet), are not deferred by quiet mode.
+        -- (The `_G.__KakarotBattleLeftAt` stamp that used to be published here is gone:
+        -- screen_gameover was its only consumer and no longer needs an arming signal at all now
+        -- that Gameover_C is directory-mapped.)
+        if not battle then hot_until = tick_n + HOT_TICKS * 3 end
+    end
     local quiet = (active ~= nil and active.scan_quiet == true) or false
     if not quiet and active == nil then
-        local battle = battle_hud_live()
-        if battle ~= prev_battle then
-            prev_battle = battle
-            if not battle then hot_until = tick_n + HOT_TICKS * 3 end
-        end
         quiet = Dir.root_ok("mm") and not battle and tick_n > hot_until
             and not Core.free_roam(tick_n)
     end
