@@ -251,9 +251,10 @@ local function dump_struct(host)
                 local child
                 pcall(function() child = host[pn] end)
                 if type(child) == "userdata" then
-                    local ok_v = false
-                    pcall(function() ok_v = child:IsValid() == true end)
-                    if ok_v then
+                    -- Core.valid, not a pcall'd IsValid: this walks arbitrary members of a
+                    -- pooled map widget, so `child` may well be a freed handle — and IsValid
+                    -- dereferences before it checks, so it faults instead of answering false.
+                    if Core.valid(child) then
                         local ccls, txt = "?", nil
                         pcall(function() ccls = child:GetClass():GetFName():ToString() end)
                         pcall(function() txt = Core.read_text(child) end)
@@ -392,8 +393,11 @@ end
 -- the game opens its own "Go to X?" YesNo for the CHOSEN point — regardless of where the analog
 -- cursor sits. We re-assert the chosen index each tick so a stray hover can't retarget Confirm.
 local function ft_guidance(host)
-    if not ft_points then ft_points = ft_build(host) end
-    local n = #ft_points
+    -- Building is Map.update()'s job (100 ms, and it retries until the points exist). This loop
+    -- runs at 20 ms: rebuilding here whenever the list looked empty would re-walk the icon pool
+    -- fifty times a second on any map that genuinely has no travel points. So it stays passive
+    -- and simply waits — at most one 100 ms poll — for a list to appear.
+    local n = ft_points and #ft_points or 0
     if n == 0 then return end
 
     -- Keyboard first: the arrows drive this exactly like the d-pad does, and the pad
@@ -464,6 +468,12 @@ end
 function Map.reset()
     ann:reset(); dests_said = false
     ft_points, ft_sel, ft_prevbtn = nil, nil, 0
+    -- The other half of the same rule: ft_build matches InfoIcon entries to icon widgets BY
+    -- ADDRESS, and the game recreates `Map_World_Icon_C` every time the map opens. A pool cache
+    -- from the previous visit therefore matches nothing and every point degrades to "map point
+    -- N". The class is on the scan path (it cannot be directory-mapped), so ask for the re-scan
+    -- explicitly on entry instead of waiting out its backoff. Budget-gated inside Core.
+    Core.refresh_all("Map_World_Icon_C")
     area_focus_key = nil
     wake_disarm()
     -- Opening the map re-reads the current quest objective on demand: the HUD reader only
@@ -490,10 +500,24 @@ function Map.update()
         if not host then return end
         -- List the reachable fast-travel points once (so a blind player knows what's
         -- there). The d-pad selection itself runs on the FAST loop below, not here.
+        -- NEVER LATCH AN EMPTY BUILD (user: "the d-pad on the world map works sometimes,
+        -- especially not when I open the map several times", 2026-07-26). `dests_said` used to
+        -- be set BEFORE knowing whether the build produced anything, and `ft_guidance` only
+        -- rebuilds when `ft_points` is nil — an empty TABLE is not nil. So one unlucky first
+        -- tick (the travel icons not materialised yet, or the native InfoIcon block not yet
+        -- populated) latched an empty list for the WHOLE visit: no destinations announced and a
+        -- dead d-pad, with everything else about the map working normally. Re-opening the map is
+        -- exactly what re-rolls that dice, which is why it looked random and got worse the more
+        -- the map was opened.
+        --
+        -- This is the items-menu rule again (2026-07-15): an adapter that collects a REBUILT
+        -- screen's children must never cache an empty collection as final. The latch now closes
+        -- only on success, so the build simply retries on the next 100 ms poll until the game has
+        -- the points ready — and stops for good once it does.
         if not dests_said then
-            dests_said = true
             ft_points = ft_build(host)
             if #ft_points > 0 then
+                dests_said = true
                 Speech.say(string.format(I18n.t("map_travel_points"), #ft_points, table.concat(ft_points, ", ")), false)
             end
         end
