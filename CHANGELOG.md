@@ -2,6 +2,58 @@
 
 ---
 
+## Unreleased
+
+### Stability
+
+- **Fixed the crashes that happened while playing, not in menus.** Previous releases hardened the
+  parts of the mod that read menus, and that work held. The part that reads the *world* - the one
+  driving the radar, which runs constantly while you explore and while you fight - had never been
+  given the same protection. It was reading game objects without first checking they still existed,
+  and the game frees those objects all the time: as you cross from one area to another, and as
+  enemies die. That is why a crash could arrive after ten minutes or after two hours, in the middle
+  of combat or just walking, with no obvious trigger. Every one of those reads is now checked.
+  The tracked radar target got particular attention: it is a single object the mod holds on to for
+  minutes at a time, which made it the most exposed thing in the mod.
+- **Fixed the crash when moving between areas.** The reader that announces pickup and level-up
+  notifications was asking those little banners for a piece of text that some of them do not have.
+  Loading a new area rebuilds them, which is why the crash landed just after a map change. This one
+  was not deduced - the mod now keeps a flight recorder, and it named the culprit outright.
+- **Fixed the same fault in twelve more places.** Once the cause was known, a mechanical check
+  found every other reader asking for a piece of text that might not exist: the shop, the community
+  board, fishing and its results sheet, battle results, tutorials and the action bar.
+- **Fixed a crash waiting to happen on the on-screen action bar.** The mod read nine button slots
+  from that bar because that is how many the bar it was written against has. On a screen with a
+  shorter bar, asking for the tenth would have closed the game.
+- **A screen that fails now fails alone.** If one screen reader hits a problem, it no longer takes
+  the rest of the readout down with it for that moment, and it writes its own name into the log
+  instead of failing anonymously.
+
+- **Fixed the world map's travel selection not responding.** Choosing a destination with the
+  d-pad worked on some visits and not others - more often not, the more times you opened the map.
+  If the map's travel points were not ready on the exact moment the mod first looked, it recorded
+  "there are none" for the rest of that visit: no destination list read out, and the d-pad did
+  nothing. It now keeps looking until they are there.
+
+### Performance
+
+- **Menus should respond faster again.** Two things had been slowing them down, both introduced by
+  the mod itself. The safety check added in v0.1.2 was roughly three times more expensive than what
+  it replaced, and it was being run over entire lists of on-screen elements many times a second;
+  it is now calculated once per cycle and reused. Separately, the limit meant to stop the mod
+  searching the game's object list too often was being reset by six different parts of the mod, so
+  a cap of two searches per cycle was really allowing about a dozen - each one costing a visible
+  fraction of a frame. The limit now measures real time and means what it says.
+
+### For bug reports
+
+- **The log now records which screen you were on.** One line each time the reader moves to a new
+  screen. If the game closes unexpectedly, the end of the log says what was being read.
+- **The README explains how to send a crash report** - where the log lives, and the warning that it
+  is replaced every time the game starts, so it needs copying before relaunching.
+
+---
+
 ## v0.1.2 - July 25, 2026
 
 ### Stability

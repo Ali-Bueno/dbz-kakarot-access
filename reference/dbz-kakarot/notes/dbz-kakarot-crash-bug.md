@@ -1,5 +1,101 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-26 (c) — SECOND CRASH, SECOND TIME THE BLACK BOX NAMED THE SUBSYSTEM.** Player exited
+> a combat into a story dialogue. Last trail entry: `nav.step`. Error:
+> `EXCEPTION_ACCESS_VIOLATION reading address 0x00000010` = `GetClassPrivate()` on a dead handle.
+> Callstack: all UE4SS.dll, with the same ~8 offsets repeating three times (chained/nested
+> property resolution), and its low digits match the 07-24 12:05 signature exactly
+> (`b27d28 > b354b6 > b340ee > b3373c`) — so this is a known family, not something new.
+>
+> **CAUSE (the handle-lifetime audit had predicted this exact site and it was not acted on):**
+> `enemies_list()` and `best_candidate()` refused to refresh their cached lists while
+> `Core.scan_quiet()` is true — and **the dialogue adapter is what sets `scan_quiet`**. The
+> deferral is right about the cost (a ~65 ms `FindAllOf` during a cutscene is what quiet mode
+> exists to prevent) but drew the wrong conclusion: it kept *serving* the expired list. So
+> "finish a battle → story dialogue opens" pinned a list of **just-destroyed enemy actors** and
+> the radar dereferenced it for as long as the conversation lasted.
+> Fix: when the list is expired and a refresh is forbidden, **DROP it**. Dropping costs nothing;
+> a radar that announces no enemies during a cutscene is correct, one that announces enemies that
+> no longer exist is wrong even when it does not crash. Same fix applied to the `navi_icons`
+> minimap-widget list (emptied in place, not returned from — that function has other candidate
+> sources further down).
+>
+> **THE RULE:** *"the stale list keeps serving, entries are re-validated by every user"* — written
+> in the code as a justification — **is unsound**. Re-validation cannot detect an address the
+> engine has recycled; `mem.lua` says so in as many words. **A cache that cannot be refreshed must
+> be discarded, never served.**
+>
+> **THE OTHER HALF, and it is a whole CLASS: `Core.member` validated the OWNER, never the
+> RESULT.** An adversarial trace of everything reachable from `step()` found the only live fetch
+> whose receiver never reached `Core.valid` — `drop_item_name`:
+> `local d = Core.member(comp,"FieldItemDropData"); if not d then return end; local id = d[fld]`.
+> **`o[name]` on a null or dead field does not return nil** — UE4SS hands back an INVALID
+> RemoteObject — so `if not d` passed a dead handle to the next hop, which is a `__index`
+> property resolution, which is the `+0x10` read. That matches every piece of evidence: an AV on
+> a MEMBER FETCH (not a method call), zero `Mem.alive` rejections (it never went through the
+> guard), and a callstack whose offsets repeat three times (a chained resolution). It is armed by
+> the reported path specifically: `Nav.list_targets` has **no `scan_quiet` deferral at all**, so
+> it runs its full class sweep while a dialogue is up.
+> Five call sites fixed the same way, plus `compute_route`'s array elements.
+>
+> **Then fixed at the source, because ~200 call sites cannot be trusted to remember:**
+> `Core.member` now validates its RESULT, choosing the check from the property TYPE the existence
+> gate already records — `Core.valid` (memory pre-check first) for the UObject family,
+> `Core.valid_ref` (IsValid only) for struct/array/name handles, since `Core.valid` would call
+> `GetAddress` on those and UE4SS raises that THROUGH pcall. Fails open on non-userdata, unknown
+> types, `RegisterCustomProperty` members (invisible to `ForEachProperty`, so unaffected) and a
+> spent budget; kill switch Ctrl+G with the existence gate. **The two-tier rule is now applied by
+> the substrate instead of being remembered at every call site.**
+>
+> Also: `explore_tick` runs in the same game-thread callback right after `step()` and wrote no
+> mark, so a trail ending in `nav.step` could not distinguish them. It marks `nav.explore` now.
+>
+> **Swept for the same shape.** Only those two caches keyed their staleness on `scan_quiet`
+> (`screen_community:522` is an *arming* gate, not a cache-serving path). `ui_core`'s own pool
+> refresh also defers under quiet (`:851`, `:1006`) and `cached_all` keeps serving — the same
+> shape — but that is left ALONE deliberately, and the distinction is the point: those are
+> **pooled WIDGETS**, which the game keeps alive and merely collapses when a screen closes,
+> whereas `enemies_list` holds **ACTORS**, which the engine genuinely destroys. Widgets survive
+> being stale; actors do not. Changing the substrate would blind every menu during cutscenes for
+> a risk that has never fired there. If it ever does, the fix is per-class, not global.
+>
+> **AND A WARNING ABOUT THE GUARD:** `Mem.alive` was active all session and logged **ZERO
+> rejections**. It only catches garbage/unmapped memory; a freed UObject whose pool memory is
+> still mapped passes every check. So the pre-check is a backstop against *garbage*, not a
+> liveness proof — the actual defence is **not holding handles across ticks for objects the engine
+> destroys**. Do not read a quiet rejection counter as "no dangling handles".
+
+> **2026-07-26 (b) — THE BLACK BOX PAID FOR ITSELF ON ITS FIRST CRASH.** The player crashed right
+> after a map change. The trail's last entry was `ui.is_active screen_toasts`, and the next adapter
+> in registration order (`screen_title`) never got its mark — and the mark is written BEFORE the
+> call. So the crash was inside `screen_toasts.is_active()`, named in one read, with no guessing.
+> The UE4SS.log agreed on the surroundings (`transition gate ON (new world)` at 12:43:08, loading
+> screen, then the log simply stops at 12:43:16 with no error, which is what an uncatchable abort
+> looks like) but on its own it could never have named the adapter.
+>
+> **The bug: `screen_toasts.lua` fetched `bar.Txt00` naked** — a member the SAME FILE's comment,
+> nine lines below, records as ABSENT on `Info_Log_Bar02_C`, naming it as the 2026-07-17 fishing
+> crash. The 2026-07-24 "fix" moved the fetch inside a `pcall` and stopped there. **A pcall cannot
+> catch this.** The bar classes in that pool are recycled and a map transition rebuilds the pool,
+> so the wrong subclass eventually lands in `Info_Log_Bar00..04` and the fetch aborts. The twin
+> loop below it had been fixed properly (TextBox); this one was, in its own words, "left behind".
+>
+> **Why the guard sweep missed it:** the lint checked `IsValid` / `GetArrayNum` / `GetAddress` but
+> **not member fetches**, and screen_toasts was not in the hand-picked file list. Added rule
+> `dynamic-member-fetch` (a subscript built with `..` or `string.format` — the shape that means
+> "iterating candidate names", which is exactly when a name may not exist). It immediately found
+> **13 more live sites** in screen_community, screen_fishing, screen_fishresult, screen_results,
+> screen_shopinfo, screen_tutorial, keyhelp and ui_archetypes. All fixed. Plain-Lua-table false
+> positives opt out with an explicit `-- lint:plain-table` marker rather than being silently
+> excluded.
+>
+> **THE LESSON, and it is the important one:** every previous round of this ledger reasoned from
+> code to a suspect. This round read the answer off a file. *A hand-picked sweep is a guess about
+> where the bug is; a lint rule is a decision about what the bug IS.* When a crash class recurs,
+> the deliverable is not the fix — it is the mechanical check that makes the fix complete.
+> Corollary already earned twice: **"I wrapped it in a pcall" is not a fix for this family**, and a
+> comment saying so ten lines away does not protect the code that ignores it.
+
 > DBZ Kakarot mod crash ledger. LATEST (2026-07-25 d): the batch of silenced menus was
 > `GetAddress()` called on a **non-UObject** RemoteObject (the TArray in `Core.array_of`) — UE4SS
 > raises "polymorphic type is not allowed" and that error **pierces pcall**, killing the adapter's
@@ -18,6 +114,176 @@
 >
 > Previously (2026-07-24 c): AV mid-COMBAT reading 0x10 after a huge lag spike (= engine GC/streaming). KEY BREAKTHROUGH: crash CLASS A is guardable after all — obj:GetAddress() returns the stored pointer WITHOUT dereferencing, so new Core.nonnull() gates every Brush.ResourceObject read (keyhelp first, as this ledger predicted); Core.valid also rejects NULL-handle wrappers; battle_monitor (the only 250ms combat loop) finally migrated to Core.member. Earlier: end-user AV browsing COOKING recipes = SAME 07-21 dangling-UObject __index class but in steady-state menu browsing (pooled ListView/detail widget recycled on scroll), NOT a transition — menu adapters ARE exposed; migrated screen_cooking + shared A.list_selected_row to Core.member. Earlier: two end-user AVs from the ExecuteInGameThread flush during teardown; naked member fetch as a call argument; fixed C-array through array_of pierces pcall; nav_tracker raw #arr on streaming-freed objects.
 
+
+**2026-07-26 — THE HARDENING WAS NEVER APPLIED OUTSIDE THE MENU SUBSTRATE. That is why users still
+crash while the dev log stays clean.**
+
+Users kept reporting random crashes and slow/silent menus on v0.1.2 — the release that contains
+every fix in this ledger. The developer's own `UE4SS.log` from 2026-07-25 has **zero errors** across
+22 minutes.
+
+**A first reading of that contradiction was WRONG and is recorded here so nobody repeats it:** it is
+NOT that the developer only tests menus while users play. The developer plays too — long sessions,
+including a crash in the middle of COMBAT on 2026-07-25 — and the 29 crash dumps below prove it, with
+runtimes of 647 s, 1018 s, 1792 s, 2384 s, 7912 s on the dev machine. **The real gap was that a clean
+`UE4SS.log` was read as "no crashes", when the log only records what the mod PRINTED; how the process
+died was sitting unread in the crash dumps the whole time.**
+
+What IS true is where the guards had reached. Every fix this ledger describes had been applied to the
+UI substrate and the menu adapters. **`nav_tracker.lua` — 3,848 lines, running every tick in free roam
+AND in combat, over actors that level streaming frees and that combat destroys as they die — was never
+swept.** It held 24 bare `IsValid()` calls and ~95 naked member fetches, including on `target.actor`:
+a handle the radar picks and then holds for MINUTES across streaming boundaries. Since 2026-07-25 we
+have known that a bare `IsValid()` does not merely fail to catch a freed handle, it **faults on it**.
+So every one of those sites was a live crash on the mod's hottest, most dangling-prone path — and the
+scattered runtimes are exactly the fingerprint of a race that fires whenever the engine happens to
+free the object the reader is holding.
+
+Fixed: all 24 `IsValid()` sites → `Core.valid`; 37 fetches → `Core.member`, prioritising handles
+cached across ticks and the hot per-tick component paths. Also `keyhelp.lua`, which loops fetching
+`Txt_Keyhelp_01..09` — a bound taken from ONE class's member count, on a bar found by scan, i.e. the
+exact `bar.Txt00` shape that killed the process on 2026-07-17, waiting for the first player to open
+a screen with a shorter bar.
+
+**THE MID-COMBAT CRASH — `quest_objective.lua` is the strongest candidate, and it was hiding behind
+a comment that asserted the opposite of the rule.** `first_text()` carried the note *"blueprint
+members that may be absent read as nil — safe"*. They do not: an absent member is the uncatchable
+abort. And the function is built ENTIRELY around trying candidate names expected to be absent
+(`Txt_Main00` / `Txt_Title` / `WL_MainQuestListTitle`, …), at 300 ms, on a host **the game hides and
+rebuilds when a battle starts**. `row_line` had the same shape for the M/S rows. Both now gated,
+along with `guide_watch.lua`, which runs on every registry tick with or without an active adapter —
+so it is live during combat and cutscenes — and fetched `win[m]` from a candidate list **as a call
+argument**, the worst available shape (evaluated at the call site, outside everything).
+
+Coverage check done the same day: the things that run CONTINUOUSLY are `battle_monitor` (already
+clean — its own comment documents the 07-24 mid-combat AV and its fix), `nav_tracker`,
+`quest_objective`, `guide_watch`/`keyhelp_watch`, the registry/`ui_core` substrate, and `pad_poll`
+(zero UObject contact, pure native bridge). All are now gated.
+
+**`ui_registry` had no fault isolation**, contrary to the generic-strategy doc: `is_active()` and
+`update()` ran bare, so one adapter raising an ordinary error aborted the whole sweep — every
+adapter below it went unpolled that tick, and the outer pcall swallowed it with no idea which one.
+Both are wrapped now, and log the adapter's NAME once per session. This cannot contain uncatchable
+aborts (nothing in Lua can), but it turns "the reader went quiet" into a named line.
+
+**Three substrate holes found the same day:**
+* **`Core.pane_live` was itself unguarded.** The playbook makes it the mandatory liveness test for
+  every pooled-pane adapter, called with the handle the adapter cached on entry — the handle most
+  likely to be dead — and it went straight to `GetVisibility()` on it. The guard everything is told
+  to rely on was the unguarded call.
+* **`ui_directory.prop()` had the validity half but not the property-existence half**, while two of
+  its callers fetch undeclared members BY DESIGN (`find_hud` probes `UIFieldManager` precisely to
+  reject the title's plain `AHUD`; the mapped chains try alternatives, so the losing branch is
+  always a member the object does not declare). Now routed through `Core.member`.
+* **`Mem.alive`'s transactional guard is a single point of failure**: one `GetAddress` pierce
+  anywhere latches `guard.pending` and **permanently disables the memory pre-check for the rest of
+  the session**. It fails open, so the mod keeps working — unprotected, with one line in the log.
+
+**And the reason menus got SLOWER: the crash fix did it, and the scan budget was never a rate limit.**
+1. `Core.valid` went from one pcall'd `IsValid` to `GetAddress` + two native reads + `IsValid`, and
+   `Core.first_on_screen` runs it over the WHOLE cached pool on every call, several times per tick,
+   for pools like `CFUIMultiLineTextBox` that hold hundreds of entries. Hardening the reader is what
+   made the reader slow. Fixed with a per-tick memo keyed by the handle (cleared in
+   `begin_scan_tick`; a validity verdict cannot change within one game-thread tick).
+2. `Core.begin_scan_tick` has **six call sites** — the registry, `battle_monitor`, `quest_objective`
+   (three times in its own step) and `ui_directory` — and every one refilled `scan_budget = 2`
+   outright. So "2 scans per tick" was really up to a dozen, at ~65 ms each. **This is the
+   playbook's own rule broken inside the substrate that enforces it: A SCAN SLOT IS NOT A RATE
+   LIMIT.** It explains the measurement nobody could account for — 1576 scans in 5.5 min = 31% of
+   the game thread inside `FindAllOf`, at a nominal ceiling that made that arithmetic impossible.
+   Fixed: the refill is keyed to WALL TIME (`REFILL_EVERY_S`), so the ceiling means what it says.
+
+**NEW RULE, learned by nearly shipping the bug: A PER-TICK CACHE IS ONLY PER-TICK FOR THE LOOPS
+THAT CLEAR IT — enumerate the callers before you add one.** The validity memo above was added in
+`Core.valid` and cleared in `Core.begin_scan_tick`, which looks airtight until you notice that
+**`nav_tracker` never calls `begin_scan_tick`** — it calls `Core.poll_world()` alone, deliberately,
+and says so in a comment. So the radar's cross-tick handles (the same userdata every tick, i.e.
+exactly what hits a memo) would have had their verdict answered from a lookup computed one to three
+nav ticks earlier, with the clear depending on foreign loops that all have early-return paths: the
+registry at 100 ms (Ctrl+M stops it outright), `battle_monitor` at 250 ms (returns early during a
+transition), `quest_objective` at 300 ms (returns early while an adapter is active). `Mem.alive`
+would have been skipped for up to 300 ms on the handles most likely to be freed inside that
+window — **enemy actors, destroyed the instant they die.** A performance fix would have become a
+strictly worse version of the crash it was shipped alongside, on the exact path being fixed.
+Caught by an adversarial audit, not by testing; it would have been invisible until it killed
+someone's game. `Core.poll_world` now clears both memos as well. Note the precedent was already
+sitting in that function: `prop_budget` is refilled there *for this very reason*, with a comment
+explaining it. The lesson generalises — **when you add per-tick state, grep for every entry point
+that begins a tick, not just the one you were looking at.**
+
+**Investigated and REJECTED, do not spend a session on it:** turning off `HookProcessInternal` and
+friends in `UE4SS-settings.ini`. The mod registers no hooks (`header_hook.lua` is a documented dead
+end), so the per-UFunction-call detours look like free stability. They are not removable: UE4SS
+drains the `ExecuteInGameThread` queue through `ProcessEvent`, which is the mod's entire poll loop.
+Disabling it would produce a mod that is silent from boot.
+
+**Upstream, from a research pass over the RE-UE4SS repo:** there is no stable release after v3.0.1
+(July 2026) — only the rolling `experimental-latest`, which carries real fixes but also shipped a
+new boot-crash class (#1233). There is no clean "upgrade and the crashes stop" story. Worth knowing:
+**#397** (values returned from Lua-invoked UFunctions are backed by stack-scoped memory and are
+unsafe to hold past the call — checked, we do not hold any) and the **string-intern-pool UAF**, not
+fixed in 3.0.1, which we cannot guard against from Lua.
+
+**WE HAD 29 CRASH DUMPS ALL ALONG AND NOBODY HAD OPENED THEM.** `%LOCALAPPDATA%\AT\Saved\Crashes\`
+(UE 4.21.2) held 29 `UE4CC-*` reports from 2026-06-30 to 2026-07-25 — on the DEV machine, i.e. the
+same machine whose `UE4SS.log` we had just called "clean". A clean log does not mean no crashes; the
+log records what the mod printed, the dump records how the process died. **Check this folder every
+session.** Note `ErrorMessage` is EMPTY and `IsAssert=false` on these, which is why they read as
+"no access violation": they are not AVs, they are unhandled C++ exceptions.
+
+Normalising each `PCallStack` to `module+offset` (the module base moves per run, the offset does
+not) gives a fingerprint table. Use it to classify any future dump, ours or a player's:
+
+| Signature (top 4) | n | Runtimes | Reading |
+|---|---|---|---|
+| `UE4SS+64723f > UE4SS+41e05e > UE4SS+b22544 > UE4SS+b27dc6` | 7 | 145 s – 7912 s | The dominant family. Pure UE4SS. `b22544 > b27dc6` recurs under other top frames, so it is the shared dispatch boundary and the top frame is the varying call site |
+| `KERNELBASE+c1c0a > VCRUNTIME140+55a9 > UE4SS+b28684 > UE4SS+b28619` | 4 (all 07-14) | 286–2435 s | **`RaiseException` ← `_CxxThrowException`** — the uncatchable `0xe06d7363` throw, named in machine code at last. The widget-feed era |
+| `VCRUNTIME140+1e4fd > UE4SS+42482b > UE4SS+42449b > UE4SS+41e89e` | 2 | 647 s, 3169 s | Includes the MOST RECENT crash (07-25 10:13). Same throw path, different site |
+| `UE4SS+b27d28 > UE4SS+b354b6 > …` | 2 (07-24) | 1018 s, 1792 s | The end-user-report era |
+| `AT-Win64-Shipping+1f0b83b > …` | 2 (07-21) | 18 s, 27 s | **NOT us** — the documented `Could not find SuperStruct AutoDebugUIBase` dumper crash (`LoadAllAssetsBefore*`), dev-only |
+| `AT-Win64-Shipping+15cd992 > …` | 1 (07-03) | 7919 s | **NOT us** — base-game crash after 2.2 h |
+| `VCRUNTIME140+10c5e/10aa7/1062a > …` | 5 (06-30, 07-01) | all 0 s | Solved long ago: the UE4SS address-resolution startup saga |
+
+So **26 of 29 died inside `UE4SS.dll`** — which is where the mod's Lua executes, so they are ours —
+and the throw path is confirmed to be a C++ exception raised by UE4SS, not a stray memcpy. Runtimes
+scatter from 145 s to 7912 s, which is what a dangling-handle race looks like: it fires whenever
+streaming happens to free the object the reader is holding. Exactly the family this batch targets.
+
+**Prevention — this class stops being rediscovered:** `tools/lint-lua.ps1` now enforces all three
+checks (syntax, globals, guards) over all 70 files and `package.ps1` runs it as a hard gate before
+staging. Nothing validated the Lua on the way out before; a release could ship a file that did not
+compile. `raw-GetAddress` is a WARNING, not an error, deliberately: on a UObject it is the safe
+call, a regex cannot tell a UObject receiver from a TArray one, and a lint people learn to ignore
+protects nothing.
+
+**SHIPPED: A CRASH BLACK BOX — the next crash names its own site.** `mem_bridge` gained
+`mark_open(path)` / `mark(text)` / `mark_flush()`: a 64-slot ring in a MEMORY-MAPPED FILE
+(`Scripts/crash_trail.bin`, gitignored and stripped from releases). `mark()` is a memcpy, cheap
+enough to call on **every adapter probe** — so the ring holds the last ~180 ms of what the mod was
+doing. Because the page is file-backed, the memory manager writes it out when the process dies.
+`main.lua` opens it at boot, prints the PREVIOUS session's trail into `UE4SS.log` under *PREVIOUS
+SESSION ENDED HERE*, then resets it. Marked so far: every `is_active`/`update` by adapter name, and
+the `nav`/`quest`/`battle`/`guide` loop steps.
+
+*Rejected alternative:* a vectored exception handler. It fires on every first-chance exception, and
+both the game and UE4SS throw-and-catch routinely — noisy, and a new way to destabilise a process
+that is already dying.
+
+**TESTED STANDALONE, AND THE TEST IS WHY IT WORKS.** Built `lua.exe` from the vendored 5.4.4,
+wrote 71 marks from one process, killed it with `TerminateProcess` (no cleanup — exactly a hard
+crash), and recovered all 64 ring entries from a second process, `LAST_THING_BEFORE_CRASH` last.
+The first build **faulted on recovery**: 64 slots × 128 B = 8192 plus a 32 B header = 8224, mapped
+into 8192, so the last two slots wrote past the view. That would have been a crash diagnostic that
+crashed the game at boot, on every launch, shipped to fix crashes. The size is now derived with a
+compile-time assert. **Rule: a diagnostic gets tested like a feature — compiling is not evidence.**
+
+**Also shipped: a crash breadcrumb.** `ui_registry` now prints one `screen -> <adapter>` line per
+screen commit (a few per minute, well inside the no-spam rule). Every user crash so far has been
+un-diagnosable because the mod is silent in the steady state, so the tail of a player's log said
+nothing about what was on screen. README gained a *Reporting a crash* section with the log path and
+the warning that **UE4SS.log is overwritten on every launch** — copy it before restarting.
+
+---
 
 **2026-07-25 (c) — NEW VALIDATION STEP: `luac -p` IS NOT ENOUGH. Lint the compiled GLOBALS.**
 The adversarial review of the same day's work caught a change that would have made the mod

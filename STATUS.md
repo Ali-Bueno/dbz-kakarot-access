@@ -2,7 +2,24 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-25 (c) — the user's retest found 7 screens silent; the UE4SS.log settled
+**Last updated:** 2026-07-26 — why crashes persisted on v0.1.2 while the dev `UE4SS.log` stayed
+clean: **a clean log was read as "no crashes", but the log only records what the mod PRINTED** — the
+dev machine had been crashing all along (647 s, 1018 s, 1792 s, 7912 s runtimes, one mid-COMBAT on
+07-25) and the evidence sat unread in 29 crash dumps. Cause: every guard in the crash ledger had
+only ever been applied to the MENU substrate. `nav_tracker.lua` — every tick, in free roam AND
+combat, over actors that streaming frees and that combat destroys — still held 24 bare `IsValid()`
+(which *faults* on a freed handle rather than rejecting it) and ~95 naked member fetches, including
+on a `target.actor` held for minutes. Swept, plus three
+substrate holes (`Core.pane_live` unguarded, `ui_directory.prop()` had no property gate,
+`begin_scan_tick`'s budget was refilled by six callers so "2 scans/tick" was really a dozen — which
+also explains the old unaccountable 31%-of-game-thread `FindAllOf` measurement). Menu slowness was
+partly self-inflicted: the 07-25 crash fix made `Core.valid` ~3× costlier on per-tick full-pool
+walks; now memoised per tick. **Also: 29 real crash dumps were sitting unopened in
+`%LOCALAPPDATA%\AT\Saved\Crashes\`** — 26 of 29 died inside `UE4SS.dll`, and the callstacks name the
+uncatchable C++ throw outright (`RaiseException ← _CxxThrowException`). Fingerprint table in the
+ledger. New `tools/lint-lua.ps1` (syntax + globals + guards) is a hard gate in `package.ps1`.
+SOURCE-ONLY, UNVERIFIED IN GAME, needs a full restart. Previous entry: 2026-07-25 (c) — the user's
+retest found 7 screens silent; the UE4SS.log settled
 all 7. Six were ONE bug: `GetAddress()` on the TArray wrapper inside `Core.array_of` raises
 "polymorphic type is not allowed", an error that **pierces pcall** and kills the adapter's function
 mid-flight (510 tracebacks naming exactly those screens) → fixed with `Core.valid_ref` (IsValid
@@ -124,6 +141,116 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-26 (d): second crash, root-caused from the black box again — and the fix is now in the
+SUBSTRATE, not in call sites.** Player exited combat into a story dialogue; trail's last op
+`nav.step`; AV reading 0x10. Two independent causes, both fixed:
+1. **Stale caches served because they could not be refreshed.** `enemies_list` / `navi_icons`
+   skipped their refresh while `Core.scan_quiet()` is true — and the DIALOGUE adapter is what
+   sets `scan_quiet` — so "battle ends → dialogue opens" pinned a list of just-destroyed enemy
+   ACTORS and the radar kept dereferencing it. Now an expired-but-unrefreshable list is
+   **DROPPED** (costs nothing) instead of served. The code's own justification — *"the stale list
+   keeps serving, entries are re-validated by every user"* — is unsound: revalidation cannot
+   detect a recycled address.
+2. **`Core.member` validated the OWNER, never the RESULT.** `o[name]` on a null field yields an
+   INVALID RemoteObject, NOT nil, so `if not d then return end` passed dead handles to the next
+   hop. Fixed at 5 call sites AND at the source: `Core.member` now validates its result, picking
+   `Core.valid` vs `Core.valid_ref` from the property TYPE the gate already records. Fails open;
+   Ctrl+G kill switch. **This closes the class rather than the instance.**
+
+**Also new:** `screen_questreward.lua` — the substory clear rewards sheet (`Quest_Sub_Reward_C`,
+"Recompensas de historia"), identified from a user screenshot + F7 census; the log proved NO
+adapter was active in that window. Registered above `screen_choicelist` (its rows are the same
+`Xcmn_Win01_List_C` class the difficulty picker uses). `screen_results` never covered it — that
+one reads `Quest_Main_Clear_C`, the MAIN-quest sheet.
+
+**WATCH ON RETEST:** the `Core.member` result-validation is the riskiest change of the batch — its
+failure mode is a screen going quiet, not a crash. If any screen stops reading, press **Ctrl+G**
+to disable both reflection gates; if it comes back, that is the cause and the property-type map is
+what to look at.
+
+
+**2026-07-26 (c): USER RETEST — no crash, radar smoother. One regression-shaped report: the world
+map's d-pad travel selection "works sometimes, especially not when I open the map several times".**
+Cause found and it is PRE-EXISTING (verified identical at HEAD): `Map.update` set `dests_said = true`
+BEFORE knowing whether `ft_build` returned anything, and `ft_guidance` rebuilt only when
+`ft_points` was `nil` — an empty TABLE is not nil. One unlucky first tick (travel icons not
+materialised, or the native InfoIcon block not yet populated) latched an empty list for the WHOLE
+visit: no destinations announced, dead d-pad, everything else about the map fine. Re-opening the
+map re-rolls that dice. This is the items-menu rule again: **never cache an empty collection as
+final.** Fixed: the latch closes only on success (retries each 100 ms poll); `ft_guidance` is now
+passive (it must not rebuild at 20 ms); and `Map.reset` asks for a `Map_World_Icon_C` pool refresh
+on entry, since ft_build matches icons BY ADDRESS and the game recreates them every opening.
+**HONEST CAVEAT:** the (b) scan-budget fix cut real `FindAllOf` throughput from ~12/tick to a
+genuine 2/tick, and this class is on the scan path — so that change plausibly made a latent bug
+fire more often. The entry refresh is the direct counter to it. Watch for other scan-path screens
+getting slower to populate; if any appear, the fix is per-screen entry refreshes, not raising the
+budget back.
+
+
+**2026-07-26 (b): CRASH IDENTIFIED FROM EVIDENCE, not inference — the black box worked first time.**
+Player crashed just after a map change. Trail's last entry: `ui.is_active screen_toasts`; the next
+adapter's mark was never written (marks are written BEFORE the call) → the crash was inside
+`screen_toasts.is_active()`. Cause: a naked `bar.Txt00` fetch — a member the same file's own comment
+records as ABSENT on `Info_Log_Bar02_C` and names as the 2026-07-17 fishing crash. The 07-24 "fix"
+put it inside a `pcall`, which cannot catch an undeclared-member abort. A map transition rebuilds
+the pooled bars, so the wrong subclass lands in `Info_Log_Bar00..04` and it aborts.
+The lint had missed it because it checked `IsValid`/`GetArrayNum`/`GetAddress` but not member
+fetches → new `dynamic-member-fetch` rule (subscripts built with `..`/`string.format`), which
+immediately found **13 more live sites** (screen_community, screen_fishing, screen_fishresult,
+screen_results, screen_shopinfo, screen_tutorial, keyhelp, ui_archetypes) — all fixed. Also named
+the 5 factory-registered adapters that were logging as `?`. Needs a restart; re-test the same
+map-change flow.
+
+**2026-07-26: THE ANSWER TO "users still crash on v0.1.2 while my log is clean" — the hardening was
+only ever applied to the MENU substrate.** Full write-up in
+[the crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md); the short version:
+
+* **Crashes.** `nav_tracker.lua` (3,848 lines, every tick in free roam, over actors level streaming
+  frees) was never swept: 24 bare `IsValid()` — which since 07-25 we know *faults* on a freed handle
+  rather than rejecting it — plus ~95 naked member fetches, including on `target.actor`, a handle
+  held for MINUTES across streaming boundaries. The dev tests menus; users play the game. That is
+  the entire discrepancy. All 24 → `Core.valid`, 37 fetches → `Core.member`. Same shape fixed in
+  `keyhelp.lua` (a `Txt_Keyhelp_01..09` loop bounded by ONE class's member count).
+* **Substrate holes:** `Core.pane_live` — the playbook's mandatory pooled-pane liveness test, called
+  with the adapter's own cached handle — was itself unguarded; `ui_directory.prop()` had no
+  property-existence gate while two callers fetch undeclared members by design.
+* **Slow menus, two causes, both ours.** (1) The 07-25 crash fix made `Core.valid` ~3× costlier and
+  `first_on_screen` runs it over entire pools every tick → per-tick memo added. (2) `begin_scan_tick`
+  had SIX callers and each refilled the budget, so "2 scans/tick" was really a dozen at ~65 ms —
+  the playbook's own *a scan slot is not a rate limit* rule, broken inside the substrate that
+  enforces it. Refill is now wall-clock keyed. This explains the old unaccountable 31%-of-game-thread
+  measurement.
+* **Prevention:** `tools/lint-lua.ps1` (syntax + globals + guards, all 70 files) is now a hard gate
+  in `package.ps1`. Nothing validated the Lua on the way out before.
+* **Combat specifically:** `quest_objective.first_text` was the strongest mid-combat candidate —
+  it tries candidate member names *expected to be absent*, at 300 ms, on a host the game hides and
+  rebuilds when a battle starts, behind a comment claiming absent members "read as nil — safe"
+  (they abort). Same shape in `guide_watch` (`win[m]` from a candidate list, as a call argument).
+  `battle_monitor` was already clean. Coverage checked: every continuously-running loop is now
+  gated (`pad_poll` touches no UObject at all).
+* **CRASH BLACK BOX (new, `mem_bridge`):** a 64-slot ring in a memory-mapped file records what the
+  mod was doing (~180 ms of trail); the OS flushes it when the process dies, and `main.lua` prints
+  the previous session's trail into `UE4SS.log` at boot. Every adapter `is_active`/`update` is
+  marked by name, plus the nav/quest/battle/guide loop steps. **Tested standalone** (kill with
+  TerminateProcess, recover from a second process) — which is how its first build was caught
+  faulting on recovery from an 8224-into-8192 overflow. So the next crash names its own site.
+* **Diagnosability:** `ui_registry` prints one `screen -> <adapter>` breadcrumb per commit, adapters
+  are pcall-isolated and log their name on fault, and the README tells players to copy `UE4SS.log`
+  after a crash, relaunch once, and send that second log too (it carries the black-box trail).
+* **Rejected:** disabling the UE4SS hook flags. UE4SS drains `ExecuteInGameThread` through
+  `ProcessEvent` — the mod's whole poll loop — so turning them off would silence the mod from boot.
+
+**ALL OF THIS IS SOURCE-ONLY AND UNVERIFIED IN GAME.** It is luac- and lint-clean. `main.lua`,
+`i18n.lua` and `ui_registry.lua` changed, so testing needs a **full game restart**, not Ctrl+Shift+R.
+What to check: free-roam for several minutes with the radar tracking a target across a streaming
+boundary (the crash path), and menu entry latency (should be no worse, likely better).
+
+**Still open, deliberately not done in this batch:** 17 shared pooled classes
+(`Xcmn_Keyhelp_C`, `Xcmn_Header_C`, `CFUIMultiLineTextBox`, `Info_Log*`, …) cannot be
+directory-mapped and remain on the ~65 ms `FindAllOf` path, contending for the budget. That is the
+remaining structural cause of menu latency and wants its own pass — after this batch is verified,
+not stacked on top of it.
 
 **2026-07-25 (p): release hygiene.** Sweeping for diagnostics before packaging found TWO left
 enabled that were NOT gated on the dev build, i.e. they shipped: `screen_cooking.LATCH_DEBUG`
