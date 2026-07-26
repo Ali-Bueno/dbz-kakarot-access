@@ -340,12 +340,13 @@ end
 local function player_pawn()
     local mm = minimap()
     if Core.valid(mm) then
-        local ok, ins = pcall(function() return mm.PlayerIns end)
+        -- mm is the ACROSS-TICK cache: gate the fetch itself, not just the handle.
+        local ok, ins = pcall(function() return Core.member(mm, "PlayerIns") end)
         if ok and Core.valid(ins) then return ins end
     end
     local pc = FindFirstOf("PlayerController")
     if not Core.valid(pc) then return nil end
-    local ok, pawn = pcall(function() return pc.Pawn end)
+    local ok, pawn = pcall(function() return Core.member(pc, "Pawn") end)
     if ok and Core.valid(pawn) then return pawn end
     return nil
 end
@@ -362,13 +363,19 @@ local function camera_forward()
     local rot
     local mm = minimap()
     if Core.valid(mm) then
-        local ok, r = pcall(function() return mm.CameraMng:GetCameraRotation() end)
+        local ok, r = pcall(function()
+            local cm = Core.member(mm, "CameraMng")   -- mm is cached across ticks
+            if Core.valid(cm) then return cm:GetCameraRotation() end
+        end)
         if ok then rot = r end
     end
     if not rot then
         local pc = FindFirstOf("PlayerController")
         if not Core.valid(pc) then return nil end
-        local ok, r = pcall(function() return pc.PlayerCameraManager:GetCameraRotation() end)
+        local ok, r = pcall(function()
+            local cam = Core.member(pc, "PlayerCameraManager")
+            if Core.valid(cam) then return cam:GetCameraRotation() end
+        end)
         if not ok or not r then return nil end
         rot = r
     end
@@ -394,9 +401,9 @@ local function map_icon_type(actor)
     local t
     pcall(function()
         local comp = actor:GetComponentByClass(cls)
-        if comp and comp:IsValid() then
-            if comp.bShowMapIcon == false then return end
-            t = tonumber(comp.MapIconType)
+        if Core.valid(comp) then
+            if Core.member(comp, "bShowMapIcon") == false then return end
+            t = tonumber(Core.member(comp, "MapIconType"))
         end
     end)
     return t
@@ -412,10 +419,10 @@ local function icon_info(actor)
     local t, range
     pcall(function()
         local comp = actor:GetComponentByClass(cls)
-        if comp and comp:IsValid() then
-            if comp.bShowMapIcon == false then return end
-            t = tonumber(comp.MapIconType)
-            range = tonumber(comp.SearchRangeRadius)
+        if Core.valid(comp) then
+            if Core.member(comp, "bShowMapIcon") == false then return end
+            t = tonumber(Core.member(comp, "MapIconType"))
+            range = tonumber(Core.member(comp, "SearchRangeRadius"))
         end
     end)
     return t, range
@@ -434,7 +441,7 @@ local function map_icon_type_any(actor)
     local t
     pcall(function()
         local comp = actor:GetComponentByClass(cls)
-        if comp and comp:IsValid() then t = tonumber(comp.MapIconType) end
+        if Core.valid(comp) then t = tonumber(Core.member(comp, "MapIconType")) end
     end)
     return t
 end
@@ -461,13 +468,13 @@ end
 local function navi_quest_icon(icon)
     local idx
     pcall(function()
-        local sw = icon.WL_NaviIconSw
-        if not (sw and sw:IsValid()) then return end
-        local s = sw.WL_NaviIconSwitcher
-        if s and s:IsValid() then idx = tonumber(s.ActiveWidgetIndex) end
+        local sw = Core.member(icon, "WL_NaviIconSw")
+        if not (Core.valid(sw)) then return end
+        local s = Core.member(sw, "WL_NaviIconSwitcher")
+        if Core.valid(s) then idx = tonumber(Core.member(s, "ActiveWidgetIndex")) end
         if not (idx and idx >= 1 and idx <= 3) then
-            local b = sw.WL_NaviBaseSwitcher
-            if b and b:IsValid() then idx = tonumber(b.ActiveWidgetIndex) end
+            local b = Core.member(sw, "WL_NaviBaseSwitcher")
+            if Core.valid(b) then idx = tonumber(Core.member(b, "ActiveWidgetIndex")) end
         end
     end)
     if idx == 1 then return 24 end   -- MAIN_QUEST
@@ -535,8 +542,19 @@ end
 -- must win even though main outranks it normally. Falls back to the overall best.
 local function best_candidate(px, py, pz, want_pri)
     -- The refresh is a raw full-array FindAllOf (~65ms): never spend it while a
-    -- cutscene/dialogue overlay owns the screen (Core.scan_quiet) — the stale list
-    -- keeps serving (entries are re-validated below) and the refresh lands after.
+    -- cutscene/dialogue overlay owns the screen (Core.scan_quiet). But an EXPIRED list is
+    -- DROPPED rather than kept (2026-07-26, the same fix as enemies_list — see the long note
+    -- there). "The stale list keeps serving, entries are re-validated below" was the old
+    -- reasoning and it is unsound: these are per-level pooled minimap widgets, the engine frees
+    -- them on teardown, and re-validating cannot detect an address the engine has recycled.
+    -- Dropping costs nothing and `navi_next` stays in the past, so the first non-quiet tick
+    -- does the real refresh.
+    -- Emptied, NOT returned from: this function draws candidates from other sources further
+    -- down (the minimap icon list), and those are still valid. The loop below simply iterates
+    -- nothing.
+    if navi_icons ~= nil and tick >= navi_next and Core.scan_quiet() then
+        navi_icons = {}
+    end
     if navi_icons == nil or (tick >= navi_next and not Core.scan_quiet()) then
         navi_icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
         navi_next = tick + RESCAN_CLASSES
@@ -557,7 +575,8 @@ local function best_candidate(px, py, pz, want_pri)
 
     for _, icon in pairs(navi_icons) do
         if Core.valid(icon) and icon_in_use(icon) then
-            local ok, ta = pcall(function() return icon.TargetActor end)
+            -- navi_icons is a module-level list held for RESCAN_CLASSES ticks.
+            local ok, ta = pcall(function() return Core.member(icon, "TargetActor") end)
             if ok and Core.valid(ta) then consider(ta, classify(ta)) end
         end
     end
@@ -665,10 +684,10 @@ local invoker_nav = nil            -- the live nav system we registered with (fo
 -- static calls (project / findpath) if the getter fails.
 local function live_navsys(ctx)
     local cdo = StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
-    if not (cdo and cdo:IsValid()) then return nil end
+    if not (Core.valid(cdo)) then return nil end
     local nav
     pcall(function() nav = cdo:GetNavigationSystem(ctx) end)
-    if nav and nav:IsValid() then return nav end
+    if Core.valid(nav) then return nav end
     return cdo
 end
 
@@ -689,8 +708,11 @@ local function clear_invoker()
     if invoker_key and Core.valid(invoker_nav) then
         local pc = FindFirstOf("PlayerController")
         pcall(function()
-            local pw = pc and pc.Pawn
-            if pw then invoker_nav:UnregisterNavigationInvoker(pw) end
+            -- Gated fetch + validity: this runs when the radar is switched off, which can be
+            -- during a teardown, and the pawn was being handed unvalidated into a reflected
+            -- engine call on a nav system cached across ticks.
+            local pw = Core.member(pc, "Pawn")
+            if Core.valid(pw) then invoker_nav:UnregisterNavigationInvoker(pw) end
         end)
     end
     invoker_key, invoker_nav = nil, nil
@@ -736,7 +758,11 @@ local function compute_route(pawn, px, py, pz, tx, ty, tz)
         if not arr or n < 2 then return nil end
         local out = {}
         for i = 1, n do
+            -- Route corners are FVector STRUCT handles out of a reflected array; an entry the
+            -- engine has freed under us is an invalid handle, not nil, so read it only after
+            -- valid_ref (IsValid only — GetAddress on a struct pierces pcall).
             local p = arr[i]
+            if not Core.valid_ref(p) then return nil end
             out[i] = { x = p.X, y = p.Y, z = p.Z }
         end
         return out
@@ -1018,9 +1044,10 @@ local function chain_step(px, py, pz)
     local advance = not Core.valid(a)
     if not advance then
         local hidden, st = false, nil
-        pcall(function() hidden = a.bHidden end)
+        -- chain_wait.actor was captured on an earlier tick: streaming can free it.
+        pcall(function() hidden = Core.member(a, "bHidden") end)
         if chain_wait.stateful then
-            pcall(function() st = tonumber(a.InteractState) end)
+            pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
         end
         advance = (hidden == true or hidden == 1) or st == STATE_TAKEN
     end
@@ -1050,7 +1077,7 @@ local enemy_display_name   -- forward decl: assigned below game_character_name (
 
 local function enemy_spawn_type(c)
     local st
-    pcall(function() st = tonumber(c.SpawnType) end)
+    pcall(function() st = tonumber(Core.member(c, "SpawnType")) end)
     return st
 end
 
@@ -1064,7 +1091,7 @@ end
 -- ghost enemies inside Goku's house at game start (user report 2026-07-17).
 local function char_visible(c)
     local hidden = false
-    pcall(function() hidden = c.bHidden end)
+    pcall(function() hidden = Core.member(c, "bHidden") end)
     return not (hidden == true or hidden == 1)
 end
 
@@ -1088,10 +1115,10 @@ local function enemy_level(c)
     if not off or not Mem.is_loaded() then return nil end
     local si
     pcall(function()
-        local a = c.AttributeComponent
-        if a and a:IsValid() then
-            local s = a.StatusInstance
-            if s and s:IsValid() then si = s end
+        local a = Core.member(c, "AttributeComponent")
+        if Core.valid(a) then
+            local s = Core.member(a, "StatusInstance")
+            if Core.valid(s) then si = s end
         end
     end)
     if not si then return nil end
@@ -1106,6 +1133,27 @@ end
 -- The live field-enemy list { {actor, noun}, ... } (cached; entries re-validated by
 -- every user). Player/companions are excluded by the playable-base check.
 local function enemies_list()
+    -- EXPIRED + CANNOT REFRESH => DROP THE LIST (2026-07-26). The quiet-mode deferral below is
+    -- right about the cost — a ~65 ms FindAllOf during a cutscene is exactly what quiet mode
+    -- exists to prevent — but it drew the wrong conclusion from it: it kept SERVING the expired
+    -- list instead. These entries are ENEMY ACTORS, the one object family the engine destroys
+    -- as a matter of course, and `scan_quiet` is set by the dialogue adapter. So the sequence
+    -- "finish a battle, story dialogue opens" pinned a list of just-destroyed enemies and the
+    -- radar kept dereferencing it, for as long as the conversation lasted. That is the user's
+    -- 2026-07-26 crash (black box: last op `nav.step`; AV reading 0x10 = GetClassPrivate on a
+    -- dead handle) and the handle-lifetime audit had flagged this exact list as the most likely
+    -- mid-combat site.
+    --
+    -- Dropping is the correct answer, not scanning anyway: it costs NOTHING, and a radar that
+    -- announces no enemies during a cutscene is right, whereas one that announces enemies that
+    -- no longer exist is wrong even when it does not crash. `enemy_next` is deliberately left in
+    -- the past so the first non-quiet tick does a real refresh.
+    -- Re-validating per use is NOT a substitute: a freed address the engine has already recycled
+    -- passes every check we can make (mem.lua says so in as many words).
+    if enemy_cache ~= nil and tick >= enemy_next and Core.scan_quiet() then
+        enemy_cache = {}
+        return enemy_cache
+    end
     -- Same quiet-mode deferral as best_candidate: no raw FindAllOf during subtitles.
     if enemy_cache == nil or (tick >= enemy_next and not Core.scan_quiet()) then
         enemy_cache = {}
@@ -1171,14 +1219,14 @@ local function animal_species(a)
     if not is_animal(a) then return nil end
     local key
     pcall(function()
-        local comp = a.NpcComponent
-        if not (comp and comp:IsValid()) then return end
+        local comp = Core.member(a, "NpcComponent")
+        if not (Core.valid(comp)) then return end
         if animal_comp_cls == nil then
             local ok, c = pcall(function() return StaticFindObject("/Script/AT.AnimalComponentBase") end)
             animal_comp_cls = (ok and c) or false
         end
         if not animal_comp_cls or not comp:IsA(animal_comp_cls) then return end
-        local t = tonumber(comp.AnimalType)
+        local t = tonumber(Core.member(comp, "AnimalType"))
         if t and t >= 1 and t <= 9 then key = "animal_type_" .. t end
     end)
     return key
@@ -1223,7 +1271,7 @@ local function enemy_probe(px, py, pz)
                         local c2 = p:GetClass()
                         for _ = 1, 5 do
                             c2 = c2:GetSuperStruct()
-                            if not (c2 and c2:IsValid()) then break end
+                            if not (Core.valid(c2)) then break end
                             chain[#chain + 1] = c2:GetFName():ToString()
                         end
                     end)
@@ -1259,12 +1307,12 @@ end
 local function aim_watch(pawn, px, py, pz)
     local locked
     pcall(function()
-        local comp = pawn.LockonList
-        if comp and comp:IsValid() then
+        local comp = Core.member(pawn, "LockonList")
+        if Core.valid(comp) then
             local arr, n = Core.array_of(comp, "m_xActors")   -- raw #arr here is the uncatchable throw
             if arr and n > 0 then
                 local a = arr[1]
-                if a and a:IsValid() then locked = a end
+                if Core.valid(a) then locked = a end
             end
         end
     end)
@@ -1355,6 +1403,7 @@ end
 
 
 local function step()
+    Mem.mark("nav.step")
     tick = tick + 1
     if not on then return end
 
@@ -1537,9 +1586,10 @@ local function step()
     end
     if sweeping then
         local hidden, st = false, nil
-        pcall(function() hidden = target.actor.bHidden end)
+        -- target.actor is a handle picked minutes ago; the actor can be freed under it.
+        pcall(function() hidden = Core.member(target.actor, "bHidden") end)
         if target.stateful then
-            pcall(function() st = tonumber(target.actor.InteractState) end)
+            pcall(function() st = tonumber(Core.member(target.actor, "InteractState")) end)
         end
         if (hidden == true or hidden == 1) or st == STATE_TAKEN then
             chain_over()
@@ -1699,7 +1749,10 @@ local function step()
     -- K2_GetActorLocation call the whole tracker already relies on.
     if target.grp == "enemies" or target.grp == "hunt" then
         local rot
-        pcall(function() rot = target.actor:K2_GetActorRotation() end)
+        -- Method call on the long-lived target handle: re-check the actor first.
+        pcall(function()
+            if Core.valid(target.actor) then rot = target.actor:K2_GetActorRotation() end
+        end)
         if rot then
             local yaw = math.rad(rot.Yaw or 0)
             local fwx, fwy = math.cos(yaw), math.sin(yaw)   -- the animal's forward
@@ -1787,6 +1840,10 @@ local function explore_rescan(px, py, pz, ms)
 end
 
 local function explore_tick()
+    -- Marked separately from nav.step: this runs in the SAME game-thread callback right after
+    -- step(), so without its own mark a trail ending in `nav.step` could not tell the two apart
+    -- (noted while root-causing the 2026-07-26 (c) crash). It reaches the same target sweep.
+    Mem.mark("nav.explore")
     if not explore_on or not Nav.field_ready() then return end
     local pawn = player_pawn()
     if not pawn then return end
@@ -2141,7 +2198,7 @@ local function game_character_name(id)
         local ok, lib = pcall(function()
             return StaticFindObject("/Script/AT.Default__AT_BlueprintFunctionLibrary")
         end)
-        name_lib = (ok and lib and lib:IsValid()) and lib or false
+        name_lib = (ok and Core.valid(lib)) and lib or false
     end
     local nm
     if name_lib then
@@ -2181,8 +2238,11 @@ end
 enemy_display_name = function(c)
     local raw
     pcall(function()
-        local s = c.CharacterName
-        if type(s) == "string" then raw = s elseif s then raw = s:ToString() end
+        -- Gated fetch + a validity check on the RESULT. This runs on post-combat AT_Characters,
+        -- i.e. actors the engine is in the middle of destroying.
+        local s = Core.member(c, "CharacterName")
+        if type(s) == "string" then raw = s
+        elseif Core.valid_ref(s) then raw = s:ToString() end
     end)
     return resolve_char_id(raw)
 end
@@ -2196,8 +2256,8 @@ end
 local function npc_name(npc)
     local raw
     pcall(function()
-        local u = npc.UniqueId
-        if u then raw = u:ToString() end
+        local u = Core.member(npc, "UniqueId")
+        if Core.valid_ref(u) then raw = u:ToString() end
     end)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
     -- The game's own resolver (+ hand-verified map) first — authoritative names.
@@ -2249,7 +2309,7 @@ function Nav.list_targets()
     -- InteractState — see access_point_class).
     local function point_taken(a)
         local st
-        pcall(function() st = tonumber(a.InteractState) end)
+        pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
         return st == STATE_TAKEN
     end
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
@@ -2374,7 +2434,7 @@ function Nav.list_targets()
         if Core.valid(comp) then
             local owner, t
             pcall(function() owner = comp:GetOwner() end)
-            pcall(function() t = tonumber(comp.MapIconType) end)
+            pcall(function() t = tonumber(Core.member(comp, "MapIconType")) end)
             if Core.valid(owner) and t then add_icon(owner, t, "mapicon2") end
         end
     end
@@ -2400,10 +2460,10 @@ function Nav.list_targets()
     do
         local function npc_present(npc)
             local hidden = false
-            pcall(function() hidden = npc.bHidden end)
+            pcall(function() hidden = Core.member(npc, "bHidden") end)
             if hidden == true or hidden == 1 then return false end
             local ht = 0
-            pcall(function() ht = tonumber(npc.CurrentHiddenType) or 0 end)
+            pcall(function() ht = tonumber(Core.member(npc, "CurrentHiddenType")) or 0 end)
             return ht == 0
         end
         -- Scan the native base AND the blueprint subclass: FindAllOf on a native base
@@ -2489,9 +2549,10 @@ function Nav.list_targets()
         local function action_name(a)
             local s
             pcall(function()
-                local v = a.ActionName
+                local v = Core.member(a, "ActionName")
+                -- Truthiness is not a validity check on a Core.member result (see drop_item_name).
                 if type(v) == "string" then s = v
-                elseif v then s = v:ToString() end
+                elseif Core.valid_ref(v) then s = v:ToString() end
             end)
             return (type(s) == "string" and s ~= "") and s or nil
         end
@@ -2503,13 +2564,21 @@ function Nav.list_targets()
         local function drop_item_name(a)
             local raw
             pcall(function()
-                local comp = a.ItemTableComponent
-                if not (comp and comp:IsValid()) then return end
-                local d = comp.FieldItemDropData
-                if not d then return end
+                local comp = Core.member(a, "ItemTableComponent")
+                if not (Core.valid(comp)) then return end
+                local d = Core.member(comp, "FieldItemDropData")
+                -- Core.member validates the OWNER, not the RESULT. A null/empty field yields an
+                -- INVALID RemoteObject, which is NOT nil — so `if not d` let it straight through
+                -- and the next hop resolved a property on a dead handle: the +0x10 fault. This is
+                -- the prime suspect for the 2026-07-26 (c) crash (it is the only live fetch in the
+                -- whole step() graph whose receiver never reached Core.valid, which is exactly
+                -- what "Mem.alive logged zero rejections" demands).
+                -- valid_REF, not valid: `d` is an FStruct handle, and Core.valid would call
+                -- GetAddress on it, which UE4SS raises THROUGH pcall.
+                if not Core.valid_ref(d) then return end
                 for _, fld in ipairs({ "FixedId", "NormalId" }) do
                     local id = d[fld]
-                    local s = id and id:ToString()
+                    local s = Core.valid_ref(id) and id:ToString() or nil
                     if s and s ~= "" and s ~= "None" then raw = s return end
                 end
             end)
@@ -2581,7 +2650,7 @@ function Nav.list_targets()
                 if label == nil then
                     pcall(function()
                         local n = Core.member(a, prop)
-                        if n then
+                        if Core.valid_ref(n) then
                             local s = n:ToString()
                             if s and s ~= "" and s ~= "None" then label = s end
                         end
@@ -2604,9 +2673,9 @@ function Nav.list_targets()
             [9] = { grp = "sites", noun = "radar_cat_sites" },
         }
         for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
-            if comp and comp:IsValid() then
+            if Core.valid(comp) then
                 local t
-                pcall(function() t = tonumber(comp.FieldPointIconType) end)
+                pcall(function() t = tonumber(Core.member(comp, "FieldPointIconType")) end)
                 local m = t and FIELD_POINT[t]
                 if m then
                     local owner
@@ -2653,7 +2722,7 @@ function Nav.list_targets()
         for _, a in pairs(FindAllOf(cls) or {}) do
             if Core.valid(a) and is_animal(a) then
                 local hidden = false
-                pcall(function() hidden = a.bHidden end)
+                pcall(function() hidden = Core.member(a, "bHidden") end)
                 if not (hidden == true or hidden == 1) then
                     -- Wild animals are HUNT targets (prey), not combat enemies — their own
                     -- category so the deer/wolves/dinos/dragons don't clutter "Enemies".
@@ -2685,11 +2754,11 @@ function Nav.list_targets()
                 local iidx, bidx = "?", "?"
                 pcall(function()
                     local sw = icon.WL_NaviIconSw
-                    if sw and sw:IsValid() then
+                    if Core.valid(sw) then
                         local s = sw.WL_NaviIconSwitcher
-                        if s and s:IsValid() then iidx = tostring(tonumber(s.ActiveWidgetIndex)) end
+                        if Core.valid(s) then iidx = tostring(tonumber(s.ActiveWidgetIndex)) end
                         local b = sw.WL_NaviBaseSwitcher
-                        if b and b:IsValid() then bidx = tostring(tonumber(b.ActiveWidgetIndex)) end
+                        if Core.valid(b) then bidx = tostring(tonumber(b.ActiveWidgetIndex)) end
                     end
                 end)
                 local resolved, atype = "nil", "nil"
@@ -3059,7 +3128,7 @@ function Nav.dump_levels()
             local attrib
             pcall(function()
                 local a = c.AttributeComponent
-                if a and a:IsValid() then attrib = a end
+                if Core.valid(a) then attrib = a end
             end)
             if not attrib then f:write(tag .. ": no AttributeComponent\n") return end
             f:write(string.format("%s  attrib=%s @%X\n", tag, cls_name(attrib), Mem.addr(attrib) or 0))
@@ -3094,7 +3163,7 @@ function Nav.dump_levels()
             local si
             pcall(function()
                 local s = attrib.StatusInstance
-                if s and s:IsValid() then si = s end
+                if Core.valid(s) then si = s end
             end)
             if not si then f:write("  no StatusInstance\n") return end
             f:write(string.format("  si=%s @%X, slots with i32 in %d..%d:\n",
@@ -3463,7 +3532,7 @@ function Nav.dump()
                     local raw
                     pcall(function()
                         local comp = ta:GetComponentByClass(icon_component_class())
-                        if comp and comp:IsValid() then raw = tonumber(comp.MapIconType) end
+                        if Core.valid(comp) then raw = tonumber(comp.MapIconType) end
                     end)
                     line = line .. string.format(" target=%s pri=%d icontype=%s pos=%.0f %.0f %.0f",
                         ta:GetFullName(), classify(ta), tostring(raw), x or 0, y or 0, z or 0)
@@ -3818,7 +3887,7 @@ function Nav.dump()
             f:write("probing FieldPointComponent...\n")
             local nf = 0
             for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
-                if comp and comp:IsValid() then
+                if Core.valid(comp) then
                     local t, ocls, dd = "?", "?", nil
                     pcall(function() t = tostring(tonumber(comp.FieldPointIconType)) end)
                     local owner
