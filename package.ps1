@@ -71,6 +71,20 @@ if ($missing) {
     throw "Missing built DLLs in Scripts: $($missing -join ', '). Run the src\*\build.ps1 scripts first."
 }
 
+# --- validate the Lua before anything is staged --------------------------------
+# Nothing used to check the Lua on the way out, so a release could ship a file that does not
+# compile, one that reads a global it never declared (silent mod from boot), or a call site
+# written without the crash guards. All three have happened. The lint is a hard gate: fix the
+# finding, do not bypass it.
+$Lint = Join-Path $PSScriptRoot 'tools\lint-lua.ps1'
+if (Test-Path $Lint) {
+    Write-Host "Linting Lua..."
+    & $Lint
+    if ($LASTEXITCODE -ne 0) { throw "Lua lint failed - refusing to package. See the findings above." }
+} else {
+    Write-Warning "tools\lint-lua.ps1 not found - packaging WITHOUT Lua validation."
+}
+
 # --- stage the overlay ---------------------------------------------------------
 $Stage = Join-Path $OutDir 'stage'
 if (Test-Path $Stage) { Remove-Item $Stage -Recurse -Force }
@@ -118,6 +132,7 @@ Copy-Item $ScriptsSrc $StageScripts -Recurse
 # Drop runtime-generated files and the developer-only modules (only reachable via
 # the debug keybinds, which are compiled out below).
 $DevJunk = 'dumps', 'dump.txt', 'probe.txt', 'dev_probe.txt', 'config.txt',
+           'crash_trail.bin',
            'discover.lua', 'dev_memdiff.lua', 'dev_log.lua'
 foreach ($j in $DevJunk) {
     $p = Join-Path $StageScripts $j
