@@ -34,53 +34,57 @@ local QuestObjective = require("quest_objective")
 --    them, wins when open — while staying dormant (so tutorial/subtitles read) when closed;
 --  * dialogue (story subtitles / NPC talk) sits above the info overlays so a line beats an
 --    idle loading/tutorial screen.
-Registry.register(require("screen_choicelist"))
+-- Substory clear rewards ("Recompensas de historia"). ABOVE screen_choicelist on purpose: the
+-- reward rows are `Xcmn_Win01_List_C`, the same class the difficulty picker uses, so the choice
+-- reader would otherwise claim them and announce the rewards as options to choose from.
+Registry.register(require("screen_questreward"), "screen_questreward")
+Registry.register(require("screen_choicelist"), "screen_choicelist")
 -- Field Memory / story-recap viewer (Field_Memory_C): a titled paged narration overlay.
 -- High priority — it's a full-screen reader that pauses the game.
-Registry.register(require("screen_memory"))
+Registry.register(require("screen_memory"), "screen_memory")
 -- Story results (Quest_Main_Clear_C): the post-battle rank board. High priority — a
 -- full-screen sequence; reads incrementally following the game's reveal animation.
-Registry.register(require("screen_results"))
+Registry.register(require("screen_results"), "screen_results")
 -- Game-over / defeat menu (Gameover_C): the "Fin de la partida" retry/load/title list.
 -- High priority — a full-screen modal that owns the screen when the player is defeated.
-Registry.register(require("screen_gameover"))
-Registry.register(require("screen_dialog"))
+Registry.register(require("screen_gameover"), "screen_gameover")
+Registry.register(require("screen_dialog"), "screen_dialog")
 -- Boot agreement / privacy policy (AT_UIXcmnAgreement): the first screen after launch.
 -- Below the dialog reader (a confirm popup over it must win), above everything else —
 -- the title menu stays interactive-visible UNDERNEATH it (F7 2026-07-17) and would
 -- otherwise claim the tick and blurt "Main menu" over the agreement.
-Registry.register(require("screen_agreement"))
-Registry.register(require("screen_pause"))
+Registry.register(require("screen_agreement"), "screen_agreement")
+Registry.register(require("screen_pause"), "screen_pause")
 -- Fishing/minigame/QTE prompts sit above the dialogue reader: their button prompts
 -- are time-critical and a subtitle line must not shadow them.
 -- Fishing/minigame "¡BRAVO!" result sheet ABOVE the fishing prompt reader: the
 -- pooled fishing HUD lingers on_screen under the sheet, so registered below it the
 -- rewards never got a tick (user bug 2026-07-17 — they only spoke after "Siguiente"
 -- released the claim). A notice reader, it speaks and releases immediately.
-Registry.register(require("screen_fishresult"))
-Registry.register(require("screen_fishing"))
+Registry.register(require("screen_fishresult"), "screen_fishresult")
+Registry.register(require("screen_fishing"), "screen_fishing")
 -- Dialogue choices sit ABOVE the line reader: when an NPC question shows options,
 -- the choice (prompt + hovered option) must win over the lingering talk line.
-Registry.register(require("screen_choice"))
-Registry.register(require("screen_dialogue"))
+Registry.register(require("screen_choice"), "screen_choice")
+Registry.register(require("screen_dialogue"), "screen_dialogue")
 -- Telop banners sit BELOW dialogue: a subtitle wins the tick and the banner (still
 -- pending while on screen) speaks right after it, queued.
-Registry.register(require("screen_telop"))
+Registry.register(require("screen_telop"), "screen_telop")
 -- Episode title cards (fm.QuestMainStart) — same banner family as the telop: below
 -- dialogue, speaks once per appearance, queued.
-Registry.register(require("screen_questcard"))
+Registry.register(require("screen_questcard"), "screen_questcard")
 -- Cinematic character-introduction cards ("Gohan — hijo de Goku"): same banner
 -- family — below dialogue, speaks once per appearance, queued.
-Registry.register(require("screen_infoname"))
-Registry.register(require("screen_tips"))
-Registry.register(require("screen_loading"))
+Registry.register(require("screen_infoname"), "screen_infoname")
+Registry.register(require("screen_tips"), "screen_tips")
+Registry.register(require("screen_loading"), "screen_loading")
 local Tutorial = require("screen_tutorial")
-Registry.register(Tutorial)
-Registry.register(require("screen_options"))
+Registry.register(Tutorial, "screen_tutorial")
+Registry.register(require("screen_options"), "screen_options")
 -- Area map + world map (free-cursor screens; hovered/current area name readout).
 -- Kept in a local: its fast travel-selection loop is started/stopped with the app.
 local MapScreen = require("screen_map")
-Registry.register(MapScreen)
+Registry.register(MapScreen, "screen_map")
 -- Cooking precedes the shop: the cooking menu embeds a UAT_UIShopTop (WL_CookingTop),
 -- so the shop adapter could latch onto it while the cooking screen is the real context.
 -- The Shop_Top mode/action list ("Make a dish / Make a full-course meal", shop Buy/Sell):
@@ -93,16 +97,16 @@ Registry.register(MapScreen)
 -- Registered BEFORE the shop group: the training menu opens OVER the shop-top, which can
 -- stay on_screen underneath, so training (the foreground screen) must win. It gates on
 -- Shop_Training_C being on_screen, so it never activates over a regular shop.
-Registry.register(require("screen_training"))
+Registry.register(require("screen_training"), "screen_training")
 -- Item/info BUY lists open OVER the shop-top (which can stay on_screen underneath), so
 -- they must precede screen_shoplist/screen_shop:
 --   Shop_Cmn_C  — the food/material item list (name, price, purchase count, owned);
 --   Shop_Info_C — the information store (map-location intel: fishing/hunting/... spots).
-Registry.register(require("screen_shopcmn"))
-Registry.register(require("screen_shopinfo"))
-Registry.register(require("screen_shoplist"))
-Registry.register(require("screen_cooking"))
-Registry.register(require("screen_shop"))
+Registry.register(require("screen_shopcmn"), "screen_shopcmn")
+Registry.register(require("screen_shopinfo"), "screen_shopinfo")
+Registry.register(require("screen_shoplist"), "screen_shoplist")
+Registry.register(require("screen_cooking"), "screen_cooking")
+Registry.register(require("screen_shop"), "screen_shop")
 -- Overworld ring submenus that open their own screen (native class, no _C). The two list
 -- screens share the generic MenuListBase factory; Characters/Party use their own getter/field.
 local ListScreen = require("screen_list")
@@ -112,11 +116,11 @@ local ListScreen = require("screen_list")
 -- MenuListBase01, whose TxtTitle carries the category tab ("Recovery").
 -- Item palette registration (X in the inventory) opens OVER the Items list, which
 -- stays on_screen underneath — the palette must precede it.
-Registry.register(require("screen_palette"))
+Registry.register(require("screen_palette"), "screen_palette")
 -- Item "use" character-select (A on a usable item -> pick who uses it). Same AT_UIItemMenu
 -- host as the item list, so it precedes the list reader and wins while a character card
 -- (WL_Start_Party_Bars) is animated on-screen; inactive otherwise.
-Registry.register(require("screen_itemuse"))
+Registry.register(require("screen_itemuse"), "screen_itemuse")
 -- Detail pane (blueprint-only nodes, subtree-scanned): sell price, main location,
 -- item info + description as the tooltip; Txt_Title00 (the pane's item title) is the
 -- LIVE selection name — the list's reflected index freezes at 0 on this screen.
@@ -124,33 +128,33 @@ Registry.register(ListScreen.new("Start_Item_C", "Xmenu_List00",
     function() return I18n.startlist(2) end, "TxtTitle",
     { "Txt_Cap00", "Txt_Detail00", "Txt_Cap01", "Txt_Detail01",
       "Txt_Cap02", "Txt_Detail02", "Txt_Detail03" }, "Txt_Title00",
-    require("native_offsets").itemMenu.hasItems))   -- native "category has items" flag → announce empty
+    require("native_offsets").itemMenu.hasItems), "list:items")   -- native "category has items" flag → announce empty
 Registry.register(ListScreen.new("AT_UIStartDragonBallMenu", "UICmn00MenuList",
-    function() return I18n.startlist(1) end))                       -- Dragon Balls
+    function() return I18n.startlist(1) end), "list:dragonballs")   -- Dragon Balls
 -- Skill Palette / Super Attack equip (opened from a character): slot plates + detail pane.
-Registry.register(require("screen_skillcustom"))
+Registry.register(require("screen_skillcustom"), "screen_skillcustom")
 -- Skill Tree / learn super attacks (Y from the character menu). AFTER the palette: the
 -- palette opens on top of the tree and the tree can stay on_screen underneath.
-Registry.register(require("screen_skilltree"))
+Registry.register(require("screen_skilltree"), "screen_skilltree")
 -- Character STATUS page (confirm on a character): the stats sheet. It sits BELOW the palette
 -- and the tree — X/Y open those OVER it while it stays on_screen underneath — and ABOVE the
 -- Characters list it opened from, which likewise stays on_screen behind it. Kept in a local:
 -- the F11 keybinds step through its stat blocks.
 local StatusScreen = require("screen_status")
-Registry.register(StatusScreen)
-Registry.register(require("screen_characters"))                    -- Characters list
-Registry.register(require("screen_party"))                         -- Party
+Registry.register(StatusScreen, "screen_status")
+Registry.register(require("screen_characters"), "screen_characters")                    -- Characters list
+Registry.register(require("screen_party"), "screen_party")                         -- Party
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
-Registry.register(require("screen_saveload"))
-Registry.register(require("screen_tutorials"))                     -- System > Tutorials list
-Registry.register(require("screen_community"))                     -- Community / Soul Emblems
-Registry.register(require("screen_field"))
+Registry.register(require("screen_saveload"), "screen_saveload")
+Registry.register(require("screen_tutorials"), "screen_tutorials")                     -- System > Tutorials list
+Registry.register(require("screen_community"), "screen_community")                     -- Community / Soul Emblems
+Registry.register(require("screen_field"), "screen_field")
 -- Bottom-of-stack NOTICE readers (speak once + release; never hold the screen):
 -- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
 -- level-ups). Any real menu above outranks them.
-Registry.register(require("screen_battleresult"))
-Registry.register(require("screen_toasts"))
-Registry.register(require("screen_title"))
+Registry.register(require("screen_battleresult"), "screen_battleresult")
+Registry.register(require("screen_toasts"), "screen_toasts")
+Registry.register(require("screen_title"), "screen_title")
 
 -- Objective-advanced wiring: when the quest HUD's objective text genuinely changes
 -- (quest_objective's signature diff), the radar auto-tracks the new quest marker —

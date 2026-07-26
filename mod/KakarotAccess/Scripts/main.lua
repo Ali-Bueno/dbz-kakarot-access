@@ -9,6 +9,7 @@
 -- is intentionally NOT wired here so the shipping mod stays lean.
 
 local Speech = require("speech")
+local Core = require("ui_core")
 local Mem = require("mem")
 local Audio = require("audio")
 local Input = require("input")
@@ -23,6 +24,25 @@ Speech.init()
 -- Loaded here (before the protected snapshot) so it survives Ctrl+Shift+R like the
 -- speech bridge. Kept SEPARATE from prism_bridge (screen reader only).
 Mem.init()
+-- CRASH BLACK BOX (2026-07-26). Opens the memory-mapped marker ring and REPORTS THE PREVIOUS
+-- SESSION'S TRAIL before resetting it. If the last run ended in the uncatchable UE4SS throw,
+-- these lines are the last things the mod did, and they are the evidence no crash dump and no
+-- Lua traceback could give us. Printed into UE4SS.log so a player's log carries it too.
+pcall(function()
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local trail = Mem.mark_open(dir .. "\\crash_trail.bin")
+    if not trail then
+        print("[" .. MOD .. "] crash trail unavailable (mem_bridge too old or file locked)\n")
+    elseif #trail == 0 then
+        print("[" .. MOD .. "] crash trail: empty (clean previous shutdown, or first run)\n")
+    else
+        print("[" .. MOD .. "] ---- PREVIOUS SESSION ENDED HERE (last " .. #trail
+            .. " operations, oldest first) ----\n")
+        for _, line in ipairs(trail) do print("[" .. MOD .. "]   " .. line .. "\n") end
+        print("[" .. MOD .. "] ---- end of crash trail ----\n")
+    end
+end)
 -- Native audio-cue player (audio_bridge.dll, XAudio2) for the navigation radar.
 -- Same lifecycle as the other bridges: loaded once, survives hot reloads.
 Audio.init()
@@ -143,9 +163,9 @@ if Build.debug then
     RegisterKeyBind(Key.F9, function()
         ExecuteInGameThread(function()
             local pc = FindFirstOf("PlayerController")
-            if not pc or not pc:IsValid() then Speech.say("No player controller", true) return end
-            local pawn = pc.Pawn
-            if not pawn or not pawn:IsValid() then Speech.say("No player pawn", true) return end
+            if not Core.valid(pc) then Speech.say("No player controller", true) return end
+            local pawn = Core.member(pc, "Pawn")
+            if not Core.valid(pawn) then Speech.say("No player pawn", true) return end
             local loc = pawn:K2_GetActorLocation()
             Speech.say(string.format("X %d, Y %d, Z %d",
                 math.floor(loc.X + 0.5), math.floor(loc.Y + 0.5), math.floor(loc.Z + 0.5)), true)
