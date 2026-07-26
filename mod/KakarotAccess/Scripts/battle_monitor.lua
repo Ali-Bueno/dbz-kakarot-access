@@ -15,6 +15,7 @@
 -- Same loop pattern as nav_tracker (generation + busy guard, transition gate first).
 
 local Core = require("ui_core")
+local Mem = require("mem")            -- crash black box only (Mem.mark)
 local Speech = require("speech")
 local I18n = require("i18n")
 local Transition = require("transition")
@@ -106,6 +107,7 @@ local function track(key, hud, is_player)
 end
 
 local function step()
+    Mem.mark("battle.step")
     tick = tick + 1
     if Transition.active() then sides = {} return end
     -- Own scan budget/time window (like quest_objective): this loop runs outside the

@@ -64,15 +64,24 @@ local function lines()
     for _, host in ipairs(Core.cached_all("Info_Log_C", tick)) do
         if Core.valid(host) and Core.on_screen(host) then
             for i = 0, BAR_COUNT - 1 do
-                local bar
-                pcall(function() bar = host["Info_Log_Bar" .. string.format("%02d", i)] end)
+                -- CONFIRMED CRASH SITE, 2026-07-26. The black box caught it: the last thing the
+                -- mod did before the process died — right after a map change — was
+                -- `screen_toasts.is_active`. Two defects, both here:
+                --
+                -- 1. `bar.Txt00` was a NAKED fetch of a member this file's own comment (in the
+                --    Info_Log02 loop below) records as ABSENT on `Info_Log_Bar02_C`. That comment
+                --    even names it as the 2026-07-17 fishing crash. The 2026-07-24 fix moved the
+                --    fetch inside a `pcall` and called it done — but a pcall CANNOT catch this:
+                --    an undeclared-member fetch aborts below the Lua boundary. The bar classes in
+                --    this pool are recycled, so which subclass lands in `Info_Log_Bar00..04` is
+                --    not fixed, and a map transition is exactly when the pool gets rebuilt.
+                -- 2. The bar name itself is composed, so the pool host is being asked for members
+                --    it may not declare either.
+                --
+                -- Both now go through the property gate, which answers nil instead of aborting.
+                local bar = Core.member(host, "Info_Log_Bar" .. string.format("%02d", i))
                 if Core.valid(bar) and Core.on_screen(bar) then
-                    -- Fetch INSIDE a pcall, never as a call argument: on a stale
-                    -- pooled bar a naked member fetch is the uncatchable AV class
-                    -- (the 2026-07-17 fishing crash — fixed then only in the
-                    -- Info_Log02_C loop below; this twin was left behind).
-                    local box
-                    pcall(function() box = bar.Txt00 end)
+                    local box = Core.member(bar, "Txt00")
                     local t = node_text(box)
                     if t then out[#out + 1] = t end
                 end
@@ -82,16 +91,13 @@ local function lines()
     for _, host in ipairs(Core.cached_all("Info_Log02_C", tick)) do
         if Core.valid(host) and Core.on_screen(host) then
             for i = 0, BAR_COUNT - 1 do
-                local bar
-                pcall(function() bar = host["Info_Log_Bar_" .. string.format("%02d", i)] end)
+                -- Same gate as the twin loop above. TextBox is the right member here
+                -- (`AT_UIInfoLog02Bar` 0x3C0, its only text member — `Info_Log_Bar02_C` has no
+                -- Txt00), but "the right member for the class we expect" is not a guarantee
+                -- about the class actually in the pool, which is what the gate checks.
+                local bar = Core.member(host, "Info_Log_Bar_" .. string.format("%02d", i))
                 if Core.valid(bar) and Core.on_screen(bar) then
-                    -- Fetch INSIDE pcall, and TextBox ONLY: Info_Log_Bar02_C
-                    -- reflects TextBox (AT_UIInfoLog02Bar 0x3C0) and has NO Txt00 —
-                    -- a naked `bar.Txt00` argument here was the 2026-07-17 fishing
-                    -- crash (nonexistent-member fetch outside pcall = uncatchable,
-                    -- retried per tick on every blank pooled bar).
-                    local box
-                    pcall(function() box = bar.TextBox end)
+                    local box = Core.member(bar, "TextBox")
                     local t = node_text(box)
                     if t then out[#out + 1] = t end
                 end

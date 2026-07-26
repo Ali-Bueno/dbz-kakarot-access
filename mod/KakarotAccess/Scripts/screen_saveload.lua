@@ -161,7 +161,7 @@ function SaveLoad.is_active()
         local raw = FindAllOf("AT_UIStartSaveLoad") or {}
         local nvalid, nonscr = 0, 0
         for _, o in ipairs(raw) do
-            if o and o:IsValid() then
+            if Core.valid(o) then
                 nvalid = nvalid + 1
                 if Core.on_screen(o) then nonscr = nonscr + 1 end
             end

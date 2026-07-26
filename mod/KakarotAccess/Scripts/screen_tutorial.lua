@@ -79,7 +79,7 @@ local function content()
     -- tutorial and shadow the pause menu underneath.
     local rows_present = false
     for i = 0, ROW_COUNT - 1 do
-        if Core.on_screen(win["Battle_Tips_List_0" .. i]) then rows_present = true break end
+        if Core.on_screen(Core.member(win, "Battle_Tips_List_0" .. i)) then rows_present = true break end
     end
     if not rows_present then return nil end
 
@@ -94,7 +94,7 @@ local function content()
     -- 2) control rows, structural: "button: action".
     local rowlines = 0
     for i = 0, ROW_COUNT - 1 do
-        local row = win["Battle_Tips_List_0" .. i]
+        local row = Core.member(win, "Battle_Tips_List_0" .. i)
         if Core.on_screen(row) then
             local action = Core.text_of(row.Txt_Operat)
             local button = row_button(row)

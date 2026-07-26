@@ -15,6 +15,7 @@
 -- validity/visibility guarded; unreadable nodes are simply skipped.
 
 local Core = require("ui_core")
+local Mem = require("mem")            -- crash black box only (Mem.mark)
 local Speech = require("speech")
 local I18n = require("i18n")
 local Registry = require("ui_registry")
@@ -69,12 +70,21 @@ local last_sig = { main = nil, sub = nil }
 local sig_seeded = false
 local on_change = nil        -- fn(kind) set via Quest.set_on_change
 
--- First readable text among a host's candidate member names (blueprint members that
--- may be absent read as nil — safe).
+-- First readable text among a host's candidate member names.
+--
+-- The comment that used to sit here said absent blueprint members "read as nil — safe". That is
+-- the opposite of true on this engine, and it is the single most expensive wrong belief in this
+-- codebase's history: fetching a member a class does NOT declare is an UNCATCHABLE abort that
+-- unwinds below the Lua boundary, so the `pcall` on the next line cannot contain it. It killed the
+-- process on 2026-07-17 (`bar.Txt00`). This function is built ENTIRELY around trying names that
+-- are expected to be absent, at 300 ms, on a host the game hides and rebuilds when a battle
+-- starts — i.e. the most likely mid-combat crash site in the mod (2026-07-26). `Core.member` asks
+-- the class first and returns nil for a name it does not declare, which is what this loop wanted
+-- the raw fetch to do all along.
 local function first_text(host, names)
     for _, nm in ipairs(names) do
         local node
-        if pcall(function() node = host[nm] end) and Core.valid(node) then
+        if pcall(function() node = Core.member(host, nm) end) and Core.valid(node) then
             local t = read_clean(node)
             if t then return t end
         end
@@ -87,7 +97,9 @@ end
 -- the row's contribution to the change signature.
 local function row_line(host, member)
     local row
-    if not pcall(function() row = host[member] end) or not Core.valid(row) then return nil end
+    -- Gated fetch, same reason as first_text above: the M/S row members are not all declared on
+    -- every host variant, and an undeclared name here is an abort, not a nil.
+    if not pcall(function() row = Core.member(host, member) end) or not Core.valid(row) then return nil end
     if not Core.on_screen(row) then return nil end
     local obj = read_clean(Core.member(row, "Txt_List_00"))
     if not obj then return nil end
@@ -150,6 +162,7 @@ end
 -- Poll step: announce the objective only when it changes, and only when no menu is
 -- open and no level transition is in flight (never talk over a menu or a cutscene load).
 local function step()
+    Mem.mark("quest.step")
     if Transition.active() then return end
     if Registry.active_adapter() then return end
     -- Don't cut a PROTECTED line (a reward notice / tutorial instruction still
@@ -265,7 +278,7 @@ local function dump_state(text)
     for _, rows in ipairs({ MAIN_ROWS, SUB_ROWS }) do
         for _, m in ipairs(rows) do
             local row
-            local okr = pcall(function() row = host[m] end)
+            local okr = pcall(function() row = Core.member(host, m) end)
             local valid = okr and Core.valid(row) or false
             local on = valid and Core.on_screen(row) or false
             local t0, t1
@@ -280,7 +293,7 @@ local function dump_state(text)
     for _, nm in ipairs({ "Txt_Main00", "Txt_Sub00", "Txt_Title", "Txt_Navi_Detail",
                           "WL_MainQuestListTitle", "WL_SubQuestListTitle" }) do
         local node, t
-        pcall(function() node = host[nm] end)
+        pcall(function() node = Core.member(host, nm) end)
         if Core.valid(node) then pcall(function() t = Core.read_text(node) end) end
         f:write(string.format("  title %s = %s\n", nm, tostring(t)))
     end

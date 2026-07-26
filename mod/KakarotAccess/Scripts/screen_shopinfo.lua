@@ -37,7 +37,7 @@ end
 local function selected_row()
     for i = 0, ROW_COUNT - 1 do
         local row
-        pcall(function() row = host["Xlist_Bar05_" .. string.format("%02d", i)] end)
+        pcall(function() row = Core.member(host, "Xlist_Bar05_" .. string.format("%02d", i)) end)
         if Core.valid(row) and Core.on_screen(row) and node_text(Core.member(row, "Txt_List")) then
             local ok, sel = pcall(function() return Core.is_visible(row.Ins_Cursor_Fad) end)
             if ok and sel then return row end

@@ -11,6 +11,10 @@
 -- the game thread and cached (call I18n.refresh() to re-detect, e.g. after a language
 -- change). Unknown/undetected → DEFAULT.
 
+-- Only for the guarded object hops in detect() below. Not circular: ui_core pulls in
+-- mem/speech/transition, none of which require this file.
+local Core = require("ui_core")
+
 local I18n = {}
 
 local DEFAULT = "en"
@@ -31,16 +35,22 @@ I18n.LANG_NAMES = {
 
 -- ---- language detection ----------------------------------------------------
 
+-- Every hop here is guarded (2026-07-26). `detect()` retries until the GameInstance is
+-- ready, so it runs during boot and after map changes — exactly when a handle from the
+-- previous world is most likely to be dangling — and a bare `IsValid()` faults on the very
+-- handles it is supposed to reject (it dereferences before the lookup that would catch a
+-- freed object). `Core.member` also refuses a member the class does not declare, which is
+-- the other uncatchable abort: `GameInstance` and `BP_ATGameInstance_C` are alternatives
+-- here, so `MessageManager` is not guaranteed to exist on whichever one was found.
 local function detect()
     local gi = FindFirstOf("BP_ATGameInstance_C") or FindFirstOf("GameInstance")
-    if not gi or not gi:IsValid() then return nil end
-    local mm
-    pcall(function() mm = gi.MessageManager end)
-    if not mm or not mm:IsValid() then return nil end
+    if not Core.valid(gi) then return nil end
+    local mm = Core.member(gi, "MessageManager")
+    if not Core.valid(mm) then return nil end
     local path
     pcall(function()
-        local dt = mm.DataTable
-        if dt and dt:IsValid() then path = dt:GetFullName() end
+        local dt = Core.member(mm, "DataTable")
+        if Core.valid(dt) then path = dt:GetFullName() end
     end)
     -- ".../Message/PLAT_W/es_ES/messageData…" → "es" (es_ES and es_MX both → es).
     return path and path:match("/Message/[%w_]+/(%a%a)_%u%u") or nil

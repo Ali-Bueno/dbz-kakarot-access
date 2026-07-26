@@ -27,7 +27,7 @@ local function gauge_value(row)
     if not Core.is_visible(g) then return nil end
     local on = 0
     for i = 0, GAUGE_SEGMENTS - 1 do
-        if Core.is_visible(g["Ins_System_On" .. string.format("%02d", i)]) then on = on + 1 end
+        if Core.is_visible(Core.member(g, "Ins_System_On" .. string.format("%02d", i))) then on = on + 1 end
     end
     return math.floor(on / GAUGE_SEGMENTS * 100 + 0.5) .. "%"
 end
@@ -711,7 +711,7 @@ function A.shoptop_rows(h)
     if #out == 0 then
         for i = 0, SHOPTOP_BAR_COUNT - 1 do
             local r
-            pcall(function() r = h["Xlist_Bar01_" .. string.format("%02d", i)] end)
+            pcall(function() r = Core.member(h, "Xlist_Bar01_" .. string.format("%02d", i)) end)
             if Core.valid(r) and Core.on_screen(r) then out[#out + 1] = r end
         end
     end

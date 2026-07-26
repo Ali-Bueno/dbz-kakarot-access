@@ -56,7 +56,7 @@ local function find_host()
         local d
         pcall(function()
             local actor = gt.ActorTitle
-            if actor and actor:IsValid() then d = actor.AgreementDialog end
+            if Core.valid(actor) then d = actor.AgreementDialog end
         end)
         if Core.valid(d) then return d end
     end
