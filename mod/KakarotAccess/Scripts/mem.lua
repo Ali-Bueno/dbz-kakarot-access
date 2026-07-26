@@ -39,6 +39,35 @@ function Mem.thread_id()
     return nil
 end
 
+-- ---- crash black box ---------------------------------------------------------------------
+--
+-- The mod's crashes kill the process from inside UE4SS with an uncatchable C++ throw: no Lua
+-- traceback, and the UE crash dump only gives offsets into a stripped 19 MB DLL. So every round
+-- of diagnosis has been inference from code reading. This records what the mod was DOING, in a
+-- memory-mapped ring the OS writes out when the process dies, so the next crash names its own
+-- site. See the block comment in mem_bridge.c for the mechanism and its honest limits.
+--
+-- `Mem.mark` must stay free enough to call on hot paths (it is one memcpy) and must never be
+-- able to throw: the whole point is a diagnostic that cannot become a new failure mode.
+local marking = false
+
+-- Opens the ring and returns the PREVIOUS session's trail (oldest -> newest) before resetting
+-- it. If the last run crashed, this is its final few hundred milliseconds.
+function Mem.mark_open(path)
+    if not (loaded and m.mark_open) then return nil end
+    local ok, trail = pcall(m.mark_open, path)
+    if not ok then return nil end
+    marking = trail ~= nil
+    return trail
+end
+
+function Mem.mark(text)
+    if not marking then return end
+    pcall(m.mark, text)
+end
+
+function Mem.marking() return marking end
+
 -- The STORED pointer behind a handle, WITHOUT dereferencing it — the only question that is
 -- safe to ask about a possibly-freed UObject. `Mem.addr` below cannot be used for that: it
 -- calls `obj:IsValid()` first, and IsValid is ITSELF a dereference — UE4SS evaluates
