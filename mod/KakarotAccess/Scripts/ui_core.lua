@@ -85,14 +85,38 @@ function Core.valid_ref(o)
     return ok and v == true
 end
 
+-- Per-tick memo for Core.valid, keyed by the HANDLE itself (see Core.valid). Declared here,
+-- above its only two users, because a local referenced above its own declaration compiles to a
+-- global read, is nil at runtime and takes the mod down from boot — the 2026-07-25 lesson.
+-- Cleared in begin_scan_tick alongside os_memo.
+local valid_memo = {}
+
 function Core.valid(o)
     if o == nil then return false end
+    -- Memo FIRST, and keyed by the handle rather than by the object's address, because the
+    -- address is not free: obtaining it is most of what this function costs. Two RemoteObjects
+    -- wrapping one object therefore each pay once (unlike os_memo, which can share by address
+    -- since it has already paid for one) — and the case that matters is the same CACHED handle
+    -- being re-checked, which is what the pool walks do.
+    --
+    -- Why this became load-bearing (2026-07-26): before the crash fix this function was one
+    -- pcall'd IsValid. It is now GetAddress + two native reads + IsValid, and `first_on_screen`
+    -- runs it over the WHOLE cached pool on every call, several times per tick, for pools like
+    -- CFUIMultiLineTextBox that hold hundreds of entries. Hardening the reader is what made the
+    -- reader slow; the verdict simply cannot change within one game-thread tick, so caching it
+    -- costs nothing in correctness and takes the walk back to roughly its old price.
+    local memo = valid_memo[o]
+    if memo ~= nil then return memo end
     -- BEFORE IsValid, never after: IsValid is ITSELF a dereference of the object it is being
     -- asked about (UE4SS evaluates IsUnreachable() before its own object-set lookup), so this
     -- SEH-guarded memory pre-check is the only guard that can run first. See Mem.alive.
-    if not Mem.alive(o) then return false end
-    local ok, v = pcall(function() return o:IsValid() end)
-    return ok and v == true
+    local r = false
+    if Mem.alive(o) then
+        local ok, v = pcall(function() return o:IsValid() end)
+        r = ok and v == true
+    end
+    valid_memo[o] = r
+    return r
 end
 
 -- Guarded member fetch. `o.Name` is evaluated at the CALL SITE, so handing it
@@ -237,6 +261,33 @@ function Core.member(o, name)
     end
     local v
     if not pcall(function() v = o[name] end) then return nil end
+    -- VALIDATE THE RESULT, not just the owner (2026-07-26 (c)). `o[name]` on a null or dead
+    -- field does NOT return nil — UE4SS hands back an INVALID RemoteObject — so every caller
+    -- that wrote `local d = Core.member(...) ; if not d then return end` was passing a dead
+    -- handle straight to its next hop. That is a whole CLASS of the +0x10 access violation, and
+    -- `ui_directory.prop` was the only place in the codebase that already knew it.
+    --
+    -- Which check applies depends on the property TYPE, and we already paid to learn it: the
+    -- gate above stores each member's type string. UObject-family results go through Core.valid
+    -- (memory pre-check first, because IsValid would dereference); struct/array/name handles go
+    -- through Core.valid_ref (IsValid only — Core.valid would call GetAddress on them, which
+    -- UE4SS raises THROUGH pcall). That distinction is the two-tier rule, applied automatically
+    -- instead of being remembered at ~200 call sites.
+    --
+    -- FAILS OPEN, like every guard here: a non-userdata value (string/number/bool), an unknown
+    -- type, or a spent property-set budget all return the value unchanged, so nothing that reads
+    -- today stops reading. It can only reject a handle we positively know the type of AND that
+    -- fails its own type-appropriate check. Kill switch: Ctrl+G (REFLECTION_GATES), same as the
+    -- existence gate.
+    if REFLECTION_GATES and type(v) == "userdata" and set then
+        local pt = set[name]
+        if pt == "ObjectProperty" or pt == "ClassProperty" or pt == "WeakObjectProperty"
+            or pt == "SoftObjectProperty" or pt == "InterfaceProperty" then
+            if not Core.valid(v) then return nil end
+        elseif type(pt) == "string" and pt ~= "" and pt ~= "?" then
+            if not Core.valid_ref(v) then return nil end
+        end
+    end
     return v
 end
 
@@ -470,8 +521,25 @@ local SCANS_PER_TICK = 2   -- was 3: three FindAllOf in one tick was the measure
 -- NOTE: the registry loop is NOT the only caller — battle_monitor and quest_objective run
 -- their own loops and call this at their step tops (they must, or they'd inherit a spent
 -- budget). All callers are serialized on the game thread, so the shared per-tick state
--- (budget + os_memo) being reset by any of them is harmless — but don't assume "per tick"
--- means "per registry tick" here.
+-- (os_memo) being reset by any of them is harmless.
+--
+-- The BUDGET is a different matter, and the note that used to stand here called that
+-- harmless too. It is not (2026-07-26). `begin_scan_tick` has SIX call sites — this loop,
+-- battle_monitor, quest_objective (three times in its own step), and ui_directory — and each
+-- one refilled the budget outright, so "2 scans per tick" was really up to a dozen. This is
+-- the playbook's own rule violated in the substrate that enforces it: A SCAN SLOT IS NOT A
+-- RATE LIMIT. A budget apportions work BETWEEN competing callers; it does nothing to stop the
+-- callers themselves asking again, and a refill counted in CALLS is confirmed in milliseconds
+-- by a poll invoked from several loops. It matches the measurement nobody could explain:
+-- 1576 scans in 5.5 min = 31% of the game thread spent inside FindAllOf, at a nominal ceiling
+-- that should have made that arithmetic impossible.
+--
+-- So the refill is now keyed to WALL TIME, and the ceiling means what it says: SCANS_PER_TICK
+-- per REFILL_EVERY_S, however many loops ask. Nothing else changes — deferred classes still
+-- just retry, and the event lanes (watch + boost) still run first, so screen-entry latency is
+-- untouched. What goes away is only the steady-state multiplication.
+local REFILL_EVERY_S = 0.1   -- the registry poll period: one refill per tick, not per caller
+local last_refill = 0
 local service_watches   -- forward decl — assigned below the watch lane (Core.watch_for)
 
 -- WORLD-EPOCH POLL — the transition gate's only signal since 2026-07-25 (it replaced the
@@ -497,6 +565,21 @@ function Core.poll_world()
     -- begin_scan_tick left that budget permanently at zero whenever the reader was toggled off,
     -- so the gate was open exactly where it mattered most.
     prop_budget = PROP_SETS_PER_TICK
+    -- The per-tick memos are dropped HERE as well as in begin_scan_tick, for the same reason the
+    -- budget above is refilled here: THE NAV LOOP CALLS ONLY THIS FUNCTION. Miss this and the
+    -- validity memo added on 2026-07-26 becomes a bug that is strictly worse than the cost it was
+    -- meant to save — nav's cross-tick handles are the same userdata every tick, so they are
+    -- exactly what hits the memo, and their verdict would be answered from a lookup computed one
+    -- to three nav ticks earlier (the clear would depend on foreign loops: the registry at 100 ms,
+    -- which Ctrl+M stops entirely; battle_monitor at 250 ms, which returns early during a
+    -- transition; quest_objective at 300 ms, which returns early while an adapter is active).
+    -- `Mem.alive` would then be skipped for up to 300 ms on the handles most likely to be freed
+    -- in that window: enemy actors, which the engine destroys the moment they die. A cached
+    -- "valid" is not a cheap answer, it is the dangling-handle bug with extra steps.
+    -- Cost of clearing twice per registry tick: two empty tables. The sweep runs after this call,
+    -- so it still gets the full benefit of the memo.
+    os_memo = {}
+    valid_memo = {}
     local d = dir_mod()
     if not d then return end
     local ok, e = pcall(d.world_epoch)
@@ -504,8 +587,20 @@ function Core.poll_world()
 end
 
 function Core.begin_scan_tick()
-    scan_budget = SCANS_PER_TICK
+    -- Wall-clock refill (see REFILL_EVERY_S): whichever loop gets here first in a window
+    -- opens the budget, the rest of that window's callers inherit whatever is left. Never
+    -- top up mid-window — that was the bug.
+    local t = os.clock()
+    if t - last_refill >= REFILL_EVERY_S then
+        scan_budget = SCANS_PER_TICK
+        last_refill = t
+    end
+    -- The on_screen and validity memos are per-CALL correctness caches, not budgets: they must
+    -- still be dropped every time, or a caller could read a verdict computed for a previous
+    -- tick — and a validity verdict that outlives its tick is exactly the dangling-handle bug
+    -- these guards exist to prevent.
     os_memo = {}
+    valid_memo = {}
     -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
     -- thread). Kept now that the mod registers NO construction notify at all (2026-07-25): it is
     -- the reference any future callback must check itself against, so we can never again ASSUME
@@ -1064,6 +1159,16 @@ end
 -- under another state — AND RenderOpacity > ~0 (close animations fade to 0 while the
 -- visibility flags lag). Both pcall-guarded: an unreadable signal counts as live.
 function Core.pane_live(h)
+    -- The playbook makes this the mandatory liveness test for EVERY pooled-pane adapter, and
+    -- an adapter calls it with the handle it cached on entry — i.e. precisely the handle most
+    -- likely to have been freed since. Yet until 2026-07-26 it went straight to a method call
+    -- on that handle: `GetVisibility()` dereferences, the pcall below cannot catch what UE4SS
+    -- raises under the Lua boundary, and the whole point of Mem.alive is that the check has to
+    -- run BEFORE the engine touches the object. A guard the whole codebase is told to rely on
+    -- must not itself be the unguarded call. `Core.valid` fails OPEN on "cannot tell", so a
+    -- pane that merely cannot answer still reports live and nothing goes quiet; only a handle
+    -- proven dead returns false here, which is the right answer for a dead pane anyway.
+    if not Core.valid(h) then return false end
     local ok, v = pcall(function() return h:GetVisibility() end)
     if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
     local ok2, op = pcall(function() return h:GetRenderOpacity() end)
