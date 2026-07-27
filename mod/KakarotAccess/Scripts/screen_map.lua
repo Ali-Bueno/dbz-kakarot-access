@@ -43,6 +43,10 @@ local obj_read_at = nil    -- tick to fire the deferred objective re-read (nil =
 -- "Go to X?" YesNo. No stick injection, no cursor math — the selected index IS the source of
 -- truth the confirm reads (verified in-game: write index + InputConfirm travels to that point).
 local FT = OFF.mapWorld
+-- The BP class the mapWorld offsets belong to, used BOTH to look the host up and to assert it
+-- before writing selIndex. The bridge bounds the offset; only this stops a right-offset-wrong-
+-- object write, which corrupts silently and crashes later with no trace.
+local FT_HOST_CLASS = "Map_World_C"
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
@@ -348,7 +352,7 @@ end
 -- Uses the SAME pick as the validated in-game test (first transient instance), so the address
 -- we read/write is the one the confirm core actually reads.
 local function ft_host()
-    for _, o in ipairs(Core.cached_all("Map_World_C", tick)) do
+    for _, o in ipairs(Core.cached_all(FT_HOST_CLASS, tick)) do
         if Core.valid(o) then
             local fn = ""
             pcall(function() fn = o:GetFullName() end)
@@ -392,6 +396,12 @@ end
 -- index and announce the name. Confirm (A) writes the index again and calls InputConfirm() so
 -- the game opens its own "Go to X?" YesNo for the CHOSEN point — regardless of where the analog
 -- cursor sits. We re-assert the chosen index each tick so a stray hover can't retarget Confirm.
+-- The ONE place that writes the game's selection index, so the host-class assertion is stated
+-- once instead of at all four call sites below.
+local function ft_write_sel(host, idx)
+    return Mem.write_i32(host, FT.selIndex, idx, FT_HOST_CLASS)
+end
+
 local function ft_guidance(host)
     -- Building is Map.update()'s job (100 ms, and it retries until the points exist). This loop
     -- runs at 20 ms: rebuilding here whenever the list looked empty would re-walk the icon pool
@@ -408,12 +418,12 @@ local function ft_guidance(host)
     ft_kb_cmd = nil
     local function move(delta)
         ft_sel = ((ft_sel or (delta > 0 and -1 or 0)) + delta) % n
-        Mem.write_i32(host, FT.selIndex, ft_sel)
+        ft_write_sel(host, ft_sel)
         Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
     end
     local function confirm()
         if not ft_sel then return end
-        Mem.write_i32(host, FT.selIndex, ft_sel)
+        ft_write_sel(host, ft_sel)
         pcall(function() host:InputConfirm() end)
     end
     if kcmd == "next" then move(1)
@@ -423,7 +433,7 @@ local function ft_guidance(host)
     local snap = Input.read()
     if not snap then
         -- No pad: keep the chosen index pinned so the game's own confirm still targets it.
-        if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
+        if ft_sel then ft_write_sel(host, ft_sel) end
         return
     end
     local B = Input.BTN
@@ -437,7 +447,7 @@ local function ft_guidance(host)
     if pressed(B.A) then confirm() end
     ft_prevbtn = snap.buttons
     -- keep the chosen index pinned so the game's own Confirm (A) also targets it.
-    if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
+    if ft_sel then ft_write_sel(host, ft_sel) end
 end
 
 -- Area map: announce the POI the cursor is focused on (FocusTarget), each time it changes.

@@ -106,8 +106,9 @@ end
 -- "Community Level" title + level numbers), link-bonus rows, check rows, and the single
 -- detail-reward line. Reward/notice windows ("Soul Emblems Received", quest "Rewards")
 -- show these BELOW the prompt — without reading them only the title+body spoke. Each
--- pool is pcall-guarded, so Xcmn_Win00_C (which has none of these members) skips
--- harmlessly. WL_TextPlateCtn is NOT here: those rows are selectable choices, handled
+-- pool is protected by Core.array_of's existence gate (not the pcall around the loop,
+-- which cannot catch the uncatchable abort), so Xcmn_Win00_C (which has none of these
+-- members) skips harmlessly. WL_TextPlateCtn is NOT here: those rows are selectable choices, handled
 -- with selection semantics in choices() below.
 -- WL_TextCmuCtn is NOT here: its rows are the soul-emblem reward rows, read with their
 -- own name+level formatting by emblems_received(). Its old pool entry also read the row

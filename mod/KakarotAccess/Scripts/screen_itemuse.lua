@@ -36,11 +36,7 @@ local function dbg(s)
 end
 
 local function bars_of()
-    local bars
-    if not pcall(function() bars = host.WL_Start_Party_Bars end) or bars == nil then return nil end
-    local n
-    if not pcall(function() n = #bars end) or type(n) ~= "number" then return nil end
-    return bars, n
+    return Core.array_of(host, "WL_Start_Party_Bars")
 end
 
 -- The on-screen character bar = the current selection (only the picked one animates in).

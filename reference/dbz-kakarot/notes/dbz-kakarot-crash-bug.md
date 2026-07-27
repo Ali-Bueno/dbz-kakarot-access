@@ -1,5 +1,111 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-27 — FULL-CODEBASE CRASH AUDIT (multi-agent), 11 confirmed holes closed.** Not driven by
+> a crash report: a systematic sweep of all 71 Lua files plus the four native bridges against the
+> ten crash mechanisms this ledger has accumulated. 48 candidates found, each then handed to an
+> independent verifier whose default was to REFUTE it; **37 died** (behind debug flags that ship
+> off, or genuinely guarded upstream) and 11 survived. **SOURCE-ONLY, UNVERIFIED IN GAME**; needs a
+> full restart (`main.lua`/`app.lua` + all four rebuilt DLLs). The method is worth repeating: the
+> adversarial second pass is what made the result usable — a raw finder pass would have been 77%
+> noise.
+>
+> **THE FIVE GENERALIZABLE RULES (the reason this entry exists):**
+>
+> 1. **Two shared guards against the same hazard must be equally strong, or call sites silently
+>    migrate to the weak one.** `Core.member` refused both an undeclared member AND a wrong-typed
+>    one; `Core.array_of` only refused the wrong TYPE — when the class was known and the member did
+>    not exist at all, `declared` was nil and it fell through to the raw fetch. Live every tick:
+>    `screen_dialog` probes `{WL_TextPlateCtn, UIChoice_List}` against the on-screen window and by
+>    design Win01 declares one and Win02 the other, so **every ordinary dialogue window fetched a
+>    non-existent member on every tick.** Nobody noticed because the call site *looked* guarded.
+>    When you add a gate to one helper, audit its siblings the same day.
+> 2. **A field battle or cutscene is NOT a `Transition`.** It closes the world gate WITHOUT a
+>    `LoadMap`, so the world-epoch hook that flushes actor caches never fires. Three caches lived in
+>    that gap (`enemy_cache`, `navi_icons`, `chain_wait.actor`). The 07-26 fix ("expired +
+>    unrefreshable ⇒ drop") only covered the QUIET path, so a fight shorter than `RESCAN_CLASSES`
+>    (100 ticks ≈ 10 s) left the cache neither expired nor refreshed and the first post-battle
+>    `enemy_alert` served handles combat had just destroyed — which is precisely the 07-26 black box
+>    (last op `nav.step`, AV reading 0x10). **Every actor cache must drop on BOTH edges, not just on
+>    transition.** Drop to `nil`, never `{}`: an empty table is served as "no enemies" instead of
+>    forcing a real rescan.
+> 3. **A grace period on a raw handle is the same defect with a timer on it.** `target.actor`
+>    survived the gate for `WORLD_DROP_TICKS` (~5 s), so any battle shorter than that left a dead
+>    pointer. Resolved by separating pointer from metadata: the handle is released on the falling
+>    edge, the record (`key`, `grp`, `label`, `manual`) survives, and `remember_pick()` re-acquires
+>    by category+key — which is what the battle-interruption-resume design always actually used.
+>    **The metadata is what survives a world change; the pointer never does.** Note the companion
+>    change this forced: `target.actor == nil` had to be distinguished from an *invalid* handle,
+>    because "we released it" and "the actor died" deserve opposite responses — conflating them
+>    marked interrupted collectibles as visited and silently dropped manual picks.
+> 4. **UE4SS runs keybind callbacks on its OWN keyboard thread (`UE4SS-UpdateThread`, ~200 Hz), not
+>    the game thread.** F1 (`App.repeat_current`) reached `GuideWatch.reannounce()` →
+>    `Core.cached_all` — a pooled-widget walk, and a ~65 ms `FindAllOf` at boot — concurrent with
+>    `step()` on the SAME `lua_State`, mutating `os_memo` / `valid_memo` / `prop_budget` /
+>    `all_cache`. Same allocator+GC race as the construction-notify episode, reached by a different
+>    door. It was the ONLY unwrapped handler out of ~19 (swept and confirmed). **This is a
+>    mechanically checkable invariant — every keybind that touches an engine object wraps in
+>    `ExecuteInGameThread` — and it should be linted, not remembered.**
+> 5. **Diagnostics drift back to unsafe shapes after every sweep.** `discover.lua` (the F7 census)
+>    still had **nine** bare `:IsValid()` after the 07-25 conversion — including a private
+>    `o ~= nil and o:IsValid()` helper gating the `Map_World_C` scan that feeds the memory-WRITE
+>    path. `Nav.dump_levels` was the only `enemies_list()` consumer with neither per-entry
+>    `Core.valid` nor a transition/world gate, while its sibling `Nav.dump` had both — and it ships
+>    bound to Ctrl+Shift+F5 with no debug flag. Tools written *after* a sweep never get swept.
+>
+> **Recurring false belief, now killed in the comments too:** *"the surrounding `pcall` protects
+> this fetch."* It does not. An undeclared-member fetch is an uncatchable C++ throw (0xe06d7363),
+> and in a chain `host.A.B` the inner hop is evaluated at the CALL SITE, outside the pcall. Two
+> comments asserting the opposite (`screen_dialog`, `screen_training`'s header claiming all its
+> reads were guarded) were corrected rather than deleted — a wrong comment is worse than none.
+>
+> **NATIVE BRIDGES — 8 items, all 8 confirmed, none refuted.** The two that mattered:
+> `audio_bridge`'s RIFF bounds check (`off + 8 + len > size`) was 32-bit unsigned and **wrapped**,
+> so a `len` near `0xFFFFFFFF` passed the guard into a ~4 GB `memcpy` and the advance could loop
+> forever — reachable with any truncated WAV in `Scripts/sounds/`, which the file's own header
+> invites users to add. And `mem_bridge`'s `WRITE_FN` validated nothing but `p != 0`: an in-process
+> arbitrary-write primitive. Bounded now by `MAX_WRITE_OFFSET`, **derived** (largest real offset in
+> `native_offsets.lua` is `skillTree.cursorRow = 0x15FC` → next power of two), not guessed.
+> **But an offset bound does not stop a right-offset-WRONG-OBJECT write**, which corrupts silently
+> and crashes later with no trace — so `mem.lua`'s `writer()` gained an optional `expect_class`,
+> checked via a bounded `GetSuperStruct()` walk so a legitimate SUBCLASS is not refused, failing
+> OPEN on an unreadable chain and logging once per `(expected, actual)` pair. The class name is the
+> same string the caller already looks the host up by (`FT_HOST_CLASS`), so lookup and assertion
+> cannot drift.
+> Also: `l_mark_open` could longjmp on `LUA_ERRMEM` past its own cleanup, leaving handle+mapping
+> leaked with `g_mark` NULL and the "already open" guard blind to the retry — in the crash-trail
+> recorder, the one component whose whole job is to survive a crash. And `input_bridge`'s `g_block`
+> was a latch with **no lease**, unlike the keyboard's `g_kbUntil`: a Lua error unwinding with
+> `Input.block(true)` set left the gamepad dead until the game was killed. Now deadline-based, so
+> it self-heals.
+>
+> **Three further native findings, outside the audited mechanism set — two fixed, one left open by
+> decision:**
+> - `audio_bridge`'s `do_init()` released nothing on any of its nine failure returns, so a retry
+>   after a failed init stacked a second engine + mastering voice; `load_wav` also overwrote
+>   `out->pcm` without freeing. Fixed via `release_all()` + `init_fail()`. **Reachability was
+>   narrower than first reported and that is worth recording:** `Audio.init()` is called once from
+>   `main.lua`, which is explicitly outside the hot-reload set, so **Ctrl+Shift+R does NOT re-run
+>   it** — the only live path is a UE4SS-level mod restart *after an init that already failed*.
+>   Real, but nowhere near "leaks on every reload".
+> - `g_last` was written by `hookGetState` on the game's input-pump thread and copied by `l_poll` on
+>   the game thread with no synchronisation. Now a **seqlock** (odd = write in flight), chosen
+>   because the pump path runs inside the game's own input hook and must stay non-blocking — two
+>   barriered increments on the writer, a bounded retry on the reader, falling through to a direct
+>   `g_realGetState` read if the snapshot is contended, so a busy tick returns the true pad rather
+>   than nothing.
+> - **`prism_bridge` still never calls the `p_shutdown`/`p_backend_free` it resolves — deliberately
+>   left open.** `DllMain`/`DLL_PROCESS_DETACH` is ruled out (calling into another DLL under the
+>   loader lock is exactly the class of bug this audit exists to remove), and there is no other
+>   place to put it: the mod registers no unload callback, and `App.stop()` is the RELOAD path,
+>   where PRISM must stay alive. Closing it needs a genuine process-exit hook in `main.lua` that
+>   does not exist yet, plus `Speech.shutdown()` forwarding to a new `prism_funcs.shutdown`
+>   (`p_stop` → `p_backend_free` → `p_shutdown`, clearing `g_ready`).
+> - Same reasoning killed an `audio` shutdown path: `Audio.stop()` means "silence cues" and is
+>   called ~8 times per session from `nav_tracker`, and audio is designed to survive a reload, so
+>   tearing XAudio2 down there would leave the mod permanently mute after Ctrl+Shift+R. **A shutdown
+>   API nobody calls is worse than a leak the OS reclaims at process exit** — the fix stopped at the
+>   leak on purpose.
+
 > **2026-07-26 (c) — SECOND CRASH, SECOND TIME THE BLACK BOX NAMED THE SUBSYSTEM.** Player exited
 > a combat into a story dialogue. Last trail entry: `nav.step`. Error:
 > `EXCEPTION_ACCESS_VIOLATION reading address 0x00000010` = `GetClassPrivate()` on a dead handle.

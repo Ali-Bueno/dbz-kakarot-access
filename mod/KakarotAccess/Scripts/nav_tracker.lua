@@ -1444,12 +1444,41 @@ local function step()
         if not gated_prev then
             gated_prev = true
             Audio.stop()
+            -- DROP THE WORLD-ACTOR CACHES ON THE FALLING EDGE. A field battle or a cutscene
+            -- is NOT a Transition: it closes this gate with no LoadMap, so the map-switch
+            -- flush above never runs — yet combat destroys exactly the actors these lists
+            -- hold. After a SHORT fight (under RESCAN_CLASSES ticks) neither list has expired
+            -- and neither gets refreshed, so the first post-battle tick would hand
+            -- enemy_alert / best_candidate handles to actors the fight has already freed.
+            -- Re-validating per use is NOT a defence: an address the engine has recycled
+            -- passes both Mem.alive and IsValid (mem.lua says so in as many words).
+            -- nil, NOT {}: an empty list would be SERVED as "nothing there" — nil is what
+            -- forces a real FindAllOf on the first call once the world is back.
+            enemy_cache, enemy_next = nil, 0
+            navi_icons, navi_next = nil, 0
+            -- The tracked actor's handle goes with them: holding a raw world-actor pointer
+            -- across a CLOSED world gate is the same defect, and WORLD_DROP_TICKS below is
+            -- only that defect with a timer on it — a battle shorter than the timer used to
+            -- hand a freed AT_Character straight back to actor_pos on the first tick after
+            -- the fight. ONLY the handle is released: the rest of the record (key, grp,
+            -- label, manual, stateful) is plain Lua data, so WORLD_DROP_TICKS,
+            -- remember_pick() and the resume path behave exactly as before. The resume
+            -- design never needed the live pointer to survive the gate, only the metadata
+            -- to re-acquire the pick by category+key once the world is back.
+            if target then target.actor = nil end
         end
         route, route_idx = nil, 0
         world_gone = world_gone + 1
-        if world_gone >= WORLD_DROP_TICKS and target then
+        -- No `and target` guard here: in a chained sweep `target` is nil BY CONSTRUCTION
+        -- (the arrival path arms chain_wait and calls drop_target in the same breath), so
+        -- the old guard could never fire for the one case that matters and chain_wait kept
+        -- a handle to the reached actor across the whole battle — dereferenced by
+        -- chain_step the moment the gate reopened. drop_target/remember_pick are no-ops
+        -- when there is no target, so dropping the condition costs nothing.
+        if world_gone >= WORLD_DROP_TICKS then
             remember_pick()   -- a battle stole it; re-acquire when the world is back
             drop_target()
+            chain_wait = nil  -- the sweep's reached actor may have died with the fight
         end
         return
     end
@@ -1581,7 +1610,19 @@ local function step()
     local sweeping = target.manual and chainable(target.grp)
 
     if not Core.valid(target.actor) then
-        if sweeping then chain_over() else drop_target() end
+        -- A nil handle is NOT the same event as a dead one. nil means the world gate
+        -- released the pointer while it was closed (see the falling edge above), so all we
+        -- know is that the pointer stopped being trustworthy — not that the actor is gone.
+        -- Treating that as "collected / despawned" would mark a swept item visited and skip
+        -- it for the rest of the sweep, and would drop a hand-picked target without arming
+        -- the resume. So: stash the pick as plain data and drop, exactly like the
+        -- WORLD_DROP_TICKS path — the resume scan re-acquires it by category+key, and
+        -- chain_seen is left alone. (Only reachable when the fight was shorter than
+        -- WORLD_DROP_TICKS; past that the gate has already dropped the target itself.)
+        if target.actor == nil then
+            remember_pick()
+            drop_target()
+        elseif sweeping then chain_over() else drop_target() end
         return
     end
     if sweeping then
@@ -3033,6 +3074,21 @@ function Nav.dump_levels()
         pcall(function() f:setvbuf("no") end)   -- see Nav.dump: survive a mid-dump abort
         f:write(string.format("\n== level dump v2 @ %s ==\n", os.date("%H:%M:%S")))
         if not Mem.is_loaded() then f:write("mem_bridge NOT loaded\n") f:close() return end
+        -- SAME GATE AS Nav.dump. Mid-transition, with a menu up, or with the world hidden
+        -- (battle, cutscene), every actor read below could abort uncatchably — and the enemy
+        -- cache this dump iterates is precisely the list a battle has just invalidated: it is
+        -- only refreshed every RESCAN_CLASSES ticks, so pressing the key within ~10 s of a
+        -- fight serves handles to destroyed AT_Characters. This is bound to a shipping keybind
+        -- with no debug flag, and a diagnostic that can kill the process destroys the very
+        -- evidence it exists to collect.
+        local trans, muted = Transition.active(), ui_muted()
+        if trans or muted or not world_alive() then
+            f:write("GATED (" .. (trans and "transition" or muted and "ui" or "world")
+                .. ") — actor sections skipped\n")
+            f:close()
+            Speech.say("level dump written (gated)", true)
+            return
+        end
         -- vtable[LEVEL_SLOT] on the AttributeComponent = the game's level getter (Ghidra
         -- 2026-07-17, manual_140f8aba0.c: level = attrib->vtable[0x3E8]()). Statically the
         -- concrete vtable was unreachable (RTTI stripped); at RUNTIME it's two pointer
@@ -3125,9 +3181,14 @@ function Nav.dump_levels()
             return hops
         end
         local function dump_char(tag, c)
+            -- The handle may be minutes old (the enemy cache is sparse) — check it before
+            -- the first hop, and fetch every member through Core.member: a naked
+            -- `c.AttributeComponent` on a class that does not declare it is the uncatchable
+            -- abort no pcall can catch. Same shape as enemy_level.
+            if not Core.valid(c) then f:write(tag .. ": dead handle\n") return end
             local attrib
             pcall(function()
-                local a = c.AttributeComponent
+                local a = Core.member(c, "AttributeComponent")
                 if Core.valid(a) then attrib = a end
             end)
             if not attrib then f:write(tag .. ": no AttributeComponent\n") return end
@@ -3162,7 +3223,7 @@ function Nav.dump_levels()
             f:write("  attrib tail i32: " .. table.concat(tail, " ") .. "\n")
             local si
             pcall(function()
-                local s = attrib.StatusInstance
+                local s = Core.member(attrib, "StatusInstance")
                 if Core.valid(s) then si = s end
             end)
             if not si then f:write("  no StatusInstance\n") return end
@@ -3190,13 +3251,18 @@ function Nav.dump_levels()
         local oke, erre = pcall(function()
             for _, e in ipairs(enemies_list()) do
                 if n >= 6 then break end
-                n = n + 1
-                local d = "?"
-                local x, y, z = actor_pos(e.actor)
-                if x and px then
-                    d = string.format("%.0fm", math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) / M)
+                -- Per-entry validity, like every other consumer of this list (enemy_alert,
+                -- Nav.dump): the cache is only rebuilt every RESCAN_CLASSES ticks, so an
+                -- entry can name an actor the last fight destroyed.
+                if Core.valid(e.actor) then
+                    n = n + 1
+                    local d = "?"
+                    local x, y, z = actor_pos(e.actor)
+                    if x and px then
+                        d = string.format("%.0fm", math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2) / M)
+                    end
+                    dump_char(string.format("ENEMY %d (%s, %s)", n, e.name or I18n.t(e.noun), d), e.actor)
                 end
-                dump_char(string.format("ENEMY %d (%s, %s)", n, e.name or I18n.t(e.noun), d), e.actor)
             end
         end)
         if not oke then f:write("enemy dump ERROR: " .. tostring(erre) .. "\n") end

@@ -41,12 +41,36 @@
 
 static HMODULE g_self = NULL;
 
+/* SEH filter for every guarded dereference in this module.
+ *
+ * It still swallows EVERYTHING — that immunity is the whole point of the bridge — but a
+ * STATUS_GUARD_PAGE_VIOLATION must not be swallowed SILENTLY. The kernel CLEARS the page's
+ * PAGE_GUARD flag when it raises one, so probing addresses we do not own (Mem.at_ptr /
+ * Mem.readable walk arbitrary pointers and sweep up to 64 KB) can strip the tripwire off
+ * another thread's stack guard page — turning a future stack overflow into silent heap
+ * corruption. Re-arm the page so the probe stays a pure no-op.
+ * ExceptionInformation[1] is the touched address on both AV and guard-page records. */
+static int fault_filter(EXCEPTION_POINTERS *ep) {
+    if (ep->ExceptionRecord->ExceptionCode == STATUS_GUARD_PAGE_VIOLATION &&
+        ep->ExceptionRecord->NumberParameters >= 2) {
+        void *addr = (void *)ep->ExceptionRecord->ExceptionInformation[1];
+        MEMORY_BASIC_INFORMATION mbi;
+        DWORD old;
+        if (VirtualQuery(addr, &mbi, sizeof(mbi)) == sizeof(mbi) &&
+            mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD)) {
+            /* VirtualProtect re-arms the whole page containing `addr`. */
+            VirtualProtect(addr, 1, mbi.Protect | PAGE_GUARD, &old);
+        }
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 /* Copy n bytes from src, guarded by SEH. Returns 1 on success, 0 on access fault. */
 static int safe_copy(void *dst, const void *src, size_t n) {
     __try {
         memcpy(dst, src, n);
         return 1;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (fault_filter(GetExceptionInformation())) {
         return 0;
     }
 }
@@ -59,7 +83,7 @@ static int safe_store(void *dst, const void *src, size_t n) {
     __try {
         memcpy(dst, src, n);
         return 1;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    } __except (fault_filter(GetExceptionInformation())) {
         return 0;
     }
 }
@@ -93,15 +117,29 @@ READ_FN(l_read_ptr, uintptr_t, lua_pushinteger(L, (lua_Integer)v))
 READ_FN(l_read_float,  float,  lua_pushnumber(L, (lua_Number)v))
 READ_FN(l_read_double, double, lua_pushnumber(L, (lua_Number)v))
 
+/* Largest byte offset a WRITE may carry. The SEH guard only turns an UNMAPPED destination
+ * into a no-op; a valid-but-wrong address corrupts live game memory silently and crashes
+ * later somewhere unrelated, so the offset itself has to be bounded here — this is the only
+ * arbitrary-write primitive the mod exposes to Lua. DERIVED, not invented: the largest
+ * offset in the mod's own offset table (Scripts/native_offsets.lua) is
+ * skillTree.cursorRow = 0x15FC, so the next power of two above it accepts every offset the
+ * mod can legitimately produce while refusing anything an order of magnitude out (a stale
+ * offset after a game patch, a Lua arithmetic slip). READS are deliberately NOT bounded:
+ * a read of a wrong address is already a harmless nil, and the pointer walkers need it. */
+#define MAX_WRITE_OFFSET 0x2000
+
 /* write_TYPE(addr, off, value) -> bool. Coerces the Lua value to CTYPE and stores it,
- * SEH-guarded. Returns false on a faulting address (no-op). */
+ * SEH-guarded. Returns false on a faulting address, or on an offset outside
+ * MAX_WRITE_OFFSET (no-op in both cases). */
 #define WRITE_FN(NAME, CTYPE, GET)                                   \
     static int NAME(lua_State *L) {                                  \
         uintptr_t base = (uintptr_t)(lua_Integer)luaL_checkinteger(L, 1); \
         lua_Integer off = luaL_checkinteger(L, 2);                   \
         CTYPE v = (CTYPE)GET(L, 3);                                  \
         uintptr_t p = base + (uintptr_t)off;                         \
-        int ok = (p != 0) && safe_store((void *)p, &v, sizeof(v));   \
+        int ok = (p != 0) && off >= 0 &&                             \
+                 off <= (lua_Integer)(MAX_WRITE_OFFSET - sizeof(v)) && \
+                 safe_store((void *)p, &v, sizeof(v));               \
         lua_pushboolean(L, ok);                                      \
         return 1;                                                    \
     }
@@ -122,14 +160,20 @@ static int l_read_bytes(lua_State *L) {
     lua_Integer off = luaL_optinteger(L, 2, 0);
     lua_Integer n = luaL_checkinteger(L, 3);
     uintptr_t p = base + (uintptr_t)off;
+    luaL_Buffer b;
+    char *buf;
     if (n <= 0 || n > 65536 || p == 0) { lua_pushnil(L); return 1; }
-    char *buf = (char *)malloc((size_t)n);
-    if (!buf) { lua_pushnil(L); return 1; }
+    /* Lua's own buffer instead of malloc/free: lua_pushlstring can raise LUA_ERRMEM, and a
+     * Lua error longjmps straight past any free() after it — leaking up to 64 KB each time.
+     * The buffer's storage belongs to the Lua stack, so an error releases it for us. */
+    buf = luaL_buffinitsize(L, &b, (size_t)n);
     if (!safe_copy(buf, (const void *)p, (size_t)n)) {
-        free(buf); lua_pushnil(L); return 1;
+        luaL_pushresultsize(&b, 0);   /* close the buffer, then discard it */
+        lua_pop(L, 1);
+        lua_pushnil(L);
+        return 1;
     }
-    lua_pushlstring(L, buf, (size_t)n);
-    free(buf);
+    luaL_pushresultsize(&b, (size_t)n);
     return 1;
 }
 
@@ -224,6 +268,37 @@ static HANDLE     g_mark_map  = NULL;
 static MarkHeader *g_mark     = NULL;
 static MarkSlot   *g_slots    = NULL;
 
+/* Wipe the ring and stamp this session's header. Guarded like every other touch of the
+ * section (file-backed -> EXCEPTION_IN_PAGE_ERROR). Returns 1 on success. */
+static int mark_reset(MarkHeader *h) {
+    __try {
+        memset(h, 0, MARK_BYTES);
+        h->magic = MARK_MAGIC; h->version = MARK_VERSION;
+        h->slots = MARK_SLOTS; h->text_size = MARK_TEXT; h->seq = 0;
+        return 1;
+    } __except (fault_filter(GetExceptionInformation())) {
+        return 0;
+    }
+}
+
+/* Write one trail entry, guarded for the same reason as mark_reset. Returns 1 on success. */
+static int mark_write(MarkHeader *h, MarkSlot *slots, const char *t, size_t len) {
+    __try {
+        uint64_t n = h->seq + 1;
+        MarkSlot *sl = &slots[(n - 1) % MARK_SLOTS];
+        /* Text first, then the slot's seq, then the header: a torn write during a crash then
+         * leaves a slot that looks unwritten rather than one with mismatched text. */
+        memcpy(sl->text, t, len);
+        sl->text[len] = '\0';
+        sl->tick_ms = GetTickCount64();
+        sl->seq = n;
+        h->seq = n;
+        return 1;
+    } __except (fault_filter(GetExceptionInformation())) {
+        return 0;
+    }
+}
+
 /* mark_open(path) -> table|nil, err
  * Opens/creates the ring, RETURNS THE PREVIOUS SESSION'S TRAIL (oldest -> newest) and then
  * resets it for this session. Reading before resetting is the whole point: if the last run
@@ -254,28 +329,38 @@ static int l_mark_open(lua_State *L) {
 
     MarkHeader *h = (MarkHeader *)view;
     MarkSlot   *s = (MarkSlot *)((char *)view + sizeof(MarkHeader));
+    MarkHeader hdr;
+    int haveHdr;
+
+    /* Take ownership of the mapping BEFORE anything that can raise. Every Lua allocation
+     * below (lua_newtable, lua_pushfstring) can raise LUA_ERRMEM, and a Lua error longjmps
+     * out of this function past any local cleanup: with the globals already published such
+     * an unwind leaves the module CONSISTENT — the "already open" guard above catches the
+     * retry — instead of leaking the file, the mapping and the view with g_mark still NULL. */
+    g_mark = h; g_slots = s;
 
     /* Recover the previous trail before touching anything. A mismatched magic means a fresh
-     * or foreign file: no trail, not an error. */
+     * or foreign file: no trail, not an error. Every access to the section goes through
+     * safe_copy: it is FILE-backed, so a bad sector or a lost path raises
+     * EXCEPTION_IN_PAGE_ERROR — and the crash black box must never be what crashes. */
+    haveHdr = safe_copy(&hdr, h, sizeof(hdr));
     lua_newtable(L);
     int n = 0;
-    if (h->magic == MARK_MAGIC && h->version == MARK_VERSION &&
-        h->slots == MARK_SLOTS && h->text_size == MARK_TEXT) {
-        uint64_t total = h->seq;
+    if (haveHdr && hdr.magic == MARK_MAGIC && hdr.version == MARK_VERSION &&
+        hdr.slots == MARK_SLOTS && hdr.text_size == MARK_TEXT) {
+        uint64_t total = hdr.seq;
         uint64_t first = (total > MARK_SLOTS) ? (total - MARK_SLOTS) : 0;
         for (uint64_t i = first; i < total; i++) {
-            MarkSlot *sl = &s[i % MARK_SLOTS];
-            if (sl->seq == 0) continue;
-            sl->text[MARK_TEXT - 1] = '\0';
-            lua_pushfstring(L, "%d\t%s", (int)(sl->tick_ms & 0x7fffffff), sl->text);
+            MarkSlot sl;
+            if (!safe_copy(&sl, &s[i % MARK_SLOTS], sizeof(sl))) break;
+            if (sl.seq == 0) continue;
+            sl.text[MARK_TEXT - 1] = '\0';
+            lua_pushfstring(L, "%d\t%s", (int)(sl.tick_ms & 0x7fffffff), sl.text);
             lua_rawseti(L, -2, ++n);
         }
     }
 
-    memset(view, 0, MARK_BYTES);
-    h->magic = MARK_MAGIC; h->version = MARK_VERSION;
-    h->slots = MARK_SLOTS; h->text_size = MARK_TEXT; h->seq = 0;
-    g_mark = h; g_slots = s;
+    mark_reset(h);
     return 1;
 }
 
@@ -286,16 +371,7 @@ static int l_mark(lua_State *L) {
     const char *t = luaL_checklstring(L, 1, &len);
     if (len > MARK_TEXT - 1) len = MARK_TEXT - 1;
 
-    uint64_t n = g_mark->seq + 1;
-    MarkSlot *sl = &g_slots[(n - 1) % MARK_SLOTS];
-    /* Text first, then the slot's seq, then the header: a torn write during a crash then
-     * leaves a slot that looks unwritten rather than one with mismatched text. */
-    memcpy(sl->text, t, len);
-    sl->text[len] = '\0';
-    sl->tick_ms = GetTickCount64();
-    sl->seq = n;
-    g_mark->seq = n;
-    lua_pushboolean(L, 1);
+    lua_pushboolean(L, mark_write(g_mark, g_slots, t, len));
     return 1;
 }
 

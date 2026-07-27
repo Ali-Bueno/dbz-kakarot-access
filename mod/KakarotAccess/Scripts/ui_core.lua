@@ -416,7 +416,32 @@ end
 -- open like every other guard here: an unknown class or an unenumerated member proceeds as before.
 function Core.array_of(owner, name)
     if not Core.valid(owner) then return nil, nil end
-    local set = prop_set(owner)
+    local set, key = prop_set(owner)
+    -- EXISTENCE gate, the same one Core.member applies (added 2026-07-27; it was missing here).
+    -- Fetching a member the owner's class does not declare is one of this game's UNCATCHABLE
+    -- aborts: UE4SS raises it below the Lua boundary, so the `pcall` around `owner[name]` below
+    -- does NOT catch it and the process dies. The type check that follows only rejects a member
+    -- declared with the WRONG type, so a member that does not exist AT ALL used to fall straight
+    -- through to that raw fetch — live every tick, not theoretical: screen_dialog probes
+    -- {WL_TextPlateCtn, UIChoice_List} against whatever dialogue window is on screen and by design
+    -- each window class declares only one of the two.
+    -- FAILS OPEN when the class is unknown (`set` nil: gates off, per-tick budget spent, or the
+    -- enumeration yielded nothing) — a guard that fails closed on this shared path takes out every
+    -- screen at once with nothing in the log. Blocks only on positive evidence of absence.
+    -- custom_props is consulted because `RegisterCustomProperty` members live in UE4SS's own map
+    -- and are INVISIBLE to ForEachProperty, so they must never be rejected here.
+    if set and not set[name] and not custom_props[name] then
+        local mark = tostring(key) .. ":arr:" .. tostring(name)
+        if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
+            blocked_seen[mark] = true
+            blocked_logged = blocked_logged + 1
+            local cn = "?"
+            pcall(function() cn = owner:GetClass():GetFName():ToString() end)
+            print(string.format("[KakarotAccess] array gate: %s has no '%s' (not read)\n",
+                cn, tostring(name)))
+        end
+        return nil, nil
+    end
     local declared = set and set[name]
     if declared and declared ~= "ArrayProperty" and not custom_props[name] then
         local mark = "arr:" .. tostring(name) .. ":" .. declared

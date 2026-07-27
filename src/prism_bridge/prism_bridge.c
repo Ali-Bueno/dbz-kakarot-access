@@ -173,19 +173,27 @@ static HMODULE load_from_own_dir(const char* dllName) {
 __declspec(dllexport) int luaopen_prism_bridge(lua_State *L) {
     char modDir[MAX_PATH];
     DWORD dirLen;
+    BOOL dirSet = FALSE;
     int all = 1;
     PrismConfig cfg;
     PrismError err;
 
-    /* Make our own directory the DLL search dir so prism.dll's own deps (tolk.dll) resolve. */
+    /* Make our own directory the DLL search dir so prism.dll's own deps (tolk.dll) resolve.
+     * SetDllDirectory is PROCESS-GLOBAL and also drops the current directory from the search
+     * order, so it is RESTORED (NULL = default order) as soon as prism.dll is loaded: leaving
+     * it set would silently change every later LoadLibrary the game itself or another UE4SS
+     * plugin performs. */
     dirLen = GetModuleFileNameA(g_self, modDir, MAX_PATH);
     if (dirLen > 0 && dirLen < MAX_PATH) {
         char* slash = strrchr(modDir, '\\');
         if (slash) { *slash = '\0'; }
-        SetDllDirectoryA(modDir);
+        dirSet = SetDllDirectoryA(modDir);
     }
 
     g_prism = load_from_own_dir("prism.dll");
+    /* Before the error path below: luaL_error never returns, so restoring after it would
+     * leave the process-global setting behind whenever prism.dll is missing. */
+    if (dirSet) { SetDllDirectoryA(NULL); }
     if (!g_prism) {
         luaL_error(L, "prism_bridge: failed to load prism.dll from mod dir (error %lu)", GetLastError());
         return 0;

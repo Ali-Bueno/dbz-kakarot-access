@@ -16,7 +16,9 @@
 -- Txt_Cap01 current character, Txt_Task / Txt_Cond / Txt_Recommend the locked-skill
 -- panel (visible-text dump 2026-07-06), Start_Quest_Bar00_00.Txt_Progress acquisition
 -- cost ("D Medals: N"), and the list title Xlist_List05_Lay7.Txt_Title.
--- All reads are valid()/pcall-guarded (a bad deref on this game is an uncatchable abort).
+-- The list title, cost line and skill-list handle go through Core.member (a bad deref on this
+-- game is an uncatchable abort that pcall alone cannot stop). Other reads here (field_text,
+-- the locked-skill panel loop) are still plain pcall'd host[name] fetches, not fully guarded.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -50,9 +52,7 @@ end
 -- The list title ("Super Attack List"), read live from the game so it follows the
 -- game's language. nil while the title widget has no text (menu not really up yet).
 local function list_title()
-    local t
-    pcall(function() t = Core.read_text(host.Xlist_List05_Lay7.Txt_Title) end)
-    return t
+    return Core.read_text(Core.member(Core.member(host, "Xlist_List05_Lay7"), "Txt_Title"))
 end
 
 -- The screen name = the live list title, falling back to the localized "Super Attacks".
@@ -62,9 +62,7 @@ end
 
 -- Acquisition cost line ("D Medals: N"), nested in the first quest bar. Guarded.
 local function cost_text()
-    local t
-    pcall(function() t = Core.read_text(host.Start_Quest_Bar00_00.Txt_Progress) end)
-    return t
+    return Core.read_text(Core.member(Core.member(host, "Start_Quest_Bar00_00"), "Txt_Progress"))
 end
 
 -- Rich text -> speech (drop <span>, resolve <inputicon>); nil if empty.
@@ -72,9 +70,7 @@ local function clean(t) return t and A.markup_to_speech(t) or nil end
 
 -- The skill list widget (guarded property access).
 local function skill_list()
-    local l
-    pcall(function() l = host.Xlist_List05_Lay7 end)
-    return l
+    return Core.member(host, "Xlist_List05_Lay7")
 end
 
 -- The locked-skill panel texts (Task / How to acquire / recommended level), in

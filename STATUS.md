@@ -2,7 +2,32 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-26 — why crashes persisted on v0.1.2 while the dev `UE4SS.log` stayed
+**Last updated:** 2026-07-27 — **full-codebase crash audit (multi-agent), 11 holes closed, SOURCE-ONLY
+and UNVERIFIED IN GAME.** Not crash-driven: a systematic sweep of all 71 Lua files + the 4 native
+bridges against the ten accumulated crash mechanisms. 48 candidates → each adversarially verified by
+an independent refuter → **37 died** (debug-flagged off, or genuinely guarded upstream), 11 real.
+Five root causes, all now documented in the [crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md):
+(1) **asymmetric guards** — `Core.array_of` refused a wrong-TYPED member but not an UNDECLARED one,
+so every ordinary dialogue window fetched a non-existent member every tick; gate now identical to
+`Core.member`'s, fail-open, `custom_props`-aware. (2) **a field battle is not a `Transition`** — it
+closes the world gate without `LoadMap`, so `enemy_cache`/`navi_icons`/`chain_wait` survived it; a
+fight shorter than ~10 s served just-destroyed actors, which IS the 07-26 black box. Dropped on the
+gate's falling edge too, to `nil` not `{}`. (3) `target.actor`'s 5 s grace was the same defect with a
+timer — handle released at the gate, metadata kept (which is all `remember_pick()` ever needed).
+(4) **UE4SS runs keybinds on its own thread**: F1 walked pooled widgets on the poll loop's
+`lua_State`; wrapped (only 1 of ~19 handlers was wrong — swept and confirmed). (5) diagnostics drift:
+9 bare `IsValid()` left in `discover.lua` after the 07-25 sweep, and `Nav.dump_levels` shipped with
+neither validation nor gate while its sibling `Nav.dump` had both. Plus raw two-hop `host.A.B` chains
+migrated to `Core.member` in `screen_choice`/`screen_training`/`screen_itemuse` — the inner hop is
+evaluated at the CALL SITE, outside the `pcall` two comments claimed was protecting it (corrected).
+**Native: 8 findings, all 8 confirmed, none refuted** — `audio_bridge`'s RIFF bounds check overflowed
+in 32-bit (4 GB `memcpy` from any truncated WAV), `mem_bridge`'s `WRITE_FN` was an unvalidated
+arbitrary-write primitive (now bounded by a DERIVED `MAX_WRITE_OFFSET`, plus an `expect_class`
+assertion in `mem.lua` since a bound stops a wild offset but not a wrong-object write),
+`l_mark_open` could longjmp past its own cleanup (in the crash recorder), and `input_bridge`'s pad
+block was a latch with no lease (a Lua unwind left the gamepad dead until the game was killed).
+All 4 DLLs rebuilt clean; `tools/lint-lua.ps1` exits 0 over 71 files. **Needs a full RESTART.**
+Previous entry: 2026-07-26 — why crashes persisted on v0.1.2 while the dev `UE4SS.log` stayed
 clean: **a clean log was read as "no crashes", but the log only records what the mod PRINTED** — the
 dev machine had been crashing all along (647 s, 1018 s, 1792 s, 7912 s runtimes, one mid-COMBAT on
 07-25) and the evidence sat unread in 29 crash dumps. Cause: every guard in the crash ledger had
@@ -95,6 +120,7 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Soul Emblems grid / Community | done | 2026-07-17: CHAR_TOKENS `Mrs`/`Mst` were SWAPPED (user: Roshi spoke as "Mr. Satan" on board AND menu) — pak scan + romaji naming (Tpp=Tao Pai Pai): `Mrs`=Muten **R**o**s**hi, `Mst`=**M**i**s**u**t**ā Satan; `Ev_Msn` is a third unidentified token, left unmapped so it speaks raw. — `screen_community.lua`. 2026-07-15 saga, ALL VERIFIED in-game by night (entry on the normal path ~5 s first visit of a session, then instant; MOVEMENT verified — the native commuGrid cursor IS driven in the menu flow on `Start_Commu_Emb_C`, gridcurs dump; `GRID_DEBUG` back OFF): (1) unmapped from the directory (no trustworthy owner — two flows, `MenuSoulEmListIns` = `USoulEmblemMenu` reflects nothing); (2) menu-flow instance is the BP class **`Start_Commu_Emb_C`** (census) — `grid_host()` scans both names; (3) the GHOST BOARD was claiming the screen (`BOARD_LIVE_MODES` gate + `Core.pane_live` fixed it — screenshot 98); (4) "reads only after reload" = stale pool + parked-first pick — `grid_host()` enumerates the pool picking the live instance, and a ghost board with no live grid forces ONE budgeted rescan per visit. **ENTRY READS on the normal path now (user-verified)**. 2026-07-16: the ~5 s FIRST-visit lag (never-seen class waiting out ABSENT_BACKOFF; no ghost-board signature exists yet then) fixed with an ENTRY SIGNAL — the game's lazy menu controller (`mm.m_xSoulEmblemMenu` @0x158 / `cm.MenuSoulEmListIns` @0x80, both reflected; the controller's WIDGET pointer is not, AT.hpp:43512, which is why the class can't be directory-mapped) flips null→valid on first open and arms `Core.watch_for("Start_Commu_Emb_C")` (~400 ms budgeted re-scans, ~5 s cap, cleared when the grid reads); the ghost-board path arms the same lane instead of the old single-shot refresh. PENDING in-game verify (fresh session → open emblems: should read in ~1 s, log line "soul-emblem menu controller appeared"). STILL PENDING: cursor MOVEMENT verify (`GRID_DEBUG=true` writes `gridcurs` lines to `dumps/dump_community.txt` — if movement is silent, that dump says whether the native commuGrid offsets are driven in the menu flow). Bonus fact: each slot (`UAT_UIXCmnEmb_Cursor`) reflects `UnlockState` u8 @0x408 |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
 | Substory clear rewards | done (unverified) | **NEW 2026-07-26** `screen_questreward.lua` — the "¡FELICITACIONES! / Recompensas de historia" sheet after a side story. Was completely uncovered (the session log showed NO adapter active in that window); `screen_results` never applied, it reads `Quest_Main_Clear_C`, the MAIN-quest sheet. Identified from a user screenshot + F7 census: `Quest_Sub_Reward_C` < `UAT_UIQuestSubReward` (AT.hpp:35501), title `Txt_Title` on its nested `Xcmn_Win01` @0x540, rows are `Xcmn_Win01_List_C` (`Txt_Item` @0x428 + `Txt_Num` @0x430) ordered by `Core.slot_pos`. Registered ABOVE `screen_choicelist` — same row class as the difficulty picker, which would otherwise announce the rewards as options. `Lang_Txt_Congrats` is a UImage (no text), unread by design |
+| Crash hardening — full-codebase audit | done (unverified) | **NEW 2026-07-27.** Systematic multi-agent sweep of all 71 Lua files + the 4 native bridges against the ten accumulated crash mechanisms; every candidate adversarially re-verified (48 → 11 real, 37 refuted). Fixed: `Core.array_of`'s missing existence gate (`ui_core.lua:419-443`); actor caches surviving the world gate — which a field battle closes WITHOUT a `LoadMap` — for `enemy_cache`/`navi_icons`/`chain_wait`/`target.actor` (`nav_tracker.lua:1447-1471`); F1 running engine work on UE4SS's keyboard thread (`app.lua:195-207`); `Nav.dump_levels` shipping with neither validation nor gate (`nav_tracker.lua:3056-3243`); 9 bare `IsValid()` in `discover.lua`; raw two-hop `host.A.B` chains in `screen_choice`/`screen_training`/`screen_itemuse`; and 8 native findings incl. a 32-bit overflow in `audio_bridge`'s RIFF bounds check and an unvalidated arbitrary-write in `mem_bridge` (now bounded + `expect_class` assertion in `mem.lua`). Full reasoning and the five generalizable rules in the [crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md). `lint-lua.ps1` exits 0 over 71 files; 4 DLLs rebuilt clean. Needs a full RESTART — see *Next step* for the retest checklist |
 | Crash diagnostics (black box + breadcrumb) | done (unverified) | **NEW 2026-07-26.** `mem_bridge.mark()` — a 64-slot ring in a memory-mapped file (`crash_trail.bin`, gitignored, stripped from releases); the OS flushes it when the process dies and `main.lua` prints the previous session's trail into `UE4SS.log` at boot. Marks every adapter `is_active`/`update` by name plus the nav/explore/quest/battle/guide loop steps. Named the crash site on BOTH crashes it has seen. Plus one `screen -> <adapter>` line per screen commit, and per-adapter pcall isolation that logs the faulting adapter's name. Tested standalone with TerminateProcess |
 | Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). Constant-"222" value bug: round-1 dump (2026-07-17, user) CONFIRMED all digit images share ONE atlas material `Ins_Num_Result02` (mix of the shared MaterialInstanceConstant and per-widget MaterialInstanceDynamics) → the digit must be a MATERIAL PARAMETER on the MID. `DEBUG=true` round 2 now also dumps each brush material's Scalar/Vector parameter values + parent to `dumps/dump_results.txt`; decoder fix follows the next results-screen dump |
 | Quest navigation radar | done | **2026-07-26 HARDENED — this file was the mod's biggest crash surface and had never been swept.** 24 bare `:IsValid()` (which FAULT on a freed handle rather than rejecting it) + ~95 naked member fetches, on actors that streaming frees and combat destroys, incl. `target.actor` held for MINUTES. All migrated. Also: `enemies_list`/`navi_icons` refused to refresh while `Core.scan_quiet()` (set by the DIALOGUE adapter), so "battle ends → dialogue opens" pinned a list of just-destroyed enemies — an expired-but-unrefreshable list is DROPPED now, never served. — `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed. 2026-07-15: battle-interruption resume — a world-gate/transition drop of a MANUAL pick stashes `resume_pick` (plain data) and re-acquires it by category+key when the world returns (10 tries, ~3 s apart); the quest auto-scan stays quiet while pending; cleared by B / F3 off / a new pick. Pending in-game verify |
@@ -143,6 +169,48 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-27: RETEST THE CRASH-AUDIT BATCH.** 14 files changed (10 Lua + all 4 native bridges),
+source-only and unverified in game. **A full game RESTART is required** — `app.lua`/`main.lua`
+changed and every DLL was rebuilt, so Ctrl+Shift+R is not enough. What to watch, in order of how
+much of the mod it could take down:
+
+1. **`Core.array_of`'s new existence gate is the riskiest change** — it sits under every screen, and
+   its failure mode is *silence, not a crash*. If several screens go quiet at once, press **Ctrl+G**
+   to disable the reflection gates; if they come back, the gate is the cause and the property-type
+   map is what to look at. The gate fails open by construction (`set == nil` ⇒ allow) and consults
+   `custom_props`, so a `RegisterCustomProperty` member should not be blocked — the `UE4SS.log`
+   prints one `array gate: <Class> has no '<name>'` line per distinct case, which is the evidence.
+2. **Radar behaviour right after a short field battle.** The caches now drop at the world gate, so
+   the first post-battle scan is a real `FindAllOf`. Expect: enemies re-announced correctly instead
+   of ghosts, and a manual pick interrupted by a battle *shorter than 5 s* still resuming (it now
+   goes through `remember_pick()` rather than being silently lost). A collectible you were walking
+   to when the battle started must NOT be marked as visited.
+3. **F1 (repeat current readout)** — now deferred to the game thread, so it may feel a frame later.
+   It must still work in every screen, and must do nothing during a map transition.
+4. **Audio cues and the gamepad.** Both bridges changed: WAV loading is stricter (a malformed file
+   now degrades to "missing" instead of reading out of bounds) and the pad block is lease-based, so
+   the radar/config modals must still block the pad while open AND the pad must free itself if a
+   modal dies unexpectedly (this used to require killing the game).
+5. **The world map's d-pad travel** — `screen_map`'s four writes now go through one `ft_write_sel`
+   with a `Map_World_C` class assertion. If travel selection stops responding, check the log for a
+   refused-write line before suspecting anything else.
+
+If a crash still happens, the black box (`crash_trail.bin` → printed into `UE4SS.log` at next boot)
+names the last op as before; `mem_bridge`'s recorder was itself hardened in this batch.
+
+**Three further native findings (2026-07-27, second pass) — two fixed, one open by decision:**
+`audio_bridge`'s `do_init()` now releases everything on all nine failure returns (`release_all()` +
+`init_fail()`) and `load_wav` frees before reallocating — note the leak was narrower than first
+reported: `Audio.init()` runs once from `main.lua`, which is outside the hot-reload set, so
+Ctrl+Shift+R does NOT re-run it. `g_last` is now a **seqlock** (non-blocking writer, bounded reader
+retry falling through to a direct `g_realGetState` read) since the pump thread runs inside the
+game's own input hook. **Still open:** `prism_bridge` never calls the `p_shutdown`/`p_backend_free`
+it resolves — `DllMain` is ruled out (loader lock), `App.stop()` is the reload path where PRISM must
+stay alive, so closing it needs a real process-exit hook in `main.lua` that does not exist yet, plus
+`Speech.shutdown()` → a new `prism_funcs.shutdown`. Harmless at process exit; only matters for a
+backend holding an OS resource. Same reasoning left `audio` without a shutdown API: `Audio.stop()`
+means "silence cues", not teardown, and a shutdown nobody calls is worse than a leak the OS reclaims.
 
 **2026-07-26 (d): second crash, root-caused from the black box again — and the fix is now in the
 SUBSTRATE, not in call sites.** Player exited combat into a story dialogue; trail's last op

@@ -192,12 +192,20 @@ end
 -- F1: repeat the active screen's focus — or, with no screen owning the tick (the
 -- resident controls guide RELEASES it after announcing once), re-arm the guide so
 -- F1 in the open world re-reads the controls.
+-- RegisterKeyBind callbacks run on UE4SS's own keyboard thread, NOT the game thread,
+-- but Registry.repeat_current() walks pooled widgets (Core.cached_all) and can touch
+-- live UObjects — sharing the same lua_State as the poll loop's step() would race the
+-- allocator/incremental GC. Wrap on the game thread and stay inert during a level
+-- transition, same as App.read_keyhelp above.
 function App.repeat_current()
-    if Registry.active_adapter() then
-        Registry.repeat_current()
-    else
-        Tutorial.reannounce()
-    end
+    ExecuteInGameThread(function()
+        if require("transition").active() then return end
+        if Registry.active_adapter() then
+            Registry.repeat_current()
+        else
+            Tutorial.reannounce()
+        end
+    end)
 end
 
 -- Navigation radar (nav_tracker.lua) — keybinds in main.lua delegate here so the
