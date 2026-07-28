@@ -4,6 +4,17 @@
 
 ## v0.1.3 - July 28, 2026
 
+**This is the release where the crashing should stop.** Everything below under *Stability* is one
+long effort aimed at a single thing: the game closing on its own, minutes or hours into a session,
+with no obvious trigger. Earlier versions had protected the parts of the mod that read menus; this
+one finally gives the same protection to the part that reads the *world* while you explore and
+fight, which is where the remaining crashes were coming from. A full day of play on this build
+produced none.
+
+To be straight with you: "none in a day" is a very good sign, not a proof, and a mod that reads a
+game's memory can never promise zero. If it does happen, the log now names the screen that was
+being read - see *For bug reports* at the bottom, and please send it.
+
 ### Screens that now read
 
 - **The Story menu.** Entries, the recommended level, the summary, and the completion rewards. The
