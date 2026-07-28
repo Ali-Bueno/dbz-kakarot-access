@@ -336,6 +336,89 @@ explicitly at registration.
 that silently fails closed on shared substrate costs every screen that depends on it, with no error
 anywhere. This is not hypothetical: a `Core.valid` that rejected an unanswerable `GetAddress()` took out
 every directory-mapped screen at once, because the screen directory gates every pointer hop on it.
+Corollary (Kakarot radar regression, 2026-07-28): **a guard that widens its own scope by ASSUMPTION
+takes out a working feature.** A result-validation gate dispatched "object types → check A,
+*everything else with a known type* → check B", silently asserting that every non-object property
+yields a handle answering `IsValid`. It does not: an `FName` is a VALUE with no `IsValid`, so the call
+resolves against the **FName constructor** and raises `No overload found for function 'FName'` — a
+third error that PIERCES pcall. It killed the target list on the first NPC it read, so the radar
+picker never opened on any bind. Guards go on an **enumerated whitelist of cases you have evidence
+for**, never on "everything else". Ask value types (FName/FText/string/number/enum) for **no validity
+call at all** — convert and let the conversion be the test.
+**A widget can be ON SCREEN and NOT IN THE VIEWPORT — check for a RenderTarget before trusting any
+liveness test** (rule from the Kakarot Z-Encyclopedia, 2026-07-28). That book's pages
+(`UAT_UICompZPageBase.RenderTarget`, drawn by `UCompZMenu.UMGRender` onto an `AZCW_BookActor`) are
+rendered into TEXTURES and mapped onto a 3D mesh. They are never parented into the viewport widget
+tree, so `on_screen` — an ancestor walk that ends at the viewport — returns false for a page the
+player is reading, `IsInViewport` is false, and `Core.first_on_screen` finds nothing. The adapter
+never activated once and **logged nothing at all, because nothing errored**: no screen commit, no
+gate message, no traceback. That silence is the fingerprint — a correct-looking adapter whose name
+never appears in a `screen ->` line and that produces no diagnostics whatsoever.
+The tell in the header is a `UTextureRenderTarget2D` member on the page/base class, or a rendering
+manager / book-actor sibling on the menu class. When you see one, the widget's OWN slate visibility
+(`Core.is_visible`, `Core.first_text_offviewport`) is the only signal available; it is genuinely
+weaker than `on_screen`, so the adapter must earn the screen another way — readable text plus a
+marked cursor row, say. **And do not let an F7 census talk you out of this**: `discover.lua` lists
+"visible on-screen text" using bare `IsVisible()`, not the ancestor walk, so a census showing the
+text proves only that the widget exists — never that any viewport test would pass.
+**Fail-OPEN inverts into a hazard the moment a probe expects its candidates to be ABSENT**
+(rule from the Kakarot Story / Z-Encyclopedia round, 2026-07-28 — caught in adversarial review
+before it ever ran). The standing rule is that guards fail open on "don't know", and for a single
+member the caller believes exists that is right: the cost of being wrong is one ungated fetch on an
+unknown class. A **multi-candidate** probe — "try the native spelling, then the Blueprint twin" —
+has the opposite contract: most candidates are *expected not to exist*. Fail-open there is a
+licence to fetch names you have positive reason to believe are absent, which is the uncatchable
+abort, and it fires precisely when the property gate is unavailable: the per-tick enumeration
+budget is **1 set per tick shared by every adapter**, so a screen presenting several new classes
+spends several ticks completely ungated, and a class that introspects to nothing is marked
+un-gateable *permanently*. So multi-candidate helpers take a STRICT gate (`Core.member(o, n, true)`
+— skip the candidate when the set is unavailable, never fetch). Failing closed is acceptable here
+only because it is BOUNDED: one tick of silence per newly-seen class, self-healing, and the
+permanent case logs itself. That is the distinction from the Options regression, which failed
+closed forever on shared substrate.
+**Prefer a native TArray over Blueprint node names when the header offers one.** The census names
+what is on screen; the header names what the class guarantees. Story's rewards read as
+`Xlist_Reward_Bar00..05` in the dump, but `UAT_UIStartQuest.UIRewardBar_List` @0x6D0 is a real
+`TArray<UAT_UIRewardBar*>` — `Core.array_of` then needs no name guessing, no fixed-array hazard,
+and stays right however many rows the game shows. Check the header before hard-coding an index
+range. Corollary: **`size: 0x10` on a `TArray<...>` line means a real TArray; a fixed C array is
+written as a plain pointer type with `size = N*8`** (`WL_StartCharBarList` 0x30 = 6 slots). Confirm
+which one you have before `array_of` — and note a fixed array collapses to element 0, so a native
+name can only ever reach the first of them (`UAT_UICompZPageDetail.m_Detail` is 3).
+**The liveness gate for a passive NOTICE is NOT the one for an interactive PANE** (rule from the
+Kakarot reward-sheet episode, 2026-07-28 — the second time the same wall was hit). `pane_live`
+(`GetVisibility() == Visible(0)` AND opacity) exists so a parked pooled pane cannot SHADOW the
+adapters below it. A passive overlay — a reward sheet, a result sheet, a subtitle — cannot shadow
+anything, because it speaks once and releases the dispatcher on the same tick; and in this game
+passive overlays render as **HitTestInvisible / SelfHitTestInvisible**, so applying the interactive
+gate to one holds it silent FOREVER. Use the opacity-only test (`Core.pane_rendered`); `on_screen`
+has already dropped Collapsed/Hidden, and the opacity check still drops the close-animation ghost.
+The meta-lesson matters more than the gate: `screen_fishresult` diagnosed this exact failure on
+2026-07-17 and fixed it with a **private four-line helper**, so nine days later a brand-new adapter
+walked into it again and never ran at all. **When a fix turns out to be about the shared substrate,
+put it in the substrate** — a local workaround does not teach the next screen anything.
+**Diagnosis shortcut for "an adapter says nothing":** grep the log for `screen -> <adapter>`. If the
+name never appears, the bug is in `is_active`'s gates, not in the reading code — do not read the
+reading code. That one grep replaced a whole round of hypothesising here.
+**`RegisterCustomProperty` + `allow_member` is a TRAP — prefer the Blueprint WidgetTree name**
+(rule from the Kakarot character-list episode, 2026-07-28). A fixed C array of widget pointers
+collapses to element 0 under reflection, and the obvious recovery is to register each slot's raw
+pointer at `base + i*8`. Two defects make it worse than the problem. (1) `Core.allow_member`
+whitelists a **name**, so if the registration silently failed the gate flips from *protection* to
+*permission* and the next fetch is the uncatchable abort. (2) `RegisterCustomProperty` resolves
+`BelongsToClass` **once** and thereafter matches by the raw `UClass*`; BP generated classes unload
+on a map transition and their addresses get reused, and `custom_props` is never flushed (unlike
+`prop_sets`) — so after the first map load every slot but 0 stops resolving, the list reads one row
+forever, and moving the cursor announces nothing. **Look for the WidgetTree name first:** an F7
+census showed those same rows are Blueprint children (`…Start_Party_C_0.WidgetTree_0.Start_Char_Bar00`),
+i.e. the engine already exposes each one as its own reflected property by name — no offsets, no
+whitelist, nothing to invalidate, and an undeclared name is refused by the existence gate instead of
+aborting. Reach for custom properties only when the census proves there is no name.
+**Prefer a reflected INDEX over a visual cursor MARKER when the host exposes one.** A marker
+(`Pnl_Curs_All`, `Img_Curs00`, a glow border) is a guess about which node the game drives, and a
+marker that never clears is unfalsifiable; `GetCursorIndex()`/`GetViewIndex()` is a deterministic
+read. Use the index as primary and the marker as fallback, never the other way round. And when you
+must test a marker, test it with `Core.on_screen`, never `Core.is_visible` — see the next rule.
 **A hand-rolled widget cache must be invalidated by `on_screen`, never by validity alone** (rule
 from the Kakarot Options re-entry bug, 2026-07-25). Pooled submenu widgets are only COLLAPSED on
 close, never destroyed, so a cached row from the previous visit stays `IsValid() == true` forever

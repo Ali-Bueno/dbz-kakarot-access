@@ -302,6 +302,10 @@ local S = {
         radar_cat_hunt = "Caza",
         radar_cat_exit = "Salidas",
         radar_cat_other = "Otros",
+        -- Party screen, RIGHT panel: the roster you choose from after confirming a slot.
+        party_charlist = "Personajes disponibles",
+        -- The Z Encyclopedia book. Every heading INSIDE it comes from the game's own text.
+        compz_title = "Enciclopedia Z",
         cat_memory = "recuerdo",
         cat_item = "objeto",
         cat_npc = "personaje",
@@ -554,6 +558,8 @@ local S = {
         radar_cat_enemies = "Enemies",
         radar_cat_hunt = "Hunt",
         radar_cat_exit = "Exits",
+        party_charlist = "Available characters",
+        compz_title = "Z Encyclopedia",
         radar_cat_other = "Other",
         cat_memory = "memory",
         cat_item = "item",

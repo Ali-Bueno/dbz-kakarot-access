@@ -44,11 +44,10 @@ local spoken = {}    -- line -> true while the sheet stays up (cleared on close)
 local queue = nil    -- lines to speak this tick (computed in is_active)
 local gone = 0       -- consecutive ticks without a live sheet (absence debounce)
 
--- Close-animation ghost: opacity fades to 0 while visibility flags lag.
-local function faded(h)
-    local ok, op = pcall(function() return h:GetRenderOpacity() end)
-    return ok and type(op) == "number" and op < 0.05
-end
+-- Close-animation ghost: opacity fades to 0 while visibility flags lag. This test moved into
+-- ui_core as Core.pane_rendered on 2026-07-28, when screen_questreward turned out to need the
+-- very same passive-overlay gate; the reasoning now lives there.
+local function faded(h) return not Core.pane_rendered(h) end
 
 -- First readable text among the given member names (native vs BP tree spelling).
 local function node_text(owner, ...)

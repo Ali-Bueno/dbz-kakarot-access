@@ -2281,9 +2281,7 @@ enemy_display_name = function(c)
     pcall(function()
         -- Gated fetch + a validity check on the RESULT. This runs on post-combat AT_Characters,
         -- i.e. actors the engine is in the middle of destroying.
-        local s = Core.member(c, "CharacterName")
-        if type(s) == "string" then raw = s
-        elseif Core.valid_ref(s) then raw = s:ToString() end
+        raw = Core.name_str(Core.member(c, "CharacterName"))
     end)
     return resolve_char_id(raw)
 end
@@ -2297,8 +2295,7 @@ end
 local function npc_name(npc)
     local raw
     pcall(function()
-        local u = Core.member(npc, "UniqueId")
-        if Core.valid_ref(u) then raw = u:ToString() end
+        raw = Core.name_str(Core.member(npc, "UniqueId"))
     end)
     if type(raw) ~= "string" or raw == "" or raw == "None" then return nil end
     -- The game's own resolver (+ hand-verified map) first — authoritative names.
@@ -2590,10 +2587,9 @@ function Nav.list_targets()
         local function action_name(a)
             local s
             pcall(function()
-                local v = Core.member(a, "ActionName")
-                -- Truthiness is not a validity check on a Core.member result (see drop_item_name).
-                if type(v) == "string" then s = v
-                elseif Core.valid_ref(v) then s = v:ToString() end
+                -- Truthiness is not a validity check on a Core.member result (see drop_item_name);
+                -- Core.name_str is, and it never asks an FName for a method it does not have.
+                s = Core.name_str(Core.member(a, "ActionName"))
             end)
             return (type(s) == "string" and s ~= "") and s or nil
         end
@@ -2618,9 +2614,9 @@ function Nav.list_targets()
                 -- GetAddress on it, which UE4SS raises THROUGH pcall.
                 if not Core.valid_ref(d) then return end
                 for _, fld in ipairs({ "FixedId", "NormalId" }) do
-                    local id = d[fld]
-                    local s = Core.valid_ref(id) and id:ToString() or nil
-                    if s and s ~= "" and s ~= "None" then raw = s return end
+                    -- FName members of the struct: read them as names, never IsValid them.
+                    local s = Core.name_str(d[fld])
+                    if s and s ~= "None" then raw = s return end
                 end
             end)
             if not raw then return nil end
@@ -2690,11 +2686,8 @@ function Nav.list_targets()
             for _, prop in ipairs({ "AreaName", "DoorName" }) do
                 if label == nil then
                     pcall(function()
-                        local n = Core.member(a, prop)
-                        if Core.valid_ref(n) then
-                            local s = n:ToString()
-                            if s and s ~= "" and s ~= "None" then label = s end
-                        end
+                        local s = Core.name_str(Core.member(a, prop))
+                        if s and s ~= "None" then label = s end
                     end)
                 end
             end

@@ -24,9 +24,17 @@
 --
 -- NOTICE PATTERN (screen_fishresult): speaks each line ONCE per appearance, queued so it never
 -- interrupts, and releases the dispatcher immediately — a reward sheet must never hold the
--- screen. `pane_live` gates it because this is a pooled full-screen pane that lingers rendered
--- after closing (CLAUDE.md §8), and the forget is DEBOUNCED so the sheet's own fade/flip does
--- not re-read the whole list.
+-- screen. The forget is DEBOUNCED so the sheet's own fade/flip does not re-read the whole list.
+--
+-- LIVENESS, corrected 2026-07-28. The first cut gated on `Core.pane_live`, and that is why this
+-- adapter NEVER RAN: pane_live demands `GetVisibility() == Visible(0)`, but a passive overlay in
+-- this game renders as HitTestInvisible (the Xcmn_Subtitles precedent), so the host was rejected
+-- on every single tick. The proof was a one-line log check — `screen -> screen_questreward` never
+-- appears, not once, while the user's F7 census taken WITH the sheet on screen shows its title and
+-- all four reward rows rendered and fully opaque. Now `Core.pane_rendered` (opacity-only), the
+-- same gate screen_fishresult needed for the same reason nine days earlier; the visibility half of
+-- pane_live exists to stop a pooled INTERACTIVE pane shadowing the adapters below it, and a notice
+-- that releases the dispatcher on the same tick cannot shadow anything.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -118,7 +126,7 @@ function Reward.is_active()
     queue = nil
     local host = Core.first_on_screen(HOST_BP, tick)
         or Core.first_on_screen(HOST_NATIVE, tick)
-    if not host or not Core.pane_live(host) then
+    if not host or not Core.pane_rendered(host) then
         -- Debounced forget (the fishresult lesson): the close/fade can drop the sheet for a
         -- tick or two, and clearing `spoken` at once would re-read the whole list.
         gone = gone + 1

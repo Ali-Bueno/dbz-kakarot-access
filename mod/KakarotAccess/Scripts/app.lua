@@ -144,6 +144,12 @@ local StatusScreen = require("screen_status")
 Registry.register(StatusScreen, "screen_status")
 Registry.register(require("screen_characters"), "screen_characters")                    -- Characters list
 Registry.register(require("screen_party"), "screen_party")                         -- Party
+-- Z Encyclopedia (the book: index / category spread / entry spread — one adapter, three widget
+-- classes) and the Story menu. Both are ring submenus that own the whole screen, so they sit with
+-- their peers above; the encyclopedia is first because its entry spread opens OVER its own list
+-- pages, which stay on screen underneath.
+Registry.register(require("screen_compz"), "screen_compz")                         -- Z Encyclopedia
+Registry.register(require("screen_story"), "screen_story")                         -- Story
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"), "screen_saveload")
 Registry.register(require("screen_tutorials"), "screen_tutorials")                     -- System > Tutorials list

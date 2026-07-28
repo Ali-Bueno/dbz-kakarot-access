@@ -1,5 +1,48 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-28 — THE AUDIT'S OWN FIX BROKE A FEATURE: `IsValid` IS NOT UNIVERSAL, AND AN FName
+> RAISES THROUGH pcall.** The user reported the crashes gone and, in the same breath, that the radar
+> picker no longer opened **on either bind** (R3 and V). Both binds funnel through
+> `do_open()` → `Nav.list_targets()`, and that is exactly where the log's 16 identical tracebacks
+> stopped — with the mod's own boot lines confirming `input_bridge loaded (hooked=true)`, so input
+> was never a candidate.
+>
+> **Mechanism.** The 07-27 audit added result-validation to `Core.member` (validate the RESULT, not
+> just the owner). Its dispatch was: object-family → `Core.valid`; **anything else with a known type
+> string → `Core.valid_ref`**. That second clause is the bug. `Core.valid_ref` is one pcall'd
+> `IsValid()`, and `IsValid` is a **RemoteObject** method — UE4SS's FName binding does not have it.
+> The call instead resolves against the global `FName` **constructor**, which raises
+> `No overload found for function 'FName'. Overloads: #1 FName(string…) #2 FName(integer…)` — and
+> like the `GetAddress`-on-polymorphic-type error, **it pierces pcall**: it unwinds to UE4SS's own
+> callback boundary, so the calling function dies mid-flight while every enclosing `pcall` reports
+> success. The traceback's double-print is the tell (`ui_core.lua:84` in a pcall, printed twice).
+>
+> **Blast radius, and why it was total rather than partial.** `npc_name` reads `UniqueId`, a
+> `NameProperty`, and it is the FIRST thing the target list asks about a field NPC. So the list died
+> on the first NPC in range, `do_open()` never received a list, and the picker never opened at all —
+> a whole verified feature, from a guard that was only ever meant to catch dangling handles.
+>
+> **Fix.** The result gate now checks **only `ArrayProperty` and `StructProperty`** — the two
+> handle-shaped types the two-tier rule was actually invented for. Every other property type is a
+> VALUE that cannot dangle, so it fails OPEN, per the standing rule. Plus `Core.name_str(o)`:
+> convert with `ToString()` and let the conversion be the test, never ask a value type for a
+> validity method. It replaces the five direct `Core.valid_ref`-on-an-FName calls that were already
+> sitting in `nav_tracker` (2286/2301/2596/2622/2694) — latent, and about to become live the moment
+> the gate above them stopped aborting first.
+>
+> **THE RULE: a guard that widens its own scope by ASSUMPTION will take out a working feature.**
+> The 07-27 clause `type(pt) == "string" and pt ~= "" and pt ~= "?"` reads as prudence — "check
+> everything we know the type of" — but it silently asserted that every non-object property yields a
+> handle that answers `IsValid`. Nothing verified that. Guards belong on an **enumerated
+> whitelist of cases you have evidence for**, never on "everything else"; the whole point of
+> fail-open is that the unknown case is the one you must not act on. Corollary for this codebase:
+> `Core.valid` is UObject-only, `Core.valid_ref` is **array/struct-only** (its header now says so),
+> and value types (`FName`, `FText`, strings, numbers, enums) get **no validity call whatsoever**.
+>
+> **And the cheap lesson, again:** three tool calls into the session the log had already named the
+> file, the line and the mechanism. The standing rule — *when several things go quiet at once, READ
+> THE HOST LOG BEFORE THEORISING* — paid for itself for the third time.
+
 > **2026-07-27 — FULL-CODEBASE CRASH AUDIT (multi-agent), 11 confirmed holes closed.** Not driven by
 > a crash report: a systematic sweep of all 71 Lua files plus the four native bridges against the
 > ten crash mechanisms this ledger has accumulated. 48 candidates found, each then handed to an
