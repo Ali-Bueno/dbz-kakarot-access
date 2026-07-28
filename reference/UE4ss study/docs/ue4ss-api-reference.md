@@ -108,8 +108,10 @@ Filesystem tree of game directories, navigable with dot notation (`GameDirectory
 - `FindObject`/`StaticFindObject` are **name/path lookups**, not scans — much cheaper than
   `FindAllOf`/`ForEachUObject`, but still not free enough to call every tick without a reason.
 - `FindAllOf` is a full sweep every call: **on-demand only** (a key/command), **never per frame**.
-- Prefer **event-driven** acquisition (`NotifyOnNewObject`) over polling `FindAllOf` where possible — see
-  the hooks section below for the sharp edge (firehose crash risk on broad classes).
+- Prefer **event-driven** acquisition over polling — but on two shipped mods that meant
+  `RegisterBeginPlayPostHook`, **not** `NotifyOnNewObject`, which both games had to drop outright (see
+  the sharp edge below). Measured per-game scan costs and the full decision ladder:
+  [ue4ss-mod-architecture.md](ue4ss-mod-architecture.md).
 
 ---
 
@@ -235,13 +237,14 @@ came from (dumper output, RE session, etc.) next to the call. `PropertyTypes` fu
 the reflection cookbook.
 
 ### NotifyOnNewObject sharp edge (firehose crash)
-`NotifyOnNewObject` fires **by inheritance → register on a narrow class, never a base one.**
-`NotifyOnNewObject("/Script/UMG.UserWidget", …)` (or `TextBlock`/`RichTextBlock`) fires for **every
-widget in the game** — a burst of hundreds when a dialog/menu opens — and touching each one
-**mid-construction** (even `GetFullName()`) can hard-abort the process; `pcall` cannot catch it. This
-crashed a UE4.26 game at the very first dialog. Register on specific `WBP_*_C` classes; for genuine
-"any widget" needs (e.g. focus tracking), use a throttled, load-gated `FindAllOf` instead. See the
-compatibility doc and [accessibility-patterns §9](accessibility-patterns.md).
+It fires **by inheritance**, so a base class (`UserWidget`, `TextBlock`) runs your callback for **every
+widget in the game** — hundreds in a burst when a menu opens — and touching them mid-construction
+hard-aborts the process; `pcall` cannot catch it. **Both mods measured for this reference dropped
+`NotifyOnNewObject` entirely, for two independent root causes** (mid-construction access on one game,
+callbacks arriving on the async loading thread on the other).
+
+→ Canonical rule: [ue4ss-mod-architecture.md §4](ue4ss-mod-architecture.md). Field notes and the
+narrow-registration variant that does work: [accessibility-patterns §9](accessibility-patterns.md).
 
 ---
 
@@ -306,7 +309,10 @@ no `:Get()`/`:Set()` needed, unlike wrapped hook params.
 | `FindFirstOf` | Yes, up to the 1st match | No | Short name | "Give me one instance" |
 | `FindAllOf` | Yes, full sweep | No | Short name | On-demand only, never per tick |
 | `ForEachUObject` | Yes, callback per object | No | None | Explicit dump only |
-| `NotifyOnNewObject` | No | Yes | Full path + subclasses | Cheap continuous watch |
+| `NotifyOnNewObject` | No | Yes | Full path + subclasses | Cheap continuous watch — **but read §3 first** |
 
-**Golden rule:** discovery is on-demand (a key/command); continuous tracking is `NotifyOnNewObject` +
-a cache; never call a `Find*` function inside a per-tick/per-frame loop.
+**Golden rule:** discovery is on-demand (a key/command); continuous tracking is a cached ref kept
+current by an **actor-lifecycle hook** (`RegisterBeginPlayPostHook`); never call a `Find*` function
+inside a per-tick/per-frame loop. `NotifyOnNewObject` is the classic answer to that last part and is
+listed above for completeness — but see
+[ue4ss-mod-architecture.md §4](ue4ss-mod-architecture.md) before reaching for it.
