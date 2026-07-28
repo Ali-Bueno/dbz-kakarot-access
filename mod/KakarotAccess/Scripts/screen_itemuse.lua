@@ -40,13 +40,25 @@ local function bars_of()
 end
 
 -- The on-screen character bar = the current selection (only the picked one animates in).
+--
+-- UNIQUENESS is required (2026-07-28). The original note — "only the SELECTED character's bar is
+-- animated on-screen at a time" — was verified from a screenshot of the char-select itself, and it
+-- is not true of the screen at rest: on the RECOVERY tab the item menu permanently renders the
+-- whole party strip (the F7 census shows Start_Party_Bar00/01/02 with name, level, HP and Ki while
+-- the plain list is open). Taking the FIRST on-screen bar therefore made this adapter claim that
+-- tab forever, and since those strip bars carry `Txt_Name`/`Txt_Lv` rather than the char-select
+-- card's `Txt_Name01`, it then had nothing to say — the tab went silent, and it was the only one,
+-- because it is the only tab that shows the strip. Several bars on screen = the strip, not a
+-- selection.
 local function selected_bar()
     local bars, n = bars_of()
     if not bars then return nil end
+    local hit, count = nil, 0
     for i = 1, n do
         local bar = bars[i]
-        if Core.valid(bar) and Core.on_screen(bar) then return bar end
+        if Core.valid(bar) and Core.on_screen(bar) then hit, count = bar, count + 1 end
     end
+    if count == 1 then return hit end
     return nil
 end
 
@@ -72,7 +84,10 @@ function ItemUse.is_active()
             tostring(Core.read_text(Core.member(bar, "Txt_Name01"))), tostring(Core.read_text(Core.member(bar, "Txt_Lv01"))),
             tostring(Core.read_text(Core.member(bar, "Txt_Lv02"))), tostring(Core.read_text(Core.member(bar, "Txt_Next_Num")))))
     end
-    return bar ~= nil
+    -- Claim the screen only on READABLE text, never on a live handle: an adapter that holds the
+    -- tick and then says nothing is indistinguishable from a broken screen, and it shadows every
+    -- adapter below it — here, the whole item list.
+    return bar ~= nil and bar_text(bar) ~= nil
 end
 
 function ItemUse.reset() ann:reset() end

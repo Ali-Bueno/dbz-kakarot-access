@@ -57,17 +57,23 @@ local CompZ = {}
 -- @0x468 / `TextBox_Memo` @0x470 natively, `Txt_Title` / `Txt_Detail` in the Blueprint tree — note
 -- the BP body node is `Txt_Detail`, NOT the `Txt_Memo` the native name would suggest, which is
 -- exactly why both spellings are offered.
+-- BLUEPRINT NAMES ONLY. The native fallbacks this list used to carry
+-- (`AT_UICompZPageMemo`, `AT_UICompZPageDetail`, …) were never observed — the census names every
+-- live host as a `CompZ_*_C` Blueprint — and each speculative name is not free: a class that is
+-- never present joins the ABSENT scan set and costs a full `FindAllOf` every ~4 s FOREVER
+-- (ui_core's ABSENT_BACKOFF, and its own comment explains this set is kept deliberately small).
+-- Eleven names became six, and the six only run when a menu is actually up (see is_active).
 local MEMO_PAGES = {
-    { "CompZ_Memo_C", "AT_UICompZPageMemo" },
+    { "CompZ_Memo_C" },
 }
 local DETAIL_PAGES = {
-    { "CompZ_Page_Detail_R_C", "AT_UICompZPageDetail" },
-    { "CompZ_Page_Img_C",      "AT_UICompZPageImg" },
+    { "CompZ_Page_Detail_R_C" },
+    { "CompZ_Page_Img_C" },
 }
 local LIST_PAGES = {
-    { "CompZ_Page_Items_L_C",     "AT_UICompZPageItems" },
-    { "CompZ_Page_Items_R_C",     nil },
-    { "CompZ_Page_Contents00_C",  "AT_UICompZPageContents" },
+    { "CompZ_Page_Items_L_C" },
+    { "CompZ_Page_Items_R_C" },
+    { "CompZ_Page_Contents00_C" },
 }
 
 local ann = Core.make_announcer()
@@ -216,6 +222,15 @@ end
 
 function CompZ.is_active()
     tick = tick + 1
+    -- COST GATE (user, 2026-07-28: small stutters after this adapter shipped). The book can only
+    -- be open when a menu owns the screen, and `Core.free_roam` is the game's own signal for that
+    -- — the minimap is up while walking around and hidden the moment any real menu, battle or
+    -- cutscene takes over. It reads a class that is always present, so it is a cached pointer walk
+    -- rather than a scan. Without this gate the six page classes are ABSENT the whole time the
+    -- player is in the field and each one costs a full FindAllOf every ~4 s; ui_core's own comment
+    -- (see SCANS_PER_TICK) records that a cluster of absent-class rescans expiring on the same
+    -- tick is exactly what a periodic stutter feels like.
+    if Core.free_roam(tick) then view = nil return false end
     view = read_memo() or read_detail() or read_list()
     return view ~= nil
 end

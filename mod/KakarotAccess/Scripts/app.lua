@@ -167,6 +167,10 @@ Registry.register(require("screen_title"), "screen_title")
 -- even over a manual pick, which it stashes so B in the R3 menu restores it. Wired
 -- here so neither module requires the other (both stay hot-reloadable).
 QuestObjective.set_on_change(function(kind) Nav.notify_objective_change(kind) end)
+-- The other edge: a quest class LEAVING a readable HUD means that story ended, so the radar
+-- releases its quest focus and the normal priority order takes over again (a finished side story
+-- hands the radar back to the main quest).
+QuestObjective.set_on_gone(function(kind) Nav.notify_objective_gone(kind) end)
 
 local App = {}
 

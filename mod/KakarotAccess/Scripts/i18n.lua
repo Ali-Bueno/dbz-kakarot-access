@@ -371,6 +371,8 @@ local S = {
         hp_enemy_fmt = "%s, %d por ciento",
         shop_buy_fmt = "comprar: %s",
         shop_have_fmt = "tienes: %s",
+        -- The wallet balance, spoken in the shops' value slot so it re-speaks when it changes.
+        shop_money_fmt = "tienes %s Zeni",
         results_total = "Total",
         fish_press = "pulsa %s",
         fish_mash = "machaca %s",
@@ -626,6 +628,7 @@ local S = {
         hp_enemy_fmt = "%s, %d percent",
         shop_buy_fmt = "buy: %s",
         shop_have_fmt = "owned: %s",
+        shop_money_fmt = "you have %s Zeni",
         results_total = "Total",
         fish_press = "press %s",
         fish_mash = "mash %s",

@@ -507,7 +507,28 @@ end
 -- Priority class of a NAVI marker's target actor. Actors without a quest icon type
 -- still rank as PRI_OTHER: the game only creates a NAVI icon for things it is
 -- actively guiding the player to.
-local function classify(actor)
+-- `icon` (optional) is the NAVI widget the actor came from, and when present it WINS.
+--
+-- This is the fix for "the radar goes back to the main quest while I am doing a side story"
+-- (user, 2026-07-28). `navi_quest_icon` has existed since the 07-04 report and its own comment
+-- says the actor's ATMapIconComponent is main-coded or absent on sub quests — but it was only
+-- ever wired into `Nav.list_targets` (the R3 picker) and the debug dump, never into the auto-scan.
+-- So picking a side-story marker BY HAND worked while auto-tracking classified the same marker as
+-- PRI_MAIN or PRI_OTHER: `notify_objective_change("sub")` armed `preempt.pri = PRI_SUB`, no
+-- candidate ever matched it, and `best_candidate` fell through to the overall best — a
+-- concurrently active MAIN arrow. The intermittency (only when a main quest is also live) is the
+-- tell. Fails open: an unreadable switcher classifies exactly as before.
+--
+-- Folded into this function rather than given its own helper because this chunk is at Lua's
+-- 200-local cap and one more `local function` is a hard syntax error (the lint caught it).
+local function classify(actor, icon)
+    if icon then
+        local t = navi_quest_icon(icon)
+        if t then
+            if MAIN_QUEST_ICONS[t] then return PRI_MAIN end
+            if SUB_QUEST_ICONS[t] then return PRI_SUB end
+        end
+    end
     return quest_pri(actor) or PRI_OTHER
 end
 
@@ -577,7 +598,7 @@ local function best_candidate(px, py, pz, want_pri)
         if Core.valid(icon) and icon_in_use(icon) then
             -- navi_icons is a module-level list held for RESCAN_CLASSES ticks.
             local ok, ta = pcall(function() return Core.member(icon, "TargetActor") end)
-            if ok and Core.valid(ta) then consider(ta, classify(ta)) end
+            if ok and Core.valid(ta) then consider(ta, classify(ta, icon)) end
         end
     end
 
@@ -1558,7 +1579,10 @@ local function step()
     local autotrack = (cfg == nil) or cfg.autotrack_enabled()
     if autotrack and tick % SCAN_EVERY == 0 and (fresh
         or (not resume_pick and not auto_suppressed and not (target and target.manual))) then
-        local best = best_candidate(px, py, pz, fresh and preempt.pri or nil)
+        -- The fresh preempt biases once; `preempt.focus` is the standing context and therefore
+        -- applies to EVERY auto-scan, which is what carries a multi-phase side story from one
+        -- objective to the next without the player opening the picker.
+        local best = best_candidate(px, py, pz, fresh and preempt.pri or preempt.focus)
         if best then
             if fresh then
                 preempt.scans, preempt.pri = 0, nil   -- consumed, whatever happens below
@@ -2030,6 +2054,11 @@ function Nav.toggle()
         resume_pick = nil
         preempt.stash = nil
         preempt.scans, preempt.pri = 0, nil
+        -- F3 off is the only full reset of the quest focus. A manual pick or a B deliberately
+        -- KEEP it: the auto-scan is suspended while a hand-picked target is live, so the focus
+        -- costs nothing there, and when the player releases the pick they should land back on the
+        -- side story they were working — not on the main quest.
+        preempt.focus = nil
         companion_idx = 0
         Speech.say(I18n.t("nav_off"), true)
     else
@@ -2983,8 +3012,28 @@ function Nav.notify_objective_change(kind)
     -- Mod config: "radar automático" off → don't auto-activate or disturb the manual pick.
     local cfg = _G.__KakarotSettings
     if cfg and not cfg.autotrack_enabled() then return end
+    local want = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
+    -- QUEST FOCUS (`preempt.focus`, 2026-07-28) — the preempt is a one-shot, and that is the
+    -- other half of the "it goes back to the main quest" report: even once the classification is
+    -- right, the bias lasted ~15 s and then the normal order (main outranks sub) took over again,
+    -- so a multi-phase side story lost the radar between phases.
+    --
+    -- The focus is a CONTEXT rather than a nudge: whichever quest class the player is actually
+    -- working stays preferred on EVERY auto-scan, so each new phase is picked up without opening
+    -- the picker. Consequences, both deliberate:
+    --   * a MAIN objective advancing in the background while a side story is focused does NOT
+    --     steal the radar (that is the whole complaint), so an off-focus kind returns here;
+    --   * the focus survives a map change, because it is released only by evidence — see
+    --     Nav.notify_objective_gone, which fires only when the quest HUD is READABLE and no
+    --     longer lists that class. A load screen, a fight or an open menu simply hide the HUD and
+    --     produce no verdict at all.
+    if preempt.focus and want and want ~= preempt.focus then return end
+    if want and want ~= preempt.focus then
+        preempt.focus = want
+        print(string.format("[KakarotAccess] quest focus -> %s\n", tostring(kind)))
+    end
     preempt.scans = preempt.TRIES
-    preempt.pri = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
+    preempt.pri = want
     -- IDLE radar (no hand-picked target, no battle-interrupted resume pending): a
     -- freshly activated objective must be tracked and KEEP being tracked even if its
     -- marker lags past the ~15 s preempt window — the classic case is waiting for an
@@ -2998,6 +3047,18 @@ function Nav.notify_objective_change(kind)
             print("[KakarotAccess] objective change while idle: re-arming auto-track\n")
         end
         auto_suppressed = false
+    end
+end
+
+-- The quest HUD is readable and no longer lists this class — the side story finished (or was
+-- abandoned), so release the focus and let the normal priority order take the radar back to the
+-- main quest. Called from quest_objective, which only reaches this verdict with the HUD host on
+-- screen and after a settle, so a load / battle / open menu can never trigger it.
+function Nav.notify_objective_gone(kind)
+    local pri = (kind == "main" and PRI_MAIN) or (kind == "sub" and PRI_SUB) or nil
+    if pri and preempt.focus == pri then
+        print(string.format("[KakarotAccess] quest focus released (%s ended)\n", tostring(kind)))
+        preempt.focus = nil
     end
 end
 

@@ -29,6 +29,12 @@ local state = nil     -- { title, name, value } computed in is_active, reused by
 local function clean(t) return t and A.markup_to_speech(t) or nil end
 
 local function node_text(node)
+    -- ON_SCREEN, not merely readable (2026-07-28). The stock label lives in the tree for EVERY
+    -- item and the game only SHOWS it on the ones that are actually sold out — so reading its text
+    -- unconditionally made the shop announce "agotado" on everything, stock or not (user report).
+    -- A hidden label still holds its last text; its VISIBILITY is the entire signal. Same lesson
+    -- as the cursor markers: what a widget says is not evidence that it is being shown.
+    if not Core.on_screen(node) then return nil end
     local t
     pcall(function() t = clean(Core.read_text(node)) end)
     return t
@@ -99,7 +105,10 @@ function ShopCmn.update()
     if not s then return end
     -- title ("Buy"/"Sell") on entry; item on move; the count/price as the value (so a
     -- d-pad quantity change re-speaks just the value); detail + stock as tooltip.
-    ann:focus(s.title, nil, s.name, s.value ~= "" and s.value or nil,
+    -- Wallet appended to the VALUE slot: spoken with the item, and re-spoken on its own the moment
+    -- it changes — i.e. every purchase and every sale (user, 2026-07-28).
+    local value = Core.phrase(s.value ~= "" and s.value or nil, A.shop_money(host))
+    ann:focus(s.title, nil, s.name, value ~= "" and value or nil,
         function()
             return Core.phrase(node_text(Core.member(host, "WL_Txt_Detail")), node_text(Core.member(host, "WL_Txt_Stock")))
         end)

@@ -63,7 +63,14 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
     -- Diagnosed 2026-07-11: reflected index + detail-pane name read fine for populated
     -- categories; empty categories are told by the detail pane staying nil (nil_streak) since
     -- the list is a fixed pool. Keep OFF; flip on only for a short capture to dump_items.txt.
-    local DEBUG = false   -- 2026-07-15 capture DIAGNOSED the mute items menu: name_box
+    local DEBUG = false   -- OFF again 2026-07-28: the capture DIAGNOSED the mute recovery tab —
+                          -- 0x620 is the tab INDEX, not a has-items flag (see update()).
+                          -- Was ON for one capture: the RECOVERY tab of the item menu is
+                          -- silent while `list:items` is the committed adapter (the log shows it
+                          -- holding the screen with no fault), and every other tab reads. This
+                          -- line prints the discriminators — empty / f620 / rowName / liveName /
+                          -- boxes — to dumps/dump_items.txt. Turn OFF once diagnosed.
+                          -- 2026-07-15 capture DIAGNOSED the mute items menu: name_box
                           -- sometimes latched Txt_Title00's empty SubTxt instead of
                           -- mainTxt (pool iteration order) — fixed by the is_maintxt
                           -- preference in collect_boxes.
@@ -201,7 +208,17 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         -- Empty category: announce the section + "empty" (native flag; the UI itself is stale).
         -- reset() once on entry so the announcement isn't swallowed by the category-tab change
         -- (the announcer speaks a tab change on its own tick and drops the name that tick).
-        if category_empty() then
+        -- CORROBORATE the native flag before believing it (2026-07-28). `empty_off` (0x620) was
+        -- taken for a "this category has items" flag on 2026-07-11, and the capture taken today
+        -- refutes that: it takes the values 0,1,2,3,4 — one per category TAB — and always equals
+        -- 0x624. It is the tab INDEX. So it reads 0 on the FIRST tab whichever tab that is, and
+        -- the item menu's first tab is Recovery: that tab announced "empty" once and then stayed
+        -- mute for the whole visit while `rowName` and `liveName` were reading "Be-vida",
+        -- "Be-vida M", … perfectly (user: "es la única pestaña que no se está leyendo").
+        -- The read stays as a HINT — on a genuinely empty category the whole UI goes stale and
+        -- this is still the freshest signal there is — but a category with a readable name in the
+        -- detail pane is not empty, whatever the byte says.
+        if category_empty() and not (name_node and live_name()) then
             if not empty_shown then ann:reset() empty_shown = true end
             ann:focus(name_fn(), nil, Core.phrase(tab, I18n.t("list_empty")), nil, nil)
             return
@@ -210,17 +227,35 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         -- On a name_node screen (Items) the DETAIL PANE is the selection; the pooled list row
         -- carries a stale placeholder ("Ninguno") when empty, so DON'T fall back to it — an empty
         -- category is announced via nil_streak above instead. Plain screens use the indexed row.
+        local row = A.list_selected_row(list)
         local name
         if name_node then
             name = live_name()
+            -- FALLBACK, added 2026-07-28. The rule above ("never fall back to the pooled row")
+            -- exists because an EMPTY category leaves a stale "Ninguno" placeholder in the row —
+            -- but we have just established, from the game's own native flag, that this category is
+            -- NOT empty, so the row is real data and reading it beats saying nothing. Without this
+            -- a single failed detail-pane read makes the whole tab mute while the adapter still
+            -- holds the screen, which is exactly what the recovery tab was doing.
+            if not name then name = row and row.name end
         else
-            local row = A.list_selected_row(list)
             name = row and row.name
         end
         if not name then return end
+        -- The owned COUNT ("En posesión": 43) belongs in the announcer's `value` slot: spoken with
+        -- the item and re-spoken whenever it changes. The header always described this readout as
+        -- "the focused item name + its number/count" — the value was simply hard-wired to nil.
+        --
+        -- TRUSTED ONLY WHEN THE ROW AGREES. On a name_node screen the spoken name comes from the
+        -- DETAIL PANE, because this screen family's reflected index has been seen frozen at 0
+        -- while the cursor moved (telemetry 2026-07-06). It tracks correctly today, but if it ever
+        -- freezes again the row would supply SOMEBODY ELSE'S count, and a wrong number is worse
+        -- than no number — so the count is dropped unless the row names the same item.
+        local count = row and row.num or nil
+        if count and name_node and row.name ~= name then count = nil end
         -- screen name on entry; category tab on change; the focused item name + its
         -- number/count as it changes; the detail pane as the tooltip.
-        ann:focus(name_fn(), tab, name, nil, detail_nodes and tooltip or nil)
+        ann:focus(name_fn(), tab, name, count, detail_nodes and tooltip or nil)
     end
 
     return S

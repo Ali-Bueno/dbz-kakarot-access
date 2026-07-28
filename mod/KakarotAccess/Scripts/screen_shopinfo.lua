@@ -72,7 +72,9 @@ function ShopInfo.update()
     local s = state
     if not s then return end
     -- title ("Buy") on entry; item + price on move; the live detail panel as tooltip.
-    ann:focus(s.title, nil, s.name, s.value ~= "" and s.value or nil,
+    -- Wallet appended to the VALUE slot (see screen_shopcmn): re-spoken whenever it changes.
+    local value = Core.phrase(s.value ~= "" and s.value or nil, A.shop_money(host))
+    ann:focus(s.title, nil, s.name, value ~= "" and value or nil,
         function() return node_text(Core.member(host, "Txt_Detail")) end)
 end
 

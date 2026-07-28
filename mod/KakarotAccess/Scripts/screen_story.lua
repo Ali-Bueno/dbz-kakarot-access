@@ -26,8 +26,10 @@ local I18n = require("i18n")
 
 local Story = {}
 
+-- Blueprint name only: the census names the live host `Start_Quest_C_0`, and a speculative native
+-- fallback would never match while costing a full FindAllOf every ~4 s forever (it joins the
+-- ABSENT scan set — see the cost gate in is_active).
 local HOST_BP     = "Start_Quest_C"
-local HOST_NATIVE = "AT_UIStartQuest"
 local TASK_ROWS   = 13         -- Txt_Story_Task00..12, AT.hpp:36916-36928
 -- The pane repaints a frame or two behind the cursor, and the SUMMARY lands a little after the
 -- title does (user, 2026-07-28: "alguna que otra está sin leer el resumen"). Three polls covers
@@ -89,7 +91,15 @@ end
 
 function Story.is_active()
     tick = tick + 1
-    host = Core.first_on_screen(HOST_BP, tick) or Core.first_on_screen(HOST_NATIVE, tick)
+    -- COST GATE (user, 2026-07-28: small stutters). This menu can only be open when a menu owns
+    -- the screen; `Core.free_roam` is the game's own signal for that (minimap up = walking around)
+    -- and is a cached pointer walk, not a scan. Without it, `Start_Quest_C` is an ABSENT class for
+    -- the entire time the player is in the field and costs a full FindAllOf every ~4 s.
+    if Core.free_roam(tick) then
+        seen_key, seen_count = nil, 0
+        return false
+    end
+    host = Core.first_on_screen(HOST_BP, tick)
     -- pane_rendered, not pane_live: this host is pooled and lingers rendered after closing, so it
     -- needs a liveness gate (CLAUDE.md's cooking-latch rule) — but pane_live also demands
     -- ESlateVisibility Visible(0), which is what held screen_questreward silent forever. Opacity

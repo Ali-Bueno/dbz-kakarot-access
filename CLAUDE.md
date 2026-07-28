@@ -345,6 +345,56 @@ third error that PIERCES pcall. It killed the target list on the first NPC it re
 picker never opened on any bind. Guards go on an **enumerated whitelist of cases you have evidence
 for**, never on "everything else". Ask value types (FName/FText/string/number/enum) for **no validity
 call at all** — convert and let the conversion be the test.
+**Beware the SELF-SUSTAINING quiet/scan deadlock, and never let a fast loop depend on a slow one**
+(rule from the Kakarot map-d-pad episode, 2026-07-28 — three fix attempts before it was found).
+Quiet mode defers a pool's scan; an adapter commits only once it SEES that pool; and with no
+committed adapter the quiet heuristic stays satisfied. The loop closes on itself and is broken only
+by the player happening to press a face button (which lifts the hot window) — which is exactly why
+the symptom reads as "sometimes it works, sometimes it doesn't". Any pool an adapter needs *in
+order to activate at all* belongs in `QUIET_EXEMPT`. Two companion rules from the same bug:
+- **A 20 ms pad loop must not call scanning helpers.** It never runs `Core.begin_scan_tick`, so it
+  never REFILLS the shared budget while draining it five times faster than the 100 ms registry
+  does — starving the very scan it is waiting on. Use `Core.peek_all` (directory list or cached
+  pool, never scans) on fast loops; leave `Core.cached_all` to the registry side.
+- **Commit input edges BEFORE any early return.** `ft_prevbtn` was updated at the end of the
+  handler, after a "no data yet" bail-out, so every press made during the warm-up was swallowed
+  without even being remembered. Read the pad once at the top, compute the edges, store the new
+  button state immediately, and LATCH a press you cannot serve yet so it fires when you can.
+**Every new adapter TAXES THE WHOLE MOD: each class it names joins the ABSENT scan set** (rule from
+the Kakarot 2026-07-28 stutter report). A class that is never present still costs a full
+`FindAllOf` every `ABSENT_BACKOFF` (~4 s) forever, and `ui_core`'s own comment records that a
+cluster of those expiring on the same tick is precisely what a periodic stutter feels like. Two new
+menu adapters added ELEVEN class names and the player felt it within a session. So:
+- **No speculative class names.** A native fallback alongside a census-proven Blueprint name looks
+  like cheap insurance; it is a permanent scan for a class that has never once been observed. Name
+  only what a dump has actually shown.
+- **Gate the probe on a cheap precondition.** A menu can only be open when a menu owns the screen,
+  and `Core.free_roam(tick)` is the game's own signal for that (the minimap is up while walking
+  around and hidden the moment any menu, battle or cutscene takes over). It reads an
+  always-present class, so it is a cached pointer walk, not a scan. Put it FIRST in `is_active`.
+- Prefer a screen-directory pointer mapping over any scan when an owner field exists.
+The measurement, when a stutter is reported rather than reasoned about: `_G.__KakarotScanStats`
+carries per-class attribution and Ctrl+F5 dumps the top offenders — use it before optimising blind.
+**An adapter must claim the tick on READABLE TEXT, never on a live handle** (rule from the Kakarot
+recovery-tab episode, 2026-07-28; the same shape was caught in review on the Z-Encyclopedia days
+earlier). `screen_itemuse` returned active whenever a character bar was rendered, without checking
+that the bar yielded a name. On the item menu's RECOVERY tab the game permanently renders the whole
+party strip, so the adapter claimed that tab forever and then had nothing to say — the tab was
+silent, and it was the ONLY silent tab, because it is the only one that shows the strip. An adapter
+that holds the tick and says nothing is indistinguishable from a broken screen AND it shadows every
+adapter registered below it. Two corollaries: gate `is_active` on the text you are about to speak,
+and when a "the selected one is the only one on screen" assumption comes from a screenshot of the
+selecting mode, re-check it against the screen AT REST — require UNIQUENESS, because several on
+screen means you are looking at a list, not a selection.
+**A THROTTLED lazy-collect plus a `reset()` that nils the cache is a fault waiting to happen.**
+`screen_palette` rebuilt its node cache only when a throttle window allowed it, while `reset()`
+(which runs on every screen change) set the cache to nil — a reset landing inside a live window
+left the cache nil and the next line indexed it. The registry's pcall isolation converts that into
+`adapter '<name>' faulted in is_active`, the adapter counts as inactive, the screen below claims,
+and the next tick faults again: a flip-flop that re-announces the whole screen several times a
+second. Clear the throttle in `reset()`, and bail out explicitly if the cache is still absent after
+the collect attempt. The log line naming the faulting adapter is the fastest way in — grep for
+`faulted in is_active` before anything else.
 **A widget can be ON SCREEN and NOT IN THE VIEWPORT — check for a RenderTarget before trusting any
 liveness test** (rule from the Kakarot Z-Encyclopedia, 2026-07-28). That book's pages
 (`UAT_UICompZPageBase.RenderTarget`, drawn by `UCompZMenu.UMGRender` onto an `AZCW_BookActor`) are

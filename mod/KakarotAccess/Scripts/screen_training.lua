@@ -73,9 +73,20 @@ local function skill_list()
     return Core.member(host, "Xlist_List05_Lay7")
 end
 
--- The locked-skill panel texts (Task / How to acquire / recommended level), in
--- on-screen order — the detail readout when the skill isn't purchasable yet.
-local LOCKED_MEMBERS = { "Txt_Task", "Txt_Cond", "Txt_Recommend" }
+-- The locked-skill panel texts (Task / How to acquire), in on-screen order — the detail readout
+-- when the skill isn't purchasable yet. `Txt_Recommend` USED to be in here and that was the bug
+-- (user, 2026-07-28: "no dice qué nivel son los requeridos"): it is only the LABEL
+-- ("Nvl. recomendado:"); the figure lives in a separate node, `Txt_Num_Lv`. So the screen read
+-- the words and never the number, buried in the tooltip. It is now a proper pair, spoken with the
+-- skill itself — see recommend_text.
+local LOCKED_MEMBERS = { "Txt_Task", "Txt_Cond" }
+
+-- "Nvl. recomendado: 20" — label + figure, from the detail pane (which mirrors the highlighted
+-- row, so no cursor index is needed). Each row also carries the whole sentence in its own Txt_Lv,
+-- but the pane is the source every other reader on this screen already uses.
+local function recommend_text()
+    return Core.phrase(field_text("Txt_Recommend"), field_text("Txt_Num_Lv"))
+end
 
 -- Full detail readout for the announcer's tooltip: description first (purchasable
 -- skill), then the locked-skill panel lines that are showing.
@@ -83,8 +94,9 @@ local function detail()
     local parts = {}
     parts[#parts + 1] = clean(field_text("Txt_Detail"))
     for _, m in ipairs(LOCKED_MEMBERS) do
-        local node
-        pcall(function() node = host[m] end)
+        -- Core.member, not a raw `host[m]`: a pcall cannot catch a fetch of a member the class
+        -- does not declare, which is the uncatchable abort. Only the existence gate can.
+        local node = Core.member(host, m)
         if Core.on_screen(node) then
             parts[#parts + 1] = clean(Core.read_text(node))
         end
@@ -100,7 +112,7 @@ local function selection_sig(row, idx)
     return Core.phrase(tostring(idx), row and row.name or nil,
         field_text("Txt_Cap00"), field_text("Txt_Cap03"), field_text("Txt_Detail"),
         field_text("Txt_Task"), field_text("Txt_Cond"), field_text("Txt_Recommend"),
-        cost_text())
+        field_text("Txt_Num_Lv"), cost_text())
 end
 
 local function dump_sample(sig, row, idx)
@@ -157,6 +169,7 @@ function Training.update()
     local ki = field_text("Txt_Cap03")
     local value = Core.phrase(
         ki and string.format(I18n.t("ki_required_fmt"), ki) or nil,
+        recommend_text(),
         cost_text())
     -- screen (on entry) = the list title; tab = the current character (Txt_Cap01), spoken
     -- on change; name = the skill; value = ki + cost; tooltip = description or the

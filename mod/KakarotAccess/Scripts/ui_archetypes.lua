@@ -661,6 +661,34 @@ end
 -- ListPlateCtn (a TArray — 1-based in UE4SS Lua, so engine index + 1). Row label is TxtName
 -- on List00/01 rows and Txt_List on List03 rows (tutorials), so try both; num = TxtNum
 -- (count/price/level, nil if the row has none). nil if unreadable.
+-- The player's Zeni balance as a spoken phrase, or nil.
+--
+-- Every shop embeds the same wallet sub-widget (`UAT_UIShopCmnMoney`, AT.hpp:35622, whose
+-- `WL_Txt_Num_Money` @0x0440 holds the figure) but under a DIFFERENT member name per host —
+-- `Shop_Cmn_Money` on the shop top, `WL_Shop_Cmn_Money` on the info shop, `WL_CmnMoney` on the
+-- cooking menu — and `UAT_UIShopCommon` (the buy/sell list) skips the sub-widget entirely and
+-- inlines its own `WL_Txt_Num_Money`. Hence the candidate list; each name is tried through
+-- Core.member's existence gate, so the ones that do not apply to this host cost a quiet nil
+-- instead of the uncatchable abort.
+local MONEY_HOLDERS = { "Shop_Cmn_Money", "WL_Shop_Cmn_Money", "WL_CmnMoney" }
+
+function A.shop_money(host)
+    if not Core.valid(host) then return nil end
+    local t = Core.read_text(Core.member(host, "WL_Txt_Num_Money"))   -- inlined (Shop_Cmn_C)
+    if not t then
+        for _, m in ipairs(MONEY_HOLDERS) do
+            local w = Core.member(host, m)
+            if Core.valid(w) then
+                t = Core.read_text(Core.member(w, "Txt_Num_Money"))
+                    or Core.read_text(Core.member(w, "WL_Txt_Num_Money"))
+                if t then break end
+            end
+        end
+    end
+    if not t or t == "" then return nil end
+    return string.format(I18n.t("shop_money_fmt"), t)
+end
+
 function A.list_selected_row(list)
     local idx = A.list_select_index(list)
     if not idx then return nil end
@@ -678,7 +706,11 @@ function A.list_selected_row(list)
     -- is then the uncatchable property __index AV; go through the guarded fetch.
     return {
         name = Core.read_text(Core.member(row, "TxtName")) or Core.read_text(Core.member(row, "Txt_List")),
-        num  = Core.read_text(Core.member(row, "TxtNum")),
+        -- Both spellings, like `name` above: the archetype's own rows use `TxtNum`, the item
+        -- menu's use `Txt_Num` (F7 census: Xmenu_List_Bar00.Txt_Num = "43"). Reading only the
+        -- first is why the owned count was never available to speak.
+        num  = Core.read_text(Core.member(row, "TxtNum"))
+            or Core.read_text(Core.member(row, "Txt_Num")),
     }
 end
 

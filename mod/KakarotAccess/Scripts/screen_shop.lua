@@ -34,7 +34,9 @@ function Shop.update()
     local row = A.list_selected_row(list)
     if not row then return end
     -- "Shop" on entry (mod-added screen name); the focused item + its number as it changes.
-    ann:focus(I18n.t("shop"), nil, Core.phrase(row.name, row.num), nil, nil)
+    -- The wallet goes in the VALUE slot: spoken with the item, and re-spoken on its own whenever
+    -- it changes — which is exactly what buying or selling does (user, 2026-07-28).
+    ann:focus(I18n.t("shop"), nil, Core.phrase(row.name, row.num), A.shop_money(host), nil)
 end
 
 return Shop

@@ -750,6 +750,14 @@ local QUIET_EXEMPT = {
     -- Info_Name_C was here 2026-07-17..17: the intro-card reader now detects via
     -- the fm.InfoName pointer (no scans) — the pooled class is a dead end.
     ["Mgame_Result_C"]       = true, -- minigame "¡BRAVO!" result sheet (screen_fishresult)
+    -- World-map travel icons: the SAME self-sustaining deadlock as the loading screens above,
+    -- found 2026-07-28 behind "the map d-pad sometimes works, sometimes not". The open world map
+    -- looks exactly like a camera cutscene to the quiet heuristic (no committed adapter, mm root
+    -- reachable, no battle, no minimap), so this pool's scan was deferred; but screen_map only
+    -- commits once it SEES these icons, and without the commit quiet never lifts. Self-sustaining,
+    -- and broken only by the player mashing a face button — which is why it felt random. The
+    -- nothing-live refinement bounds the exemption to exactly the case that matters.
+    ["Map_World_Icon_C"]     = true, -- fast-travel destination icons (screen_map)
 }
 
 -- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from
