@@ -162,7 +162,7 @@ local function face_char(emb)
     pcall(function()
         for j = 1, n do
             local tex = tp[j].ParameterValue
-            if tex and tex:IsValid() then
+            if Core.valid(tex) then
                 tok = tex:GetFullName():match("/Charicon_%w+/%a-_(%a+)")
                 if tok then return end
             end
@@ -394,7 +394,7 @@ local function skills_text()
         if i == 0 then
             pcall(function() p = d.WL_SkillParts end)
         else
-            pcall(function() p = d["CommuSkillPart" .. i] end)
+            pcall(function() p = Core.member(d, "CommuSkillPart" .. i) end)
         end
         if Core.valid(p) and Core.is_visible(p) then
             local row = skill_row(p)
@@ -418,7 +418,7 @@ local function board_summary()
     pair("WL_Txt_Rank", "WL_Txt_Rank_Num00_00")    -- rank caption + value
     pcall(function()
         for i = 0, 2 do
-            local sk = d[string.format("WL_Brd_Activ_Skill%02d", i)]
+            local sk = Core.member(d, string.format("WL_Brd_Activ_Skill%02d", i))
             if Core.valid(sk) and Core.is_visible(sk) then
                 local t = read(sk.WL_Txt_Activ_Skill)
                 if t then parts[#parts + 1] = t end
@@ -436,7 +436,7 @@ local function reward_parts()
     local parts = {}
     for i = 0, 2 do
         local bar
-        pcall(function() bar = det[string.format("Reward_Bar%02d", i)] end)
+        pcall(function() bar = Core.member(det, string.format("Reward_Bar%02d", i)) end)
         if Core.valid(bar) and Core.is_visible(bar) then
             local p = Core.phrase(read(bar.Txt_Reward), read(bar.Txt_Num), read(bar.Txt_Max00))
             if p ~= "" then parts[#parts + 1] = p end

@@ -283,14 +283,17 @@ end)
 
 Prefer **event-driven** over polling — it's cheaper and more responsive:
 
-1. **Level/mode changes** → `RegisterLoadMapPostHook`, `RegisterBeginPlayPostHook`,
-   `RegisterInitGameStatePostHook`.
-2. **A screen/widget appearing** → `NotifyOnNewObject` on the **specific** `WBP_*_C` class you care about
-   (fires per construction, subclasses included). Cache the ref on first sight. **Do NOT register on the
-   `UserWidget`/`TextBlock` base classes** — that fires for every widget in the game and crashes on
-   mid-construction access during a construction burst (see §9 "firehose"); use a throttled `FindAllOf`
-   for any "any-widget" need instead.
-3. **A value/text/selection changing** → `RegisterHook` on the game's setter (e.g. a `SetText`-equivalent
+1. **Level/mode changes** → `RegisterInitGameStatePostHook` or `RegisterBeginPlayPostHook`.
+   ⚠ **`RegisterLoadMapPre/PostHook` crashes some games** — both DB mods had to disable it. The
+   hook-free substitute is a **world-epoch poll**: compare the address of the current world (read from
+   a persistent root) once per tick and flush every cache when it changes.
+2. **Actor acquisition** → `RegisterBeginPlayPostHook`: the actor is fully initialised, unlike a
+   construction notify, and it costs no scan. This is the recommended default
+   ([ue4ss-mod-architecture.md §2](ue4ss-mod-architecture.md)).
+3. **A screen/widget appearing** → if you must watch construction, `NotifyOnNewObject` on the
+   **specific** `WBP_*_C` class only, never a base class (§9). Both mods here ended up dropping it
+   entirely — read [ue4ss-mod-architecture.md §4](ue4ss-mod-architecture.md) first.
+4. **A value/text/selection changing** → `RegisterHook` on the game's setter (e.g. a `SetText`-equivalent
    or a cursor-move UFunction). Fires for **all instances** of the class; `self` is the instance. Read
    wrapped params with `param:Get()`.
 
@@ -345,23 +348,22 @@ Prefer the **top-level instance** (direct GameInstance child) when a class has s
 window + a nested collapsed one) — caching the wrong one makes detection silently fail.
 
 ### Broad `NotifyOnNewObject` on a base widget class is a FIREHOSE → crash
-`NotifyOnNewObject` fires **by inheritance**, so registering on a base class runs your callback for **every
-subclass instance**. `NotifyOnNewObject("/Script/UMG.UserWidget", …)` (and `TextBlock`/`RichTextBlock`)
-fires for **every widget/text block in the game** — hundreds constructed in a burst when a dialog or menu
-opens. Touching each object **mid-construction** in that burst (even just `GetFullName()`) hard-crashed a
-UE4.26 game (DBZ Sparking Zero) the instant the first save-data dialog appeared — a native abort pcall
-can't catch. A per-tick `FindAllOf` is slow but does NOT crash there, because it only ever sees
-**already-constructed** objects; the crash is specific to the construction-time callback × volume.
-**Rules:**
-- Register `NotifyOnNewObject` **only on the narrow, specific classes you act on** (`WBP_Dialog_000_C`, a
-  named HUD/loading class), never on `UserWidget`/`TextBlock`/`RichTextBlock`. The working **DBZK_Fix** mod
-  (same UE4 AT engine) confirms this: it only ever notifies on `LocalPlayer`, `CameraComponent`,
-  `ATCheatManager`, and specific scene classes — and touching the fresh object in the callback (`IsValid()`
-  then read/write) is fine at that low volume/breadth.
-- If you genuinely need "any widget" (focus tracking), use a **throttled, load-gated `FindAllOf`** for that
-  one path, or the engine's focused-widget accessor — not a base-class notify.
-- Save/menu flows often have a clean UFunction hook point instead of watching widgets: DBZK_Fix triggers
-  off `RegisterHook("/Script/AT.ATSaveManager:Load"/"Save")`. Look for the game's save-manager class.
+**The rule and its two independent root causes are canonical in
+[ue4ss-mod-architecture.md §4](ue4ss-mod-architecture.md)** — short version: it fires by inheritance,
+a base class means every widget in the game, mid-construction access hard-aborts, and **both mods
+dropped it entirely**. Field notes that live here rather than there:
+
+- A per-tick `FindAllOf` is slow but does **NOT** crash the same way, because it only ever sees
+  **already-constructed** objects. The crash is specific to the construction-time callback × volume —
+  which is why "slow" and "unsafe" are different axes here.
+- The narrow-registration variant genuinely works: the **DBZK_Fix** mod (same UE4 AT engine) only ever
+  notifies on `LocalPlayer`, `CameraComponent`, `ATCheatManager` and specific scene classes, and
+  touching the fresh object in the callback (`IsValid()` then read/write) is fine at that volume.
+- If you need "any widget" (focus tracking), use a **throttled, load-gated `FindAllOf`** for that one
+  path, or the engine's focused-widget accessor — never a base-class notify.
+- Save/menu flows often have a clean UFunction hook point instead of watching widgets: DBZK_Fix
+  triggers off `RegisterHook("/Script/AT.ATSaveManager:Load"/"Save")`. Look for the game's
+  save-manager class.
 
 ### Some property reads ABORT UNCATCHABLY (pcall can't save you)
 Calling a method on a null/dangling UObject, and **nested struct reads like `widget.RenderTransform

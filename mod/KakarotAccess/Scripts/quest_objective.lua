@@ -15,6 +15,7 @@
 -- validity/visibility guarded; unreadable nodes are simply skipped.
 
 local Core = require("ui_core")
+local Mem = require("mem")            -- crash black box only (Mem.mark)
 local Speech = require("speech")
 local I18n = require("i18n")
 local Registry = require("ui_registry")
@@ -68,13 +69,26 @@ local tick = 0              -- monotonic tick for Core's cache/back-off bookkeep
 local last_sig = { main = nil, sub = nil }
 local sig_seeded = false
 local on_change = nil        -- fn(kind) set via Quest.set_on_change
+-- fn(kind) set via Quest.set_on_gone. Declared HERE, above its only user (presence_check): a
+-- local referenced above its own declaration compiles to a global read, is nil at runtime and
+-- takes the mod down from boot — the 2026-07-25 lesson the globals lint exists to catch.
+local on_gone = nil
 
--- First readable text among a host's candidate member names (blueprint members that
--- may be absent read as nil — safe).
+-- First readable text among a host's candidate member names.
+--
+-- The comment that used to sit here said absent blueprint members "read as nil — safe". That is
+-- the opposite of true on this engine, and it is the single most expensive wrong belief in this
+-- codebase's history: fetching a member a class does NOT declare is an UNCATCHABLE abort that
+-- unwinds below the Lua boundary, so the `pcall` on the next line cannot contain it. It killed the
+-- process on 2026-07-17 (`bar.Txt00`). This function is built ENTIRELY around trying names that
+-- are expected to be absent, at 300 ms, on a host the game hides and rebuilds when a battle
+-- starts — i.e. the most likely mid-combat crash site in the mod (2026-07-26). `Core.member` asks
+-- the class first and returns nil for a name it does not declare, which is what this loop wanted
+-- the raw fetch to do all along.
 local function first_text(host, names)
     for _, nm in ipairs(names) do
         local node
-        if pcall(function() node = host[nm] end) and Core.valid(node) then
+        if pcall(function() node = Core.member(host, nm) end) and Core.valid(node) then
             local t = read_clean(node)
             if t then return t end
         end
@@ -87,7 +101,9 @@ end
 -- the row's contribution to the change signature.
 local function row_line(host, member)
     local row
-    if not pcall(function() row = host[member] end) or not Core.valid(row) then return nil end
+    -- Gated fetch, same reason as first_text above: the M/S row members are not all declared on
+    -- every host variant, and an undeclared name here is an abort, not a nil.
+    if not pcall(function() row = Core.member(host, member) end) or not Core.valid(row) then return nil end
     if not Core.on_screen(row) then return nil end
     local obj = read_clean(Core.member(row, "Txt_List_00"))
     if not obj then return nil end
@@ -122,8 +138,11 @@ local function objective_text()
     end
     group("main", MAIN_TITLE, MAIN_ROWS)
     group("sub", SUB_TITLE, SUB_ROWS)
-    if #parts == 0 then return nil end
-    return table.concat(parts, ". "), sigs.main, sigs.sub
+    -- The 4th return is "the quest HUD was READABLE this poll", which is a different fact from
+    -- "there was an objective on it" and the only safe basis for concluding that a quest class
+    -- ENDED (see presence_check). A host with nothing on it is still a readable host.
+    if #parts == 0 then return nil, nil, nil, true end
+    return table.concat(parts, ". "), sigs.main, sigs.sub, true
 end
 
 -- Diff one group's signature against its last non-nil value; returns the group key
@@ -136,20 +155,48 @@ local function sig_changed(gkey, sig, was_seeded)
     return nil
 end
 
-local function signal_check(sig_main, sig_sub)
+-- Polls a class must be absent FROM A READABLE HUD before we call it finished. The HUD repaints
+-- between phases, so one empty frame means nothing.
+local GONE_POLLS = 3
+local gone_hold = { main = 0, sub = 0 }
+
+-- Did this quest class DISAPPEAR? Only ever answered when the HUD host itself was readable this
+-- poll: the HUD is also hidden by a level load, a fight and any open menu, and treating those as
+-- "the side story ended" would hand the radar back to the main quest exactly when the player is
+-- mid-quest — including the case the user asked about, a side story that sends you to another
+-- map. No host, no verdict.
+local function presence_check(gkey, sig, host_ok)
+    if not host_ok or sig then gone_hold[gkey] = 0 return end
+    gone_hold[gkey] = gone_hold[gkey] + 1
+    if gone_hold[gkey] == GONE_POLLS and last_sig[gkey] ~= nil then
+        -- Forget the stored signature too, so a NEW quest of this class reads as a change and
+        -- re-arms the focus instead of being swallowed as "same as last time".
+        last_sig[gkey] = nil
+        if on_gone then pcall(on_gone, gkey) end
+    end
+end
+
+local function signal_check(sig_main, sig_sub, host_ok)
     local was = sig_seeded
     if sig_main or sig_sub then sig_seeded = true end
     -- Evaluate BOTH groups (no short-circuit): each must update its stored signature
-    -- every pass. Main outranks sub when both changed in the same pass.
+    -- every pass.
     local cm = sig_changed("main", sig_main, was)
     local cs = sig_changed("sub", sig_sub, was)
-    local kind = cm or cs
-    if kind and on_change then pcall(on_change, kind) end
+    -- Report each changed class SEPARATELY rather than picking a winner here. The old
+    -- `kind = cm or cs` silently dropped a sub advance whenever a main line moved in the same
+    -- pass, which is one of the ways a multi-phase side story lost the radar. Which class should
+    -- win is a radar decision — nav_tracker holds the quest focus and arbitrates.
+    if cm and on_change then pcall(on_change, "main") end
+    if cs and on_change then pcall(on_change, "sub") end
+    presence_check("main", sig_main, host_ok)
+    presence_check("sub", sig_sub, host_ok)
 end
 
 -- Poll step: announce the objective only when it changes, and only when no menu is
 -- open and no level transition is in flight (never talk over a menu or a cutscene load).
 local function step()
+    Mem.mark("quest.step")
     if Transition.active() then return end
     if Registry.active_adapter() then return end
     -- Don't cut a PROTECTED line (a reward notice / tutorial instruction still
@@ -162,8 +209,8 @@ local function step()
     -- no budget left and never locate the HUD host.
     tick = tick + 1
     Core.begin_scan_tick()
-    local text, sig_main, sig_sub = objective_text()
-    signal_check(sig_main, sig_sub)
+    local text, sig_main, sig_sub, host_ok = objective_text()
+    signal_check(sig_main, sig_sub, host_ok)
     -- The HUD hides in combat/menus/transitions and reads nil. Do NOT let that overwrite
     -- `last`: if it did, the SAME objective re-appearing after a fight would look new and
     -- be re-announced every time the player leaves battle (user 2026-07-24). Keep the gate
@@ -201,6 +248,13 @@ end
 -- kind = "main" | "sub". Runs on the game thread, inside this loop's pcall.
 function Quest.set_on_change(fn)
     on_change = fn
+end
+
+-- Radar wiring (app.lua): fn(kind) fires once when a quest class LEAVES a readable HUD, i.e. that
+-- story finished or was abandoned. kind = "main" | "sub". Lets the radar release its quest focus
+-- and fall back to the normal priority order.
+function Quest.set_on_gone(fn)
+    on_gone = fn
 end
 
 function Quest.start()
@@ -265,7 +319,7 @@ local function dump_state(text)
     for _, rows in ipairs({ MAIN_ROWS, SUB_ROWS }) do
         for _, m in ipairs(rows) do
             local row
-            local okr = pcall(function() row = host[m] end)
+            local okr = pcall(function() row = Core.member(host, m) end)
             local valid = okr and Core.valid(row) or false
             local on = valid and Core.on_screen(row) or false
             local t0, t1
@@ -280,7 +334,7 @@ local function dump_state(text)
     for _, nm in ipairs({ "Txt_Main00", "Txt_Sub00", "Txt_Title", "Txt_Navi_Detail",
                           "WL_MainQuestListTitle", "WL_SubQuestListTitle" }) do
         local node, t
-        pcall(function() node = host[nm] end)
+        pcall(function() node = Core.member(host, nm) end)
         if Core.valid(node) then pcall(function() t = Core.read_text(node) end) end
         f:write(string.format("  title %s = %s\n", nm, tostring(t)))
     end

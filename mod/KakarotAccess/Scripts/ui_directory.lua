@@ -50,10 +50,20 @@ end
 -- Guarded property hop. `o[name]` never returns nil for a null/dead field — UE4SS hands
 -- back an INVALID RemoteObject — so Core.valid is the only trustworthy check (the same
 -- rule as Core.array_of).
+-- The fetch goes through Core.member (2026-07-26), not a raw `o[name]`. The validity half was
+-- always here; the PROPERTY-EXISTENCE half was not, and this file needs it more than any other:
+-- asking a class for a member it does not declare is an uncatchable abort, and two things here
+-- do exactly that BY DESIGN. `find_hud` probes `UIFieldManager` on every PlayerController-family
+-- HUD precisely to reject the title's plain AHUD, which does not have it; and the mapped chains
+-- try ALTERNATIVES (SkillTreeMenu vs SkillCustomize, m_xSaveMenu vs m_xLoadMenu), so the losing
+-- branch is by definition a member the object does not declare. The pcall below cannot contain
+-- either — UE4SS raises them under the Lua boundary. Core.member asks the class first and
+-- returns nil for a name it does not declare, which is the answer both call sites already want.
+-- It fails OPEN when the class cannot be identified, so nothing that resolves today stops.
 local function prop(o, name)
     if not Core.valid(o) then return nil end
     local v
-    if not pcall(function() v = o[name] end) then return nil end
+    if not pcall(function() v = Core.member(o, name) end) then return nil end
     if not Core.valid(v) then return nil end
     return v
 end

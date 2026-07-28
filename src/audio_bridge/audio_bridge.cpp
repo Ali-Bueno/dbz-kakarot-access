@@ -93,11 +93,16 @@ static bool load_wav(const wchar_t *path, Cue *out) {
     WAVEFORMATEX fmt = {0};
     BYTE *data = NULL;
     UINT32 dataLen = 0;
-    DWORD off = 12;
-    while (off + 8 <= size) {
+    /* All chunk arithmetic is 64-bit ON PURPOSE. In DWORD math `off + 8 + len` WRAPS, so a
+     * chunk declaring a length near 0xFFFFFFFF passed the bounds check below and then drove
+     * a ~4 GB out-of-bounds memcpy, and the advance wrapped too (the walk could loop
+     * forever). Both operands are 32-bit values, so no 64-bit sum here can overflow. Any
+     * malformed or truncated WAV dropped in sounds\ reaches this. */
+    uint64_t off = 12;
+    while (off + 8 <= (uint64_t)size) {
         const BYTE *id = buf + off;
         DWORD len = *(const DWORD *)(buf + off + 4);
-        if (off + 8 + len > size) break;
+        if (off + 8 + (uint64_t)len > (uint64_t)size) break;
         if (memcmp(id, "fmt ", 4) == 0 && len >= 16) {
             memcpy(&fmt, buf + off + 8, sizeof(WAVEFORMATEX) < len ? sizeof(WAVEFORMATEX) : len);
             fmt.cbSize = 0;
@@ -105,13 +110,16 @@ static bool load_wav(const wchar_t *path, Cue *out) {
             data = buf + off + 8;
             dataLen = len;
         }
-        off += 8 + len + (len & 1);
+        off += (uint64_t)8 + len + (len & 1);
     }
     if (fmt.wFormatTag != WAVE_FORMAT_PCM || fmt.wBitsPerSample != 16 || !data || dataLen == 0) {
         free(buf); return false;
     }
+    /* Release whatever this cue held before: on a retried init load_wav would otherwise
+     * orphan the previous buffer. */
+    free(out->pcm);
     out->pcm = (BYTE *)malloc(dataLen);
-    if (!out->pcm) { free(buf); return false; }
+    if (!out->pcm) { out->bytes = 0; free(buf); return false; }
     memcpy(out->pcm, data, dataLen);
     out->bytes = dataLen;
     out->fmt = fmt;
@@ -174,6 +182,33 @@ static const char *hr_err(const char *what, HRESULT hr) {
     return g_errbuf;
 }
 
+/* Undo a partial (or complete) init: source voices first, then the mastering voice, then the
+ * engine, then the DLL — the XAudio2 teardown order. Every handle is NULLed and every PCM
+ * buffer freed, so a later init() starts from scratch instead of stacking a second engine and
+ * a second mastering voice on top of the first. Safe at any stage: every step is NULL-checked.
+ * CoInitializeEx is deliberately NOT balanced here — do_init does not know whether COM was
+ * already up on this thread (inside the game it is), and uninitialising someone else's
+ * apartment would be worse than the leak. */
+static void release_all(void) {
+    Cue *cues[] = { &g_beacon, &g_arrival, &g_tone, &g_item, &g_enemy };
+    for (int i = 0; i < (int)(sizeof(cues) / sizeof(cues[0])); ++i) {
+        if (cues[i]->voice) { cues[i]->voice->Stop(0); cues[i]->voice->DestroyVoice(); }
+        free(cues[i]->pcm);
+        memset(cues[i], 0, sizeof(Cue));
+    }
+    g_toneOn = false;
+    if (g_master) { g_master->DestroyVoice(); g_master = NULL; }
+    if (g_engine) { g_engine->Release(); g_engine = NULL; }
+    if (g_xaudioDll) { FreeLibrary(g_xaudioDll); g_xaudioDll = NULL; }
+    g_ready = false;
+}
+
+/* Every failure return in do_init goes through here, so no error path can leak. */
+static const char *init_fail(const char *msg) {
+    release_all();
+    return msg;
+}
+
 static const char *do_init(void) {
     if (g_ready) return NULL;
 
@@ -183,13 +218,13 @@ static const char *do_init(void) {
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
     g_xaudioDll = LoadLibraryW(L"xaudio2_9.dll");
-    if (!g_xaudioDll) return "xaudio2_9.dll not found";
+    if (!g_xaudioDll) return init_fail("xaudio2_9.dll not found");
     XAudio2CreateFn create = (XAudio2CreateFn)GetProcAddress(g_xaudioDll, "XAudio2Create");
-    if (!create) return "XAudio2Create export not found";
+    if (!create) return init_fail("XAudio2Create export not found");
     HRESULT hr = create(&g_engine, 0, XAUDIO2_DEFAULT_PROCESSOR);
-    if (FAILED(hr)) return hr_err("XAudio2Create failed", hr);
+    if (FAILED(hr)) return init_fail(hr_err("XAudio2Create failed", hr));
     hr = g_engine->CreateMasteringVoice(&g_master);
-    if (FAILED(hr)) return hr_err("CreateMasteringVoice failed", hr);
+    if (FAILED(hr)) return init_fail(hr_err("CreateMasteringVoice failed", hr));
 
     XAUDIO2_VOICE_DETAILS det;
     g_master->GetVoiceDetails(&det);
@@ -202,23 +237,27 @@ static const char *do_init(void) {
     wchar_t *slash = wcsrchr(dir, L'\\');
     if (slash) *(slash + 1) = 0;
 
+    /* _snwprintf_s(_TRUNCATE), not _snwprintf: the plain form does NOT NUL-terminate when
+     * the result fills the buffer, and `path` goes straight to CreateFileW. A long enough
+     * install path would hand the API an unterminated buffer. Truncation now yields a
+     * terminated (and simply nonexistent) path, i.e. the normal "missing file" outcome. */
     wchar_t path[MAX_PATH];
-    _snwprintf(path, MAX_PATH, L"%ssounds\\beacon.wav", dir);
-    if (!load_wav(path, &g_beacon)) return "sounds\\beacon.wav missing or not PCM16";
-    _snwprintf(path, MAX_PATH, L"%ssounds\\arrived.wav", dir);
-    if (!load_wav(path, &g_arrival)) return "sounds\\arrived.wav missing or not PCM16";
+    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%ssounds\\beacon.wav", dir);
+    if (!load_wav(path, &g_beacon)) return init_fail("sounds\\beacon.wav missing or not PCM16");
+    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%ssounds\\arrived.wav", dir);
+    if (!load_wav(path, &g_arrival)) return init_fail("sounds\\arrived.wav missing or not PCM16");
 
     if (FAILED(g_engine->CreateSourceVoice(&g_beacon.voice, &g_beacon.fmt)))
-        return "CreateSourceVoice(beacon) failed";
+        return init_fail("CreateSourceVoice(beacon) failed");
     if (FAILED(g_engine->CreateSourceVoice(&g_arrival.voice, &g_arrival.fmt)))
-        return "CreateSourceVoice(arrival) failed";
+        return init_fail("CreateSourceVoice(arrival) failed");
 
     /* Named category cues for explore mode (optional — a missing/invalid file stays
      * silent instead of failing init, so the core radar always comes up). */
-    _snwprintf(path, MAX_PATH, L"%ssounds\\item.wav", dir);
+    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%ssounds\\item.wav", dir);
     if (load_wav(path, &g_item))
         g_engine->CreateSourceVoice(&g_item.voice, &g_item.fmt);
-    _snwprintf(path, MAX_PATH, L"%ssounds\\enemy.wav", dir);
+    _snwprintf_s(path, MAX_PATH, _TRUNCATE, L"%ssounds\\enemy.wav", dir);
     if (load_wav(path, &g_enemy))
         g_engine->CreateSourceVoice(&g_enemy.voice, &g_enemy.fmt);
 
@@ -236,12 +275,12 @@ static const char *do_init(void) {
         g_tone.fmt.nAvgBytesPerSec = rate * 2;
         g_tone.bytes = rate * 2;
         g_tone.pcm = (BYTE *)malloc(g_tone.bytes);
-        if (!g_tone.pcm) return "tone buffer alloc failed";
+        if (!g_tone.pcm) return init_fail("tone buffer alloc failed");
         int16_t *p = (int16_t *)g_tone.pcm;
         for (UINT32 i = 0; i < rate; i++)
             p[i] = (int16_t)(sinf(6.2831853f * freq * (float)i / (float)rate) * amp * 32767.0f);
         if (FAILED(g_engine->CreateSourceVoice(&g_tone.voice, &g_tone.fmt)))
-            return "CreateSourceVoice(tone) failed";
+            return init_fail("CreateSourceVoice(tone) failed");
     }
 
     g_ready = true;

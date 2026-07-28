@@ -35,3 +35,6 @@ mod/KakarotAccess/Scripts/dev_probe.txt
 
 # Release packages built by package.ps1
 /dist/
+
+# Crash black box (memory-mapped marker ring, written at runtime by mem_bridge)
+mod/KakarotAccess/Scripts/crash_trail.bin

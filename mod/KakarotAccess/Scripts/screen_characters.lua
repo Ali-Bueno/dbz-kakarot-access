@@ -24,6 +24,7 @@
 -- so we pick the live one each tick. Fully guarded: any failed read -> inactive (harmless).
 
 local Core = require("ui_core")
+local CharBar = require("ui_charbar")
 local I18n = require("i18n")
 
 local Chars = {}
@@ -31,35 +32,12 @@ local Chars = {}
 local ann = Core.make_announcer()
 local host, tick = nil, 0
 
--- Slot 0 is reachable as the collapsed UPROPERTY; 1..5 are recovered by offset.
-local BAR_BASE  = 0x3B0   -- AT.hpp:36402, UAT_UIStartChar.WL_StartCharBarList
-local BAR_SLOTS = 6       -- its declared size 0x30 / 8 bytes per pointer
-local SLOT_PROP = { [0] = "WL_StartCharBarList" }
-for i = 1, BAR_SLOTS - 1 do SLOT_PROP[i] = "StartCharBar" .. i end
-
--- Registered lazily against the host's RUNTIME class path (screen_community's approach): the live
--- object is a Blueprint subclass, so registering on the native class name would not apply to it.
-local registered = false
-local function ensure_registered()
-    if registered or not Core.valid(host) then return end
-    local cls
-    pcall(function() cls = host:GetClass():GetFullName():match("%s(.+)$") end)
-    if not cls then return end
-    registered = true
-    for i = 1, BAR_SLOTS - 1 do
-        pcall(function()
-            RegisterCustomProperty({
-                ["Name"] = SLOT_PROP[i],
-                ["Type"] = PropertyTypes.ObjectProperty,
-                ["BelongsToClass"] = cls,
-                ["OffsetInternal"] = BAR_BASE + i * 8,
-            })
-        end)
-        -- Custom properties are invisible to ForEachProperty, so Core.member's existence gate has
-        -- to be told about them or it would refuse every slot but the first.
-        Core.allow_member(SLOT_PROP[i])
-    end
-end
+-- Six rows (AT.hpp:36402, WL_StartCharBarList @0x3B0, declared size 0x30 / 8 = 6), reached by
+-- their Blueprint WidgetTree names — `Start_Char_C_1.WidgetTree_0.Start_Char_Bar00..05` in the
+-- 2026-07-28 F7 census. See ui_charbar.lua for why the earlier RegisterCustomProperty route was
+-- withdrawn: it stopped resolving after a map transition and left this list reading only row 1,
+-- which is exactly the "moving the cursor announces nothing" bug.
+local roster = CharBar.new({ name = "Start_Char_Bar%02d", count = 6 })
 
 -- Is the screen interactive? GetCursorIndex is reflected (AT.hpp:36402) and returns -1 while the
 -- list is not focused, which is the gate that keeps this adapter dormant behind the stats sheet /
@@ -70,35 +48,12 @@ local function has_cursor()
     return ok and type(idx) == "number" and idx >= 0
 end
 
--- Does this bar carry the cursor? Either marker counts: which one the game drives is not
--- documented, and requiring both would silence the screen if only one is used.
-local function bar_selected(bar)
-    return Core.is_visible(Core.member(bar, "Pnl_Curs_All"))
-        or Core.is_visible(Core.member(bar, "Img_Curs00"))
-end
-
--- Every populated bar of the visible window, in slot order.
-local function bars()
-    local list = {}
-    for i = 0, BAR_SLOTS - 1 do
-        local bar = Core.member(host, SLOT_PROP[i])
-        if Core.valid(bar) then list[#list + 1] = bar end
-    end
-    return list
-end
-
--- Read one bar. Uses read_text (mainTxt, else GetText) since Txt_Lv/Txt_Power_Num render their
--- value via the parent FText. Txt_Name_Guest is the guest-character slot's own name node.
+-- A bar with no name is skipped here (verified behaviour): on this screen an unnamed bar is an
+-- empty tail slot, not a selectable row.
 local function read_bar(bar)
-    local name = Core.read_text(Core.member(bar, "Txt_Name"))
-        or Core.read_text(Core.member(bar, "Txt_Name_Guest"))
-    if not name then return nil end
-    return {
-        name  = name,
-        lv    = Core.read_text(Core.member(bar, "Txt_Lv")),         -- e.g. "Lvl 2"
-        pow   = Core.read_text(Core.member(bar, "Txt_Power")),      -- "BP" label
-        num   = Core.read_text(Core.member(bar, "Txt_Power_Num")),  -- e.g. "365"
-    }
+    local r = CharBar.read(bar)
+    if not r or not r.name then return nil end
+    return r
 end
 
 -- The bar the cursor is on: the marked one, else the one the cursor index points at within the
@@ -106,18 +61,22 @@ end
 -- usable index still reads exactly as much as it did before).
 local function selected_row()
     if not Core.valid(host) then return nil end
-    ensure_registered()
-    local list = bars()
+    local list = roster:bars(host)
     if #list == 0 then return nil end
-    for _, bar in ipairs(list) do
-        if bar_selected(bar) then return read_bar(bar) end
-    end
+    -- INDEX FIRST on this screen (order flipped 2026-07-28). GetCursorIndex/GetViewIndex are
+    -- reflected UFunctions on UAT_UIStartChar (AT.hpp:36425-36427), so the selection is a
+    -- deterministic read; the visual markers are a guess about which node the game drives, and a
+    -- marker that never clears is unfalsifiable. Absolute cursor minus the scroll offset gives the
+    -- position within the visible window.
     local cur, view
     pcall(function() cur = host:GetCursorIndex() end)
     pcall(function() view = host:GetViewIndex() end)
     if type(cur) == "number" then
         local pos = cur - (type(view) == "number" and view or 0)
         if pos >= 0 and pos < #list then return read_bar(list[pos + 1]) end
+    end
+    for _, bar in ipairs(list) do
+        if CharBar.marked(bar) then return read_bar(bar) end
     end
     return read_bar(list[1])
 end

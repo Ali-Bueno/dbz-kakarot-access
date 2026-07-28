@@ -2,7 +2,210 @@
 
 > Per-mod status ledger / dashboard. Open this first when resuming the mod so progress isn't re-derived from the code each session. Keep it short — a dashboard, not docs. Update the **Next step** line and the section table whenever you finish a chunk. Derive every value from the game's real data — no guessed offsets.
 
-**Last updated:** 2026-07-25 (c) — the user's retest found 7 screens silent; the UE4SS.log settled
+**Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
+
+**Last updated:** 2026-07-28 (k) — **shops announce the Zeni balance; map remembers the travel
+point.** (1) No adapter read the wallet at all. Every shop embeds the same `UAT_UIShopCmnMoney`
+sub-widget (AT.hpp:35622, figure in `WL_Txt_Num_Money`) but under a DIFFERENT member per host
+(`Shop_Cmn_Money` / `WL_Shop_Cmn_Money` / `WL_CmnMoney`), and `UAT_UIShopCommon` skips the
+sub-widget and inlines its own — hence one shared `A.shop_money(host)` trying each name through the
+existence gate. Wired into `screen_shop`, `screen_shopcmn` and `screen_shopinfo` in the announcer's
+VALUE slot, which is what makes it re-speak on its own the moment the balance changes, i.e. on
+every purchase and sale. New key `shop_money_fmt`. (2) The world-map d-pad selection now survives
+`reset()`, remembered BY NAME (`ft_last_name`) rather than by index: pressing A opens the travel
+prompt, which is a different adapter, so the registry reset used to drop you back at the top of the
+list when you declined. Restored silently; a name absent from the rebuilt list restores nothing, so
+it self-expires across maps with no explicit clearing. Previous entry: 2026-07-28 (j) — **map fast-travel d-pad, round 3 (the intermittency).** An opus
+investigation found the fast loop was hostage to the slow one in three independent ways, all fixed:
+(1) **self-sustaining quiet deadlock** — quiet mode deferred the `Map_World_Icon_C` scan, but
+screen_map only commits once it sees those icons, and with no committed adapter the quiet
+heuristic stayed satisfied (an open world map looks exactly like a camera cutscene to it). Broken
+only by the player pressing a face button, hence "sometimes". Added to `QUIET_EXEMPT`. (2) **the
+pad loop was stealing the scan budget** — `ft_host()` used `Core.cached_all` on a 20 ms loop that
+never calls `begin_scan_tick`, so it drained the budget 5× faster than the registry refills it,
+starving the icon scan it was waiting for; now `Core.peek_all` (never scans). (3) **presses were
+swallowed during warm-up** — `ft_prevbtn` was committed at the END of the handler, after the "no
+list yet" early return, so every press made while the list was building vanished; edges are now
+computed and committed at the top, and a direction pressed too early is LATCHED and replayed. Plus
+`ft_guidance` now builds the destination list ITSELF (wall-clock throttled, 250 ms) instead of
+waiting on the 100 ms poll. KNOWN RESIDUAL, not fixed: a PARTIAL build still latches — if the
+native InfoIcon block is populated while the icon pool is stale, every entry degrades to "map point
+N" and no later build replaces it (`ft_build` keeps whatever it got). Previous entry: 2026-07-28 (i) — **the mute Recovery tab was a WRONG DERIVED FACT, not a bug.**
+The debug capture settled it: `0x620` is the category TAB INDEX (values 0-4, always equal to
+`0x624`), never a has-items flag, so the first tab always read "empty". Corrected in *Derived
+facts*; the native read is now only a hint and is corroborated against the detail-pane name.
+**Lesson worth keeping: a derived fact confirmed on a single sample can encode the sample instead
+of the field** — 0-vs-nonzero looked like a boolean because the one category checked in the 07-11
+F4 session happened to be both first AND empty. Also fixed: the map's on-demand objective re-read
+fired from `reset()`, which runs on EVERY screen change, so opening/closing the WORLD map
+re-announced the objective repeatedly — now area-map only and rate-limited to once per 20 s.
+STILL OPEN: the fast-travel d-pad is usable but takes a long time to become responsive after the
+map opens; the per-tick cost is fixed, so the remaining latency is the `ft_points` build waiting on
+the budget-gated `Map_World_Icon_C` re-scan — not yet measured, do not guess at it. Previous entry: 2026-07-28 (h) — **map fast-travel d-pad: slow, and dead from the second open.**
+Both bugs were in one function, `screen_map.lua:ft_host()`. (1) It picked the first `Core.valid`
+instance with a Transient path and never checked `on_screen` — but these hosts are POOLED and
+multi-instance, and a closed pooled widget stays valid forever, so the second open returned the
+PREVIOUS off-screen instance and every native `selIndex` write went to a host the confirm core is
+not reading. Textbook case of the standing "invalidate by `on_screen`, never by validity alone"
+rule, and the works-once-then-dead intermittency is its signature. (2) It runs on the 20 ms pad
+loop and walked every pooled instance calling `GetFullName()` on each — a reflection call per
+instance per tick, growing as instances accumulate through a session: that was the sluggish d-pad.
+Now memoised (with `Core.valid` still on every use — that guard is never skipped — and the costlier
+`on_screen` re-check throttled to 250 ms) and cleared in `reset()`, so each map entry resolves
+afresh. Also cleared `ft_kb_cmd` in `reset()`: an unconsumed keyboard command could survive a visit
+and fire on the next one. Previous entry: 2026-07-28 (g) — **performance regression from the two new menu adapters, fixed.**
+User reported small stutters. Cause is documented in `ui_core` itself: every class an adapter names
+joins the ABSENT scan set and costs a full `FindAllOf` every ~4 s forever, and the comment beside
+`SCANS_PER_TICK` records that a cluster of those expiring on one tick IS the periodic-stutter
+symptom. `screen_compz` + `screen_story` had added **eleven** class names to a set the code keeps
+deliberately small. Fixed two ways: dropped the speculative native fallbacks (never once observed —
+the census names every live host as a Blueprint `_C`), 11 names → 6; and both adapters now bail out
+of `is_active` on `Core.free_roam(tick)` BEFORE any scan, so they cost nothing while the player is
+in the field, which is where the stutter was felt. Note the radar change of the same day adds only
+a few guarded member reads per in-use navi icon per scan and is not a plausible cause on its own;
+if stutters persist, `_G.__KakarotScanStats` / Ctrl+F5 gives per-class attribution. Previous entry: 2026-07-28 (f) — **four fixes, each settled by a measurement rather than a
+guess.** (1) **GAME OVER, finally diagnosed.** The probe caught the menu genuinely on screen at
+last: `on_screen=true IsVisible=true enum=4 opacity=1.0 inVP=true pane_live=FALSE`. Enum 4 is
+SelfHitTestInvisible and `pane_live` demands Visible(0), so the adapter never once claimed —
+`screen -> screen_gameover` appears in no log ever. **Third screen this same gate has silenced**
+(after fishresult and questreward). Gate is now `on_screen` (rejects the parked, Collapsed host) +
+`pane_rendered`. The file's old header claim that `on_screen` rejected the live host is refuted by
+the same sample and is kept, corrected, in place. (2) **Training screen never said the required
+level**: `Txt_Recommend` is only the LABEL ("Nvl. recomendado:"), the figure lives in `Txt_Num_Lv`,
+and only the label was read — buried in the tooltip. Now a proper pair spoken with the skill; also
+fixed a raw `host[m]` fetch there. (3) **The item menu's RECOVERY tab was silent** because
+`screen_itemuse` claimed it forever: it returned active on any rendered party bar, and that tab
+renders the whole party strip permanently. Now requires a UNIQUE on-screen bar AND readable text.
+(4) **Pressing X on an item re-announced everything continuously**: `screen_palette.reset()` nils
+its node cache while the re-collect is throttled, so a reset inside that window left it nil and
+`is_active` indexed nil — 23 palette/list flips in 10 s in the log. Previous entry: 2026-07-28 (e) — **user-VERIFIED this session:** the Party roster + Characters
+lists, the Story menu (entries, summaries and the X progress checklist) and the whole Z
+Encyclopedia (index, category lists, entry sheets, note slips). Still UNVERIFIED and awaiting a
+report: the radar picker regression fix (R3 / V) and the substory reward sheet — neither was
+explicitly retested, so do not read this entry as covering them. Not merged to `main`: the user
+reports something still to fix. Previous entry: 2026-07-28 (d) — **two new screens: the Story menu and the Z Encyclopedia.** User
+confirmed the character lists and asked for both, with dumps and screenshots. Neither needed a
+capture round beyond the ones supplied, and neither uses a guessed offset. `screen_story.lua`
+sidesteps the missing cursor index entirely by reading the DETAIL PANE, which mirrors the
+selection. `screen_compz.lua` covers all three book levels in one adapter and is the first list
+screen here that needed no guesswork at all: `UAT_UICompZList` declares its own `Canvas_Cursor`
+@0x3A0, and the rows live in a REAL `TArray` (`UAT_UICompZListController.Item_List` @0x0030), so
+both the enumeration and the selection are plain reflected reads. Also shared out of three private
+copies: `Core.first_text` / `Core.first_member` (try candidate member names through the existence
+gate — most candidates are expected NOT to exist, which is exactly why they must not be raw
+fetches). **Adversarially reviewed before shipping; six findings, all applied.** The critical one
+generalizes: those very helpers turned fail-OPEN into a hazard, because `Core.member` falls back to
+a raw fetch whenever the property set is unavailable (budget is 1 set/tick shared by ~40 adapters,
+and a class that introspects to nothing is marked un-gateable permanently) — fine for one
+believed-good name, a licence to fetch known-absent names for a multi-candidate probe. Hence
+`Core.member(o, name, strict)`: skip the candidate rather than fetch it, bounded to one tick of
+silence per new class and self-healing, with the permanent case logged. Also applied: Story's
+rewards now read the header-verified `UAT_UIStartQuest.UIRewardBar_List` @0x6D0 TArray instead of
+six Blueprint node names; both adapters gate their pooled hosts on `Core.pane_rendered`; compz
+claims the screen on readable TEXT rather than on a live handle (a textless page would have
+shadowed save/load, tutorials, community and field); both heading/tab edges got a 2-poll settle
+plus a log line (the screen_party flip-flop shape); and `m_Detail` is documented as a fixed array
+of 3 that collapses to element 0, so the Blueprint name goes first there. SOURCE-ONLY, UNVERIFIED
+IN GAME. Previous entry: 2026-07-28 (c) — **the substory reward sheet had never run, and the reason was a
+gate we had already been burned by.** User verified the character lists read correctly, then
+reported the "¡FELICITACIONES! / Recompensas de historia" sheet silent. `screen_questreward` was
+registered and its widget map was correct — but it gated on `Core.pane_live`, which requires
+`GetVisibility() == Visible(0)`, and a passive overlay in this game renders HitTestInvisible. So
+the host was rejected on every tick and `screen -> screen_questreward` never appeared in the log
+ONCE, while the F7 census taken with the sheet on screen showed the title and all four reward rows
+rendered at full opacity. `screen_fishresult` hit this identical wall on 2026-07-17 and solved it
+with a PRIVATE 4-line helper, so the knowledge never reached the next adapter — the opacity-only
+test is now `Core.pane_rendered` in the substrate and both callers use it. **Rule added: the
+liveness gate for a passive NOTICE is not the one for an interactive PANE.** Open, not started:
+the substory briefing card `Quest_Sub_C` (Dmy_Title / Txt_Recommend / Txt_Detail / List_Parts00..03)
+is on screen at the same time and has no adapter. Previous entry: 2026-07-28 (b) — **round 2 on the two character lists; the user's F7 census killed
+the whole `RegisterCustomProperty` mechanism.** Two symptoms, one root each, and an adversarial
+review of the round-1 diff predicted BOTH before the retest was analysed. (1) PARTY, "el anuncio se
+solapa porque se lee nombre de personaje": `CharBar.marked` tested the cursor markers with
+`Core.is_visible`, which reports a widget's OWN slate visibility — a row in an unfocused panel keeps
+reporting itself visible, so the roster looked focused permanently and the side flipped one tick
+after every left-column move, speaking a stale roster row over the slot. Fixed with `Core.on_screen`
+(ancestor walk) plus a WALL-CLOCK settle (`SIDE_SETTLE_S` = 0.30 s) on the panel change, bypassed
+only by a left-cursor move (a real user action), and one log line per accepted change. (2)
+CHARACTERS, "no se lee el personaje al navegar": the list read only its FIRST row. Cause is
+generalizable and now a rule — **`RegisterCustomProperty` + `Core.allow_member` is a trap**:
+`allow_member` whitelists a NAME, so a registration that silently failed left the name past
+`Core.member`'s existence gate (protection → permission, i.e. the uncatchable abort), and
+`RegisterCustomProperty` resolves `BelongsToClass` ONCE and matches by raw `UClass*` — BP classes
+unload on a map transition and their addresses get reused, and `custom_props` is never flushed
+(unlike `prop_sets`), so after the first map load every slot but 0 stops resolving. **The mechanism
+is withdrawn entirely, not hardened**: the F7 census showed these rows are Blueprint WidgetTree
+children (`Start_Party_C_0.WidgetTree_0.Start_Char_Bar00..03`,
+`Start_Char_C_1.WidgetTree_0.Start_Char_Bar00..05`, and the left column's
+`Start_Party_List.{Start_Party_Bar00,Start_Party_Spo00,Start_Party_Spo01}`), so the engine already
+exposes each row as its own reflected property BY NAME. No offsets, no whitelist, nothing to
+invalidate on a transition, and an undeclared name is refused by the gate instead of aborting.
+Characters selection also flipped to INDEX-FIRST (`GetCursorIndex`/`GetViewIndex`, reflected
+UFunctions, deterministic) with the markers demoted to fallback. SOURCE-ONLY, UNVERIFIED; needs a
+restart (new shared module). Previous entry: 2026-07-28 — **crashes look fixed (user), but the crash audit shipped one
+REGRESSION that killed the radar picker outright, and the Party screen's character list got its
+first reader.** (1) RADAR: R3 and V both did nothing. Not an input problem — the log named it 16
+times. The 07-27 result-validation added to `Core.member` sent EVERY typed property to
+`Core.valid_ref`, on the assumption that `IsValid` is universal on RemoteObjects. It is not: an
+FName is a VALUE with no `IsValid`, the call resolves against the FName CONSTRUCTOR
+(`No overload found for function 'FName'`) and that error PIERCES pcall — so `Nav.list_targets`
+died on the FIRST NPC it looked at, `do_open()` never got a list, and the picker never opened.
+`UniqueId` is a NameProperty and it is the first thing the target list reads about an NPC, which
+is why the blast radius was the whole feature. Fix: the result gate now checks ONLY
+`ArrayProperty`/`StructProperty` (the two handle-shaped types the two-tier rule was actually
+invented for); every other type is a value that cannot dangle, so it fails OPEN. Plus a new
+`Core.name_str` (convert, never validate) replacing the five direct `valid_ref`-on-an-FName calls
+in `nav_tracker`. **Generalizable rule, now in the crash ledger: a guard that widens its own scope
+by assumption is a guard that will take out a working feature.** (2) PARTY: the right-hand roster
+(`WL_Start_Char_Bar` @0x3C0, 4 × `UAT_UIStartCharBar`) was never read, so confirming Player or
+Support opened a silent list. Now read via the new shared `ui_charbar.lua` — the same row class the
+Characters menu lists, so registration/cursor-marker/text logic is one copy instead of two, and
+`screen_characters` was migrated onto it. Panel focus comes from the cursor MARKER (the hierarchy
+stores no focus flag), with a left-cursor-moved tiebreak so the verified slot column can't be
+silenced. SOURCE-ONLY, UNVERIFIED IN GAME; needs a full RESTART (nav_tracker + i18n + new module).
+Previous entry: 2026-07-27 — **full-codebase crash audit (multi-agent), 11 holes closed, SOURCE-ONLY
+and UNVERIFIED IN GAME.** Not crash-driven: a systematic sweep of all 71 Lua files + the 4 native
+bridges against the ten accumulated crash mechanisms. 48 candidates → each adversarially verified by
+an independent refuter → **37 died** (debug-flagged off, or genuinely guarded upstream), 11 real.
+Five root causes, all now documented in the [crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md):
+(1) **asymmetric guards** — `Core.array_of` refused a wrong-TYPED member but not an UNDECLARED one,
+so every ordinary dialogue window fetched a non-existent member every tick; gate now identical to
+`Core.member`'s, fail-open, `custom_props`-aware. (2) **a field battle is not a `Transition`** — it
+closes the world gate without `LoadMap`, so `enemy_cache`/`navi_icons`/`chain_wait` survived it; a
+fight shorter than ~10 s served just-destroyed actors, which IS the 07-26 black box. Dropped on the
+gate's falling edge too, to `nil` not `{}`. (3) `target.actor`'s 5 s grace was the same defect with a
+timer — handle released at the gate, metadata kept (which is all `remember_pick()` ever needed).
+(4) **UE4SS runs keybinds on its own thread**: F1 walked pooled widgets on the poll loop's
+`lua_State`; wrapped (only 1 of ~19 handlers was wrong — swept and confirmed). (5) diagnostics drift:
+9 bare `IsValid()` left in `discover.lua` after the 07-25 sweep, and `Nav.dump_levels` shipped with
+neither validation nor gate while its sibling `Nav.dump` had both. Plus raw two-hop `host.A.B` chains
+migrated to `Core.member` in `screen_choice`/`screen_training`/`screen_itemuse` — the inner hop is
+evaluated at the CALL SITE, outside the `pcall` two comments claimed was protecting it (corrected).
+**Native: 8 findings, all 8 confirmed, none refuted** — `audio_bridge`'s RIFF bounds check overflowed
+in 32-bit (4 GB `memcpy` from any truncated WAV), `mem_bridge`'s `WRITE_FN` was an unvalidated
+arbitrary-write primitive (now bounded by a DERIVED `MAX_WRITE_OFFSET`, plus an `expect_class`
+assertion in `mem.lua` since a bound stops a wild offset but not a wrong-object write),
+`l_mark_open` could longjmp past its own cleanup (in the crash recorder), and `input_bridge`'s pad
+block was a latch with no lease (a Lua unwind left the gamepad dead until the game was killed).
+All 4 DLLs rebuilt clean; `tools/lint-lua.ps1` exits 0 over 71 files. **Needs a full RESTART.**
+Previous entry: 2026-07-26 — why crashes persisted on v0.1.2 while the dev `UE4SS.log` stayed
+clean: **a clean log was read as "no crashes", but the log only records what the mod PRINTED** — the
+dev machine had been crashing all along (647 s, 1018 s, 1792 s, 7912 s runtimes, one mid-COMBAT on
+07-25) and the evidence sat unread in 29 crash dumps. Cause: every guard in the crash ledger had
+only ever been applied to the MENU substrate. `nav_tracker.lua` — every tick, in free roam AND
+combat, over actors that streaming frees and that combat destroys — still held 24 bare `IsValid()`
+(which *faults* on a freed handle rather than rejecting it) and ~95 naked member fetches, including
+on a `target.actor` held for minutes. Swept, plus three
+substrate holes (`Core.pane_live` unguarded, `ui_directory.prop()` had no property gate,
+`begin_scan_tick`'s budget was refilled by six callers so "2 scans/tick" was really a dozen — which
+also explains the old unaccountable 31%-of-game-thread `FindAllOf` measurement). Menu slowness was
+partly self-inflicted: the 07-25 crash fix made `Core.valid` ~3× costlier on per-tick full-pool
+walks; now memoised per tick. **Also: 29 real crash dumps were sitting unopened in
+`%LOCALAPPDATA%\AT\Saved\Crashes\`** — 26 of 29 died inside `UE4SS.dll`, and the callstacks name the
+uncatchable C++ throw outright (`RaiseException ← _CxxThrowException`). Fingerprint table in the
+ledger. New `tools/lint-lua.ps1` (syntax + globals + guards) is a hard gate in `package.ps1`.
+SOURCE-ONLY, UNVERIFIED IN GAME, needs a full restart. Previous entry: 2026-07-25 (c) — the user's
+retest found 7 screens silent; the UE4SS.log settled
 all 7. Six were ONE bug: `GetAddress()` on the TArray wrapper inside `Core.array_of` raises
 "polymorphic type is not allowed", an error that **pierces pcall** and kills the adapter's function
 mid-flight (510 tracebacks naming exactly those screens) → fixed with `Core.valid_ref` (IsValid
@@ -61,7 +264,8 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Controller REMAP honoured everywhere | done (unverified) | 2026-07-25. Every controller id the game exposes names a **SLOT**, not a button, and a slot keeps its factory name forever — so we were announcing the pre-remap button (user: melee B→X, ki X→B, both still read as B/X). F7 dump proved it in one pass: save `Controller_Btn_B = Gamepad_FaceButton_Left` / `Controller_Btn_X = Gamepad_FaceButton_Right` while the asset still pairs melee with slot `Controller_Btn_B`; the asset is NOT rewritten on rebind (its only live-vs-default delta is `ctrl` being filled in at runtime), so cache-clearing there could never have fixed it. New slot→physical layer in `ui_archetypes` reading `UATSaveSystem.InputAssign` via `gi.SaveManager→SaveSystem` (0.5 s TTL, fail-open to the slot name), applied in the single funnel `A.button_name` plus the three raw-token paths (`platbtn_token` ×2, `platbtn_id_token`'s idxToCtrl fallback). Identity under a default config, so it can only change a remapped pad. Fixes Options rows AND every `<inputicon>` prompt, keyhelp and tutorial glyph |
 | Options / System / Title / Tutorials / Tips | done | `screen_options/title/tutorials/tutorial/tips.lua`. Title 2026-07-17: SETTLE GATE — the boot-check dialogs re-commit the title on every gap and each re-commit re-announced "Menú principal, continuar"; the title now stays silent until it holds the screen 2.5 s with no dispatcher reset (no reflected boot-phase field exists on AAT_Title/AATTitleLevelScriptActor — swept), a cursor move lifts the gate at once, F1 bypasses it via `reannounce()`. Verified in-game 2026-07-17 (announced once, after the boot dialogs; 4 s felt sluggish → tuned to 2.5 s) |
 | Shops (food/material/info) + item palette | done | `screen_shop*.lua`, `screen_palette.lua` (verified in-game) |
-| Items inventory + Party + Characters | done | Party/Characters done. Items list reads populated categories (via `Txt_Title00` detail-pane live name; reflected index tracks). EMPTY categories: the whole item UI goes STALE (row/detail/visible-count keep the last item), so emptiness is read from the native flag `itemMenu.hasItems = 0x620` (F4-confirmed; 0 = empty) and announced ("vacío") via `screen_list.lua` factory `empty_off` param. Verified in-game 2026-07-11 |
+| Party menu — character list (right panel) | done | **VERIFIED in game 2026-07-28 (user)**, together with the Characters list, after round 2 fixed the panel flip-flop and the one-row-only bug. **NEW 2026-07-28** (user: "al entrar a los submenús de jugador o apoyo no me lee la lista de personajes"). The half of the Party screen where you actually pick someone had no reader: `screen_party.lua` covered only the LEFT slot column and its own header said the right panel was "not read here". It is `UAT_UIStartParty.WL_Start_Char_Bar` @0x3C0, declared size 0x20 → a **4-slot fixed C array** of `UAT_UIStartCharBar` (AT.hpp:36660) — the SAME row class the Characters menu lists, so the fixed-array collapse workaround, the cursor markers (`Pnl_Curs_All` @0x410 / `Img_Curs00` @0x438) and the text nodes (`Txt_Name`/`Txt_Name_Guest`/`Txt_None`/`Txt_Lv`/`Txt_Power(_Num)`) are now ONE copy in the new `ui_charbar.lua`, with `screen_characters.lua` migrated onto it. WHICH PANEL HAS FOCUS is not stored anywhere: the entire hierarchy exposes exactly one small integer (`partySelectData.cursorIndex` @0x420, and it belongs to the left column — the rest of that 0xB0 struct is two TMaps of icon textures), because the game drives the panels with `Focus()`/`LoseFocus()` on the bars instead. So focus is inferred from the cursor MARKER, with a tiebreak: if the left cursorIndex moved this tick the left column wins regardless, so a stale highlight can never silence the verified slot column. Panel switch re-announces through the announcer's screen-entry branch (its `tab` parameter speaks the label alone and would swallow the first row). Roster placeholders (`Txt_None` = empty / "Remove") count as selectable rows here, unlike on the Characters screen. New i18n key `party_charlist` |
+| Items inventory + Party + Characters | done | Party/Characters done. Items list reads populated categories (via `Txt_Title00` detail-pane live name; reflected index tracks). EMPTY categories: the whole item UI goes STALE (row/detail/visible-count keep the last item). **CORRECTION 2026-07-28: `itemMenu.hasItems = 0x620` is NOT a has-items flag — it is the category TAB INDEX.** The 07-28 capture shows it taking the values 0,1,2,3,4 (one per tab) and always equal to 0x624, so it reads 0 on the FIRST tab whatever that tab holds; the item menu's first tab is Recovery, which therefore announced "empty" once and then went mute for the whole visit while the row and detail names were reading fine. The 2026-07-11 F4 session only ever confirmed it against a tab that happened to be both first and empty. The read survives as a HINT (on a genuinely empty category the UI really does go stale, and nothing fresher exists), but it is now corroborated: a category with a readable detail-pane name is not empty, whatever the byte says and announced ("vacío") via `screen_list.lua` factory `empty_off` param. Verified in-game 2026-07-11 |
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads the on-screen `AT_UIItemMenu.WL_Start_Party_Bars` bar (the selected char; only it animates in): `Txt_Name01` + `Txt_Lv01→Txt_Lv02` level-up preview, with the "choose character" prompt. Registered before the item list reader. Verified in-game 2026-07-11 |
 | Save / Load data slots | done | `screen_saveload.lua` — `AT_UIStartSaveLoad`. VIRTUALIZED 3-bar window (`UISaveLoadBar_List`), so pool-position ≠ ordinal. Ordinal from native index `saveLoad.selectedIndex = 0x410` (+1), cursor bar = `windowPos = 0x418` (F4-confirmed over ~11 saves); reads FILLED and EMPTY slots (Canvas_None checked first); SETTLE_TICKS debounce drops mid-scroll frames. Slow re-entry (widget destroyed+recreated → stale class-list cache) FIXED by `ui_core.first_on_screen` churn-force (re-scan a recently-on-screen class immediately, budget-gated). Verified in-game 2026-07-11 (reads all slots, correct index, fast entry, no lag). DEBUG off |
 | Character status page (stats sheet) | wip | `screen_status.lua` — `UAT_UIStartStatus`, the sheet you get by confirming a character in Personajes. ALL reflected: `WL_Txt_Name/_Lv/_Title/_Num/_Power/_Power_Num`, the two `UAT_UIStartStatusHud` gauges (`HpGauge`/`SpGauge` → `TextBox_Number`) with their `TxtStatus`/`TxtStatusNum` row TArrays, and the five `UAT_UIStartStatusList01` attribute blocks (`WL_Txt_Power(_Num)` = total, `TxtStatusList`/`TxtStatusNumList` = rows). `WL_Start_Char_List01` is a fixed C array → UE4SS COLLAPSES it (never index it — the `WL_StartCharBarList` lesson), so the blocks come from the class's cached instance list, on-screen ones only, ordered by `Core.slot_pos(w,"Y")`. Entry reads the header (name, level, next, HP, Ki, BP); the 7 blocks (total + base/estado/comida) are walked with the **d-pad down/up** on the gamepad (own 20 ms `Input.read` loop — the 100 ms registry poll misses quick taps — pad only READ, never blocked; gated on `Registry.active_adapter()` so the palette/tree opening OVER the page don't inherit it) and with **F11 / Shift+F11** on the keyboard. Registered below the palette+tree, above the Characters list. Pending in-game verify (needs a full RESTART) |
@@ -73,27 +277,33 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Cooking menu | done | `screen_cooking.lua`, VERIFIED in-game 2026-07-15 night end-to-end (entry menu via the second `Shop_Top_C` chain; dish list; cook — latch spoke "Bollo jugoso al vapor" legitimately). HONEST CAVEAT from the latch log: the ghost pane read `vis=0 opacity=1.0` — `pane_live` did NOT discriminate it; the shadowing was actually killed by the yields (ring/entry-rows) + spoken-key suppression + the game parking the pane a while later. `LATCH_DEBUG` stays ON (one line per activation) to catch any residual window (e.g. emblems right after cooking) |
 | Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
 | Fishing catch result ("¡BRAVO!" sheet) | done | NEW 2026-07-17 `screen_fishresult.lua` — `Mgame_Result_C` < `AT_UIMiniGameResult`; header+species via TxtCap00/TxtName (BP-tree twins `Txt_Cap00`/`Txt_Name` — both spellings tried), obtained rows via the native `InfoLogBarList` TArray @0x408 (Txt_List/Txt_Num on each bar, census tree names as guarded fallback). fm.MiniGameResult @0x630 deliberately UNMAPPED (fm minigame fields twice proven unset); scan path + QUIET_EXEMPT; notice pattern. ROUND 2 (user: read only after pressing "Siguiente"): the pane_live gate demands GetVisibility()==Visible(0) but passive overlays render HitTestInvisible (Xcmn_Subtitles precedent) — gate now OPACITY-ONLY (fade-ghost still dropped). ROUND 3 (user: still silent; F7 dump_1784307940 shows the sheet + texts on screen): the reader was SHADOWED — the pooled fishing HUD lingers on_screen under the sheet and screen_fishing (registered far above) claimed every tick; "Siguiente" was merely the release. Fix: fishresult registered ABOVE screen_fishing (a notice, it releases immediately) AND screen_fishing yields while Mgame_Result_C is on screen (same feature/flow — also stops flip-flop prompt chatter over the sheet). Roshi token fix VERIFIED in-game same day. Pending re-verify |
-| Gameplay toasts (item log + level-up) | done | `screen_toasts.lua`. 2026-07-17: LEVEL-UP BANNER FIXED — the real class is `Info_Log02_C` (bars `Info_Log_Bar_00..04`, text on bar `TextBox` @0x3C0, its ONLY text member); the old `Info_Log_Level_C` exists NOWHERE in the ObjectDump, which is why level-ups were silent forever (F7 census dump_1784302864_002 pinned it). SAME DAY the first cut CRASHED the game while fishing: a naked `bar.Txt00` ARGUMENT fetch (member that doesn't exist on `Info_Log_Bar02_C`, evaluated outside pcall, retried per tick on blank pooled bars) — fixed, fetch inside pcall, TextBox only. Pending in-game verify |
+| Gameplay toasts (item log + level-up) | done | `screen_toasts.lua`. 2026-07-17: LEVEL-UP BANNER FIXED — the real class is `Info_Log02_C` (bars `Info_Log_Bar_00..04`, text on bar `TextBox` @0x3C0, its ONLY text member); the old `Info_Log_Level_C` exists NOWHERE in the ObjectDump, which is why level-ups were silent forever (F7 census dump_1784302864_002 pinned it). SAME DAY the first cut CRASHED the game while fishing: a naked `bar.Txt00` ARGUMENT fetch (member that doesn't exist on `Info_Log_Bar02_C`). **The 2026-07-17 "fix" — move the fetch inside a `pcall`, TextBox only — WAS NOT A FIX, and this row said it was for nine days.** A pcall cannot catch an undeclared-member abort; and the fetch was only corrected in the `Info_Log02_C` loop, leaving the `Info_Log_C` twin still doing `bar.Txt00`. That twin killed the game on **2026-07-26**, right after a map change (the black box's last entry was `screen_toasts.is_active`; a map transition rebuilds the pooled bars, so the wrong subclass lands in `Info_Log_Bar00..04`). REAL fix: every fetch here goes through `Core.member`'s property gate. Pending in-game verify |
 | Cinematic character-intro cards | wip | NEW 2026-07-17 `screen_infoname.lua` — the "Gohan, hijo de Goku" cards: `Info_Name_C` < `AT_UIInfoNameCore` (`NameTxt`/`PopularNameTxt` + `_Large` twins, all reflected), driven by sequencer track `ATMovieSceneCharaIntroductionSection`. fm.InfoName @0x668 deliberately UNMAPPED (same lazy-field risk); scan path + QUIET_EXEMPT. ROUND 2 (user: only a bare "Goku" heard, Gohan/Piccolo silent): rewritten — reads ALL on-screen instances, 2-tick text-stability gate (name/popular animate in separately), opacity-only liveness (pane_live's visibility==0 blocks passive overlays). ROUND 3 (user: cards READ now, but re-announced on every subtitle flip — long-lived cards outlived the 10 s dedup window): APPEARANCE-EDGE dedup — per-text {first,last,spoken} state, speaks once per continuous presence (stability 2 ticks, `spoken` set in update so a pending line survives subtitle ticks). ROUNDS 4-6 (repeats, then silence): SOLVED by the round-6 trace — the pooled `Info_Name_C` class is a DEAD END (4 parked hosts, never any text, never rendered); the REAL display is the fm-owned container `fm.InfoName` (AT_UIInfoName) flipping Collapsed↔rendered per card, `InfoCoreCtn` @0x3A0 → the active core with the texts. Reader rewritten as PURE POINTER READS (no scans; QUIET_EXEMPT entry removed); wall-clock GONE_S=30 dedup + 2-tick stability kept. FINAL round: the 2-3x repeats near subtitles were the SPEECH sink re-queuing the cut card after each subtitle interrupt (adapter provably spoke once — trace) — `Speech.say` gained a `no_requeue` flag for queued ephemeral overlays (speech.lua does NOT hot-reload: full restart). **VERIFIED in-game 2026-07-17 night (user): three cards, one read each, no repeats.** TRACE off |
 | Soul Emblems grid / Community | done | 2026-07-17: CHAR_TOKENS `Mrs`/`Mst` were SWAPPED (user: Roshi spoke as "Mr. Satan" on board AND menu) — pak scan + romaji naming (Tpp=Tao Pai Pai): `Mrs`=Muten **R**o**s**hi, `Mst`=**M**i**s**u**t**ā Satan; `Ev_Msn` is a third unidentified token, left unmapped so it speaks raw. — `screen_community.lua`. 2026-07-15 saga, ALL VERIFIED in-game by night (entry on the normal path ~5 s first visit of a session, then instant; MOVEMENT verified — the native commuGrid cursor IS driven in the menu flow on `Start_Commu_Emb_C`, gridcurs dump; `GRID_DEBUG` back OFF): (1) unmapped from the directory (no trustworthy owner — two flows, `MenuSoulEmListIns` = `USoulEmblemMenu` reflects nothing); (2) menu-flow instance is the BP class **`Start_Commu_Emb_C`** (census) — `grid_host()` scans both names; (3) the GHOST BOARD was claiming the screen (`BOARD_LIVE_MODES` gate + `Core.pane_live` fixed it — screenshot 98); (4) "reads only after reload" = stale pool + parked-first pick — `grid_host()` enumerates the pool picking the live instance, and a ghost board with no live grid forces ONE budgeted rescan per visit. **ENTRY READS on the normal path now (user-verified)**. 2026-07-16: the ~5 s FIRST-visit lag (never-seen class waiting out ABSENT_BACKOFF; no ghost-board signature exists yet then) fixed with an ENTRY SIGNAL — the game's lazy menu controller (`mm.m_xSoulEmblemMenu` @0x158 / `cm.MenuSoulEmListIns` @0x80, both reflected; the controller's WIDGET pointer is not, AT.hpp:43512, which is why the class can't be directory-mapped) flips null→valid on first open and arms `Core.watch_for("Start_Commu_Emb_C")` (~400 ms budgeted re-scans, ~5 s cap, cleared when the grid reads); the ghost-board path arms the same lane instead of the old single-shot refresh. PENDING in-game verify (fresh session → open emblems: should read in ~1 s, log line "soul-emblem menu controller appeared"). STILL PENDING: cursor MOVEMENT verify (`GRID_DEBUG=true` writes `gridcurs` lines to `dumps/dump_community.txt` — if movement is silent, that dump says whether the native commuGrid offsets are driven in the menu flow). Bonus fact: each slot (`UAT_UIXCmnEmb_Cursor`) reflects `UnlockState` u8 @0x408 |
 | Community Board cursor (story tutorial) | done | Verified in-game 2026-07-04, unblocked story; offsets in `native_offsets.commuBoard` |
+| Story menu ("Historia") | done | **VERIFIED in game 2026-07-28 (user)** — reads on entry and on every cursor move, summary included, and the X progress checklist reads. **VERIFIED READING 2026-07-28** (user), with two gaps closed the same day. (1) Some entries read no summary: the pane lands the summary slightly after the title, so the settle went 2 → 3 polls. (2) X ("Mostrar progreso de la historia") flips the right pane to a checklist that was not read at all. The game names the two modes itself — `All_Win_Story` @0x3A0 / `All_Win_Task` @0x3A8 (AT.hpp:36897-98) — so the mode is a read, not a guess; TASK mode now speaks `Txt_Story_Task00..12` behind the heading + `Txt_Progress`, and the mode is part of the settled context line so flipping it re-announces once. Pending re-verify. Earlier: **NEW 2026-07-28** `screen_story.lua` — `Start_Quest_C` < `UAT_UIStartQuest` (AT.hpp:36894). Tab strip + scrolling quest list + detail pane. **Reads the DETAIL PANE, never the list**: the rows (`Xlist_List06_00..06` in `Xlist_List06_Lay9`, F7 census) are a virtualised window with no cursor index anywhere in the hierarchy, but the pane mirrors the selection — move the cursor and `Txt_Quest_title` follows. So the selection costs no index, no marker guess and no scroll arithmetic (the screen_skillcustom trick). Reads: current tab `Txt_Cap01`, kind `Txt_Cap00`, title `Txt_Quest_title(01)`, `Txt_Recommend`+`Txt_Num_Lv`, summary `Txt_Cap02`+`Txt_Detail(00)`, and rewards `Xlist_Reward_Bar00..05` (`Txt_Reward`+`Txt_Num`). 2-poll settle on the title so a fast scroll does not announce intermediate entries; tab change re-announces through the screen-entry branch (not the announcer's `tab`, which swallows the first row). Locked entries read the game's own "¿?" |
+| Z Encyclopedia | done | **VERIFIED in game 2026-07-28 (user)**: index, category lists, entry sheets AND the note slip all read. **ROUND 3, 2026-07-28** — user: index, category lists and entry sheets all read correctly now; only the NOTE was missing. It is a slip that overlays the entry spread (A on an entry) with the detail text still showing behind it: `CompZ_Memo_C` < `UAT_UICompZPageMemo` (AT.hpp:32086), `TextBox_Title` @0x468 / `TextBox_Memo` @0x470 natively, `Txt_Title` / `Txt_Detail` in the BP tree — the BP body node is `Txt_Detail`, NOT the `Txt_Memo` the native name suggests, which is why both spellings are tried. Checked BEFORE the entry pages (it is what the player just opened) and claimed only when its BODY reads, so an empty or parked slip cannot shadow the entry underneath. Pending verify. Earlier: **ROUND 2, 2026-07-28** (user: "la enciclopedia no se leyó"). Round 1 never activated ONCE and left nothing in the log — no `screen -> screen_compz`, no gate line, no error — because nothing errored. Cause: **the book is not in the viewport.** `UAT_UICompZPageBase` owns a `RenderTarget` (AT.hpp:31974) that `UCompZMenu.UMGRender` draws onto an `AZCW_BookActor` (AT.hpp:40272-73) — the pages are rendered into TEXTURES and mapped onto the 3D book mesh, so they are never parented into the viewport widget tree and `Core.on_screen` / `first_on_screen` / `IsInViewport` all report false for a page the player is reading. The F7 census listing their text proved nothing: `discover.lua:830` tests bare `IsVisible()`, not the ancestor walk. Fixed by moving the whole adapter to own-slate-visibility (`Core.is_visible`, new `Core.first_text_offviewport`) and earning the screen another way — readable text AND a row whose `Canvas_Cursor` is showing. Pending re-verify. Earlier: **NEW 2026-07-28** `screen_compz.lua` — ONE adapter, three levels, five host classes: index `CompZ_Page_Contents00_C` < `UAT_UICompZPageContents` (AT.hpp:31999), category spread `CompZ_Page_Items_L/R_C` < `UAT_UICompZPageItems` (32080), entry spread `CompZ_Page_Img_C` < `UAT_UICompZPageImg` (32069) + `CompZ_Page_Detail_R_C` < `UAT_UICompZPageDetail` (32051). **The only list screen in this mod that needed NO guesswork**: the row class `UAT_UICompZList` (31861) DECLARES its own cursor node `Canvas_Cursor` @0x3A0, so the selected row is a reflected read rather than a hypothesis about which image the game drives; and the rows come from `UAT_UICompZListController.Item_List` @0x0030, a REAL `TArray` (size 0x10) — no fixed-array collapse, no RegisterCustomProperty, no offsets, just `Core.array_of`. Both list levels share the controller, so one code path. The L/R page split is irrelevant: rows are gathered from every live page and the marked one wins. Texts native-first with BP twins (`TextBox_Label`/`Txt_List`, `TextBox_Num`/`Txt_Num`, `TextBox_Contents`/`Txt_Caterory00` — the game misspells it —, `TextBox_Items`/`Txt_Category01`, `m_Name`/`Txt_Name`, `m_Text`/`Txt_Category`, `m_Title`/`Txt_Title_Detail`, `m_TextCond`/`Txt_Cond`). A locked entry has no summary, only `m_TextCond`, which is read in its place. Every heading comes from the game's own text; only the book's own name is an i18n key (`compz_title`). Logs one line per visit if a list page has rows but none marked, so a bad cursor node names itself instead of costing a round |
+| Substory clear rewards | wip | **2026-07-28 round 2 — it had NEVER RUN.** User: the rewards sheet is not read. The adapter was registered (`app.lua:40`) and its widget map was right, but `screen -> screen_questreward` does not appear in the log **once**, while the F7 census taken with the sheet on screen shows `Quest_Sub_Reward_C_5.Xcmn_Win01.Txt_Title` = "Recompensas de historia" and rows `Xcmn_Win01_List_C_36..39` (`4583/EXP`, `1/Medalla D`, `1/Pan de la inteligencia`, `2/Megamasa de nivel 1`) all `vis=true enum=0:Visible op=1.00`. Cause: it gated on `Core.pane_live`, which demands `GetVisibility()==Visible(0)`; a passive overlay here renders HitTestInvisible, so the host was rejected every tick. **This is the exact bug `screen_fishresult` hit on 2026-07-17 and fixed privately**, so the opacity-only test is now shared as `Core.pane_rendered` and both adapters use it. Pending in-game verify. Earlier: **NEW 2026-07-26** `screen_questreward.lua` — the "¡FELICITACIONES! / Recompensas de historia" sheet after a side story. Was completely uncovered (the session log showed NO adapter active in that window); `screen_results` never applied, it reads `Quest_Main_Clear_C`, the MAIN-quest sheet. Identified from a user screenshot + F7 census: `Quest_Sub_Reward_C` < `UAT_UIQuestSubReward` (AT.hpp:35501), title `Txt_Title` on its nested `Xcmn_Win01` @0x540, rows are `Xcmn_Win01_List_C` (`Txt_Item` @0x428 + `Txt_Num` @0x430) ordered by `Core.slot_pos`. Registered ABOVE `screen_choicelist` — same row class as the difficulty picker, which would otherwise announce the rewards as options. `Lang_Txt_Congrats` is a UImage (no text), unread by design |
+| Crash hardening — full-codebase audit | done (unverified) | **NEW 2026-07-27.** Systematic multi-agent sweep of all 71 Lua files + the 4 native bridges against the ten accumulated crash mechanisms; every candidate adversarially re-verified (48 → 11 real, 37 refuted). Fixed: `Core.array_of`'s missing existence gate (`ui_core.lua:419-443`); actor caches surviving the world gate — which a field battle closes WITHOUT a `LoadMap` — for `enemy_cache`/`navi_icons`/`chain_wait`/`target.actor` (`nav_tracker.lua:1447-1471`); F1 running engine work on UE4SS's keyboard thread (`app.lua:195-207`); `Nav.dump_levels` shipping with neither validation nor gate (`nav_tracker.lua:3056-3243`); 9 bare `IsValid()` in `discover.lua`; raw two-hop `host.A.B` chains in `screen_choice`/`screen_training`/`screen_itemuse`; and 8 native findings incl. a 32-bit overflow in `audio_bridge`'s RIFF bounds check and an unvalidated arbitrary-write in `mem_bridge` (now bounded + `expect_class` assertion in `mem.lua`). Full reasoning and the five generalizable rules in the [crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md). `lint-lua.ps1` exits 0 over 71 files; 4 DLLs rebuilt clean. Needs a full RESTART — see *Next step* for the retest checklist |
+| Crash diagnostics (black box + breadcrumb) | done (unverified) | **NEW 2026-07-26.** `mem_bridge.mark()` — a 64-slot ring in a memory-mapped file (`crash_trail.bin`, gitignored, stripped from releases); the OS flushes it when the process dies and `main.lua` prints the previous session's trail into `UE4SS.log` at boot. Marks every adapter `is_active`/`update` by name plus the nav/explore/quest/battle/guide loop steps. Named the crash site on BOTH crashes it has seen. Plus one `screen -> <adapter>` line per screen commit, and per-adapter pcall isolation that logs the faulting adapter's name. Tested standalone with TerminateProcess |
 | Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). Constant-"222" value bug: round-1 dump (2026-07-17, user) CONFIRMED all digit images share ONE atlas material `Ins_Num_Result02` (mix of the shared MaterialInstanceConstant and per-widget MaterialInstanceDynamics) → the digit must be a MATERIAL PARAMETER on the MID. `DEBUG=true` round 2 now also dumps each brush material's Scalar/Vector parameter values + parent to `dumps/dump_results.txt`; decoder fix follows the next results-screen dump |
-| Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed. 2026-07-15: battle-interruption resume — a world-gate/transition drop of a MANUAL pick stashes `resume_pick` (plain data) and re-acquires it by category+key when the world returns (10 tries, ~3 s apart); the quest auto-scan stays quiet while pending; cleared by B / F3 off / a new pick. Pending in-game verify |
+| Quest navigation radar | done | **2026-07-26 HARDENED — this file was the mod's biggest crash surface and had never been swept.** 24 bare `:IsValid()` (which FAULT on a freed handle rather than rejecting it) + ~95 naked member fetches, on actors that streaming frees and combat destroys, incl. `target.actor` held for MINUTES. All migrated. Also: `enemies_list`/`navi_icons` refused to refresh while `Core.scan_quiet()` (set by the DIALOGUE adapter), so "battle ends → dialogue opens" pinned a list of just-destroyed enemies — an expired-but-unrefreshable list is DROPPED now, never served. — `nav_tracker.lua` + `audio_bridge`; auto-tracks quest markers, arrival cue confirmed. 2026-07-15: battle-interruption resume — a world-gate/transition drop of a MANUAL pick stashes `resume_pick` (plain data) and re-acquires it by category+key when the world returns (10 tries, ~3 s apart); the quest auto-scan stays quiet while pending; cleared by B / F3 off / a new pick. Pending in-game verify |
 | Radar categories 2.0 (sites/enemies/collectibles) | done | Verified in-game 2026-07-15 (user: "funciona perfecto") |
-| R3 radar target picker (modal) | done | Verified in-game 2026-07-15 together with the categories batch (bind is R3 — early docs said "hold R2", stale) |
+| R3 radar target picker (modal) | done (regression fixed, unverified) | **2026-07-28: dead on both binds** (user: "el radar no se está abriendo ni con R3, ni pulsando v"). Nothing wrong with input — `input_bridge loaded (hooked=true)` in the log, and both binds funnel through `do_open()` → `Nav.list_targets()`, which is where the log's 16 identical tracebacks stopped: `Core.member`'s 07-27 result gate called `Core.valid_ref` on `UniqueId`, a **NameProperty**, and `IsValid` on an FName raises `No overload found for function 'FName'` THROUGH pcall. Fixed in the substrate (`Core.member` gate narrowed to Array/Struct, new `Core.name_str`) — see the *Last updated* entry and the crash ledger. Earlier: verified in-game 2026-07-15 together with the categories batch (bind is R3 — early docs said "hold R2", stale) |
 | Telepathic messages (King Kai) | todo | Player asked how to "answer" one (2026-07-25). Dump sweep verdict: **there is probably nothing to answer.** No Telepathy widget class, no message-kind enum, no Accept/Reply/Open function, no `EATPlatBtnId` / `ConfirmationMessageId` / KeyConfig reference anywhere in the headers. The one concrete hit is `ATDebugSendTelepathyNotice()` (AT.hpp:26783), sitting in a debug block beside `ATDebugSendReusableNotice` / `ATDebugSendNormalCrossTalk` / `ATDebugSendFeverNotice` / `ATDebugSendEventCrossTalk` — so telepathy belongs to the game's ambient **CrossTalk / Notice** family (auto-playing banter), not to a menu. Voiced line exists: `AT/Content/Sound/Voice/{en,ja}/V_Telepathy.uasset`; the subtitle text is presumably a row in a CrossTalk table (`FCrossTalkTableRow`, AT.hpp:4372) whose asset name was not locatable in the pak index. **GAP:** zero mod coverage for telepathy/CrossTalk by name — if the line does NOT route through `Xcmn_Subtitles_C` (which `screen_dialogue` does read, gated on the game's own EnableSubtitle option) it is silent. To settle it: call `ATDebugSendTelepathyNotice()` live while logging the widget classes that appear. NOT done — it is a debug entry point on a build whose debug blueprints are stripped (the `LoadAllAssetsBefore*` lesson), so it needs the user's go-ahead |
 | Radar: Exits category (get out of a building) | wip | **2026-07-25 round 2** (user: "dice salidas pero el radar no las rastrea" — the tab announces, so the SCAN works and the failure was in TRACKING). Cause: a head-on collision between two earlier fixes. `sweeping = target.manual and chainable(grp)` gates the ghost filter at nav_tracker ~1531, which drops a reached target whose `bHidden` is true — added 2026-07-17 for the parked future-story CHARACTERS the game hides near the player. But a door is an `ATriggerBox`: **an invisible volume whose `bHidden` is true as its normal state.** So the first tick after picking a door chained over it to the next door, also hidden, also dropped — a door could never be tracked at all. Fix: `chainable()` now excludes `"exit"`, which kills the ghost filter for this group AND gets the semantics right (you walk THROUGH an exit and the world changes; sweeping to "the next door" is not a thing anyone wants). LESSON: a filter written for one actor family (hidden = "ghost/parked") is wrong for another (hidden = "trigger volume, by definition") — when adding a radar category, check every filter the tracking loop applies, not just the listing path. Pending re-verify. |
 | Radar: Exits category (get out of a building) — round 1 | done | 2026-07-25 user request — trapped inside Goku's house with no way to find the door. `AATDoorVolume` < `ATriggerBox` (AT.hpp:13004) is the game's own door/area-transition volume: `AreaName` FName @0x378 (destination), `DoorName` @0x370, `AreaMessageId` @0x358, `PlayerStartTransform` @0x390, `DestinationDoor*` @0x560, plus `OnActorBeginOverlap` (you walk into it). It is an ACTOR, so it goes straight through `add_target` — no new tracking machinery. New `"exit"` group, SECOND in `GROUP_ORDER` (one R1 from the default; making it first would displace quests everywhere, and indoors nearly every other group is empty anyway so it is reachable regardless). Tight 300 m cap (`src == "door"`), but NOT excluded from the empty-group rescue — that exclusion exists for the parked CHARACTER preload pool, and a door volume is level geometry. Label = `AreaName` → `DoorName` → the bare category noun. No filtering on `bOnlyUsedInRoom`/`bUseDialog`: their meaning is not established and guessing could hide the very door the player needs. Doors are bidirectional, so the same list reads as "ways out" indoors and "ways in" outdoors. `radar_cat_exit` added to i18n.lua es/en + lang/es.txt + lang/en.txt. **Pending in-game verify** (needs a full restart: nav_tracker + i18n; also NOT verified whether `AreaName` reads as display text or an internal id) |
 | Radar: Companions category | done | 2026-07-17: `companions` group in the R3 picker (between Characters and Enemies) reusing the Shift+F5 `companions()` collector verbatim (player/SpawnType-enemy/parked-pool exclusion, 300 m cap) + `enemy_display_name` for real names. radar_menu untouched (generic). Pending in-game verify |
 | Radar: ghost-enemy fix (hidden actors) | done | 2026-07-17 VERIFIED in-game (user: gone at Goku's house). `enemies_list()` + `companions()` now filter `bHidden` via `char_visible` — the game parks future-story characters hidden nearby. `CurrentHiddenType` is AQuestCharacter-ONLY (AT.hpp:17553): reading it on AT_Character = uncatchable abort, so bHidden is the whole safe check |
 | Radar: enemy levels | done | 2026-07-17 SOLVED by LIVE getter-chain decoding (the dump v2 follows the game's own virtual getters in machine code — no Ghidra round needed for the final hop): enemy level = **`ATEnemyStatus+0x390` (int32)**; player differs (`[[si+0x390]+0x328]`, 0x390 is a pointer there) — reader is enemy-only. Cross-checked: resolved 3 on an enemy a level-6 player beat easily (the earlier +0x1C=94 was a per-character id, REFUTED). Announcements re-enabled (proximity alert + R3 picker: "Soldado, nivel 3"). Pending final in-game listen. Chain evidence, HP find (`SI+0x394` f32), GetPowerCompareRank bonus: No reflected level exists (haiku dump sweep); Ghidra (opus, 17 queries) proved the chain — `AttributeComponent`@0x8E8 vtable[0x3E8]() → int32, floor 1 — but the member is statically unreachable (RTTI-stripped, ~200 candidate vtables); PINNED at runtime with the new Ctrl+Shift+F5 dump (2 saves): **`StatusInstance+0x1C`** (player 4/64 per save, enemies 2/5/6/93; corroborated live: SI+0x394 float = current HP fell 500→287 under attack). Reader `enemy_level()` (reflected hops + `Mem.i32`), level baked into enemy `disp` label → proximity alert + R3 picker say "Soldado, nivel 12". Bonus found: reflected `GetPowerCompareRank` (UCharacterAuraComponent, 0–6 stronger/weaker rank) unused for now. Pending in-game verify |
+| Radar: quest FOCUS (stay on the side story) | done (unverified) | **NEW 2026-07-28** (user: "al rastrear una misión secundaria que tiene varias fases, el radar me vuelve a rastrear la principal"). TWO independent causes. (1) **The auto-scan classified with the wrong source.** `classify()` read the target ACTOR's `ATMapIconComponent.MapIconType`, and this file's own 07-04 comment already says that is main-coded or absent on sub quests — the real signal is the navi WIDGET's switcher (`navi_quest_icon`, 1=main / 2=sub / 3=DLC6-sub), which was wired only into `Nav.list_targets` (the R3 picker) and the debug dump, never into auto-tracking. So hand-picking a side-story marker worked while the auto-scan classified the same marker PRI_MAIN/PRI_OTHER: `preempt.pri = PRI_SUB` matched nothing and `best_candidate` fell through to a concurrently active MAIN arrow. `classify(actor, icon)` now asks the widget first, failing open to the old path. (2) **The bias was a one-shot** (~15 s), so even once correct it lapsed between phases. New `preempt.focus`: a standing quest CONTEXT applied to every auto-scan, so each new phase is picked up without opening the picker; an off-focus class (a main objective advancing in the background) no longer steals the radar. Released ONLY by evidence — `Nav.notify_objective_gone(kind)`, which `quest_objective` fires after 3 polls of that class being absent **from a READABLE HUD**, so a level load, a fight or an open menu produce no verdict and the focus survives a side story that sends you to another map. F3 off is the only full reset; a manual pick or B deliberately keep it. Also: `signal_check` now reports main and sub SEPARATELY instead of `kind = cm or cs`, which used to drop a sub advance whenever a main line moved in the same pass |
 | Radar: objective auto-track (smart radar) | done | 2026-07-17: quest HUD objective-text SIGNATURE diff (quest_objective.lua — title + objective lines, counters excluded; stored sigs survive the HUD hiding in battle, so re-appearing unchanged text never fires) → `Nav.notify_objective_change(kind)` (wired in app.lua) → one-shot auto-scan preemption (`preempt` table in nav_tracker: ~10-scan TTL, `best_candidate` prefers the changed main/sub marker kind). The interrupted manual pick/sweep/resume is stashed (`preempt.stash`, plain data) and B in the R3 menu RESTORES it (nearest remaining item for chainable categories, the exact pick otherwise; B again = real stop). Explicit pick / F3 disarm everything. VERIFIED in-game 2026-07-17 (user: "parece que funciona bien"). 2026-07-17 IDLE RE-ARM (VERIFIED in-game, user): an objective signal while the radar is IDLE (no manual pick, no resume) now also lifts `auto_suppressed` in `notify_objective_change`, so a freshly activated objective is auto-tracked PERSISTENTLY, not just for the ~15 s preempt window — fixes the "wait for Gohan to find the apples, marker spawns seconds after the HUD text changes, radar stayed silent because it was suppressed post-B/post-arrival" case. Manual picks untouched (still preempt-and-stash, B restores). One log line on the idle re-arm |
 | Radar: gathering chain fixes | done | 2026-07-17 (user report: collected a spot, radar never advanced): (1) mining/bug-nest/chest icons marked STATEFUL by class name (AccessPoint*/MiningPoint*/PlacementObjectInfo < AAccessPointBase, CXX dump) → the chained sweep advances on InteractState=Taken and taken points drop from the picker; (2) fruit/small-fish spots are `ASpawner*Volume` (NO taken state exists) → gathering picks use the wide ARRIVE_DIST (8 m) instead of the 1.5 m interact radius, so the sweep arms anywhere inside the patch and the walk-away trigger advances it. VERIFIED in-game 2026-07-17 (user, same session as the auto-track) |
 | Localization (external TXT + all game languages) | done | `i18n.lua` now overlays editable `Scripts/lang/<code>.txt` on top of the built-in es/en tables (external wins → editable source of truth). 13 base languages (the game's own `ELanguageType`: ja en fr de es it ko pl pt ru zh ar th; es_ES/es_MX→es, zh_CN/zh_TW→zh). TXT format: `key = value`, `#` comments, dotted prefixes `buttons.` `keyhelp.` `header.N` `startlist.N`, `\n` newline, `\s` edge-space (combo_join/controller_prefix). Resolution: ext[lang] → S[lang] → S.en → key. Language override in the config menu (`I18n.force_language`, re-applied by app.start on reload). Verified in-game 2026-07-17 |
 | Mod config menu (L3+R3) | done | `config_menu.lua` — screen-reader modal like the radar picker; opened with **L3+R3** in the overworld (gated on `Nav.field_ready()`). Options: audio cues on/off, cue volume 0-100% (±10, samples a ping), radar auto-activate on/off, language (auto + 13 codes). Persists via `settings.lua` → `Scripts/config.txt` (user-editable, gitignored). D-pad up/down move, left/right (or A) change, B closes. Mutex `_G.__KakarotPadModal` with radar_menu; radar ignores R3 while L3 held so the chord never opens the picker. Verified in-game 2026-07-17 |
 | Explore-radar toggle (double-R3) fix | done | `radar_menu.lua` — the double-R3 "explore other objects" toggle didn't turn OFF: a double slower than the 280 ms window let the single-tap fallback open the picker on tap 1, and tap 2 only cancelled it (`Nav.toggle_explore` never fired). Fix: window widened to ~400 ms + a slow-double RESCUE (tap 2 within ~680 ms of tap 1, no picker navigation in between, closes+toggles). Verified in-game 2026-07-17 |
 | Battle monitor | wip | `battle_monitor.lua` present |
-| Cinematics / transition fluidity | wip | 2026-07-16 pass, PENDING in-game verify. (1) ui_core QUIET MODE (`Core.set_quiet`, published by ui_registry from the committed adapter's `scan_quiet` flag — set on `screen_dialogue`): steady-state backoff-expiry scans (~65ms each) defer while subtitles/talk own the screen; boost- and watch-driven scans still run. (2) ui_registry IDLE THROTTLE: with no active adapter the ~33-adapter sweep now runs every SWEEP_EVERY (300ms) instead of every tick, except inside a ~1s HOT window after any pad press or screen commit (menu-open latency unchanged). (3) pad_boost no longer opens boost windows while quiet (mashing A through dialogue was a steady scan drip). (4) pad_poll RELAX: 20ms dispatcher drops to every 5th tick (100ms) while `_G.__KakarotPadRelax` (quiet or map transition). (5) nav_tracker's two raw FindAllOf refreshes (navi icons / AT_Character) defer while quiet. (6) screen_loading content() pool walk throttled to ~300ms wall clock. (7) game INI: `HookAActorTick=0`, `HookBeginPlay=0` (mod registers no hooks; needs game RESTART). Verify: cutscenes + menu↔cinematic flips feel smoother; menus still read instantly; subtitles unaffected |
+| Cinematics / transition fluidity | wip | **CAVEAT 2026-07-26: quiet mode is correct about COST but must never mean "keep serving stale handles"** — that reading of it caused a crash (see the radar row). Deferring a scan is fine; continuing to dereference what the scan would have replaced is not. — 2026-07-16 pass, PENDING in-game verify. (1) ui_core QUIET MODE (`Core.set_quiet`, published by ui_registry from the committed adapter's `scan_quiet` flag — set on `screen_dialogue`): steady-state backoff-expiry scans (~65ms each) defer while subtitles/talk own the screen; boost- and watch-driven scans still run. (2) ui_registry IDLE THROTTLE: with no active adapter the ~33-adapter sweep now runs every SWEEP_EVERY (300ms) instead of every tick, except inside a ~1s HOT window after any pad press or screen commit (menu-open latency unchanged). (3) pad_boost no longer opens boost windows while quiet (mashing A through dialogue was a steady scan drip). (4) pad_poll RELAX: 20ms dispatcher drops to every 5th tick (100ms) while `_G.__KakarotPadRelax` (quiet or map transition). (5) nav_tracker's two raw FindAllOf refreshes (navi icons / AT_Character) defer while quiet. (6) screen_loading content() pool walk throttled to ~300ms wall clock. (7) game INI: `HookAActorTick=0`, `HookBeginPlay=0` (mod registers no hooks; needs game RESTART). Verify: cutscenes + menu↔cinematic flips feel smoother; menus still read instantly; subtitles unaffected |
 
 ## Derived facts (so we never re-RE them)
 | Fact | Value | Source |
@@ -124,6 +334,158 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-27: RETEST THE CRASH-AUDIT BATCH.** 14 files changed (10 Lua + all 4 native bridges),
+source-only and unverified in game. **A full game RESTART is required** — `app.lua`/`main.lua`
+changed and every DLL was rebuilt, so Ctrl+Shift+R is not enough. What to watch, in order of how
+much of the mod it could take down:
+
+1. **`Core.array_of`'s new existence gate is the riskiest change** — it sits under every screen, and
+   its failure mode is *silence, not a crash*. If several screens go quiet at once, press **Ctrl+G**
+   to disable the reflection gates; if they come back, the gate is the cause and the property-type
+   map is what to look at. The gate fails open by construction (`set == nil` ⇒ allow) and consults
+   `custom_props`, so a `RegisterCustomProperty` member should not be blocked — the `UE4SS.log`
+   prints one `array gate: <Class> has no '<name>'` line per distinct case, which is the evidence.
+2. **Radar behaviour right after a short field battle.** The caches now drop at the world gate, so
+   the first post-battle scan is a real `FindAllOf`. Expect: enemies re-announced correctly instead
+   of ghosts, and a manual pick interrupted by a battle *shorter than 5 s* still resuming (it now
+   goes through `remember_pick()` rather than being silently lost). A collectible you were walking
+   to when the battle started must NOT be marked as visited.
+3. **F1 (repeat current readout)** — now deferred to the game thread, so it may feel a frame later.
+   It must still work in every screen, and must do nothing during a map transition.
+4. **Audio cues and the gamepad.** Both bridges changed: WAV loading is stricter (a malformed file
+   now degrades to "missing" instead of reading out of bounds) and the pad block is lease-based, so
+   the radar/config modals must still block the pad while open AND the pad must free itself if a
+   modal dies unexpectedly (this used to require killing the game).
+5. **The world map's d-pad travel** — `screen_map`'s four writes now go through one `ft_write_sel`
+   with a `Map_World_C` class assertion. If travel selection stops responding, check the log for a
+   refused-write line before suspecting anything else.
+
+If a crash still happens, the black box (`crash_trail.bin` → printed into `UE4SS.log` at next boot)
+names the last op as before; `mem_bridge`'s recorder was itself hardened in this batch.
+
+**Three further native findings (2026-07-27, second pass) — two fixed, one open by decision:**
+`audio_bridge`'s `do_init()` now releases everything on all nine failure returns (`release_all()` +
+`init_fail()`) and `load_wav` frees before reallocating — note the leak was narrower than first
+reported: `Audio.init()` runs once from `main.lua`, which is outside the hot-reload set, so
+Ctrl+Shift+R does NOT re-run it. `g_last` is now a **seqlock** (non-blocking writer, bounded reader
+retry falling through to a direct `g_realGetState` read) since the pump thread runs inside the
+game's own input hook. **Still open:** `prism_bridge` never calls the `p_shutdown`/`p_backend_free`
+it resolves — `DllMain` is ruled out (loader lock), `App.stop()` is the reload path where PRISM must
+stay alive, so closing it needs a real process-exit hook in `main.lua` that does not exist yet, plus
+`Speech.shutdown()` → a new `prism_funcs.shutdown`. Harmless at process exit; only matters for a
+backend holding an OS resource. Same reasoning left `audio` without a shutdown API: `Audio.stop()`
+means "silence cues", not teardown, and a shutdown nobody calls is worse than a leak the OS reclaims.
+
+**2026-07-26 (d): second crash, root-caused from the black box again — and the fix is now in the
+SUBSTRATE, not in call sites.** Player exited combat into a story dialogue; trail's last op
+`nav.step`; AV reading 0x10. Two independent causes, both fixed:
+1. **Stale caches served because they could not be refreshed.** `enemies_list` / `navi_icons`
+   skipped their refresh while `Core.scan_quiet()` is true — and the DIALOGUE adapter is what
+   sets `scan_quiet` — so "battle ends → dialogue opens" pinned a list of just-destroyed enemy
+   ACTORS and the radar kept dereferencing it. Now an expired-but-unrefreshable list is
+   **DROPPED** (costs nothing) instead of served. The code's own justification — *"the stale list
+   keeps serving, entries are re-validated by every user"* — is unsound: revalidation cannot
+   detect a recycled address.
+2. **`Core.member` validated the OWNER, never the RESULT.** `o[name]` on a null field yields an
+   INVALID RemoteObject, NOT nil, so `if not d then return end` passed dead handles to the next
+   hop. Fixed at 5 call sites AND at the source: `Core.member` now validates its result, picking
+   `Core.valid` vs `Core.valid_ref` from the property TYPE the gate already records. Fails open;
+   Ctrl+G kill switch. **This closes the class rather than the instance.**
+
+**Also new:** `screen_questreward.lua` — the substory clear rewards sheet (`Quest_Sub_Reward_C`,
+"Recompensas de historia"), identified from a user screenshot + F7 census; the log proved NO
+adapter was active in that window. Registered above `screen_choicelist` (its rows are the same
+`Xcmn_Win01_List_C` class the difficulty picker uses). `screen_results` never covered it — that
+one reads `Quest_Main_Clear_C`, the MAIN-quest sheet.
+
+**WATCH ON RETEST:** the `Core.member` result-validation is the riskiest change of the batch — its
+failure mode is a screen going quiet, not a crash. If any screen stops reading, press **Ctrl+G**
+to disable both reflection gates; if it comes back, that is the cause and the property-type map is
+what to look at.
+
+
+**2026-07-26 (c): USER RETEST — no crash, radar smoother. One regression-shaped report: the world
+map's d-pad travel selection "works sometimes, especially not when I open the map several times".**
+Cause found and it is PRE-EXISTING (verified identical at HEAD): `Map.update` set `dests_said = true`
+BEFORE knowing whether `ft_build` returned anything, and `ft_guidance` rebuilt only when
+`ft_points` was `nil` — an empty TABLE is not nil. One unlucky first tick (travel icons not
+materialised, or the native InfoIcon block not yet populated) latched an empty list for the WHOLE
+visit: no destinations announced, dead d-pad, everything else about the map fine. Re-opening the
+map re-rolls that dice. This is the items-menu rule again: **never cache an empty collection as
+final.** Fixed: the latch closes only on success (retries each 100 ms poll); `ft_guidance` is now
+passive (it must not rebuild at 20 ms); and `Map.reset` asks for a `Map_World_Icon_C` pool refresh
+on entry, since ft_build matches icons BY ADDRESS and the game recreates them every opening.
+**HONEST CAVEAT:** the (b) scan-budget fix cut real `FindAllOf` throughput from ~12/tick to a
+genuine 2/tick, and this class is on the scan path — so that change plausibly made a latent bug
+fire more often. The entry refresh is the direct counter to it. Watch for other scan-path screens
+getting slower to populate; if any appear, the fix is per-screen entry refreshes, not raising the
+budget back.
+
+
+**2026-07-26 (b): CRASH IDENTIFIED FROM EVIDENCE, not inference — the black box worked first time.**
+Player crashed just after a map change. Trail's last entry: `ui.is_active screen_toasts`; the next
+adapter's mark was never written (marks are written BEFORE the call) → the crash was inside
+`screen_toasts.is_active()`. Cause: a naked `bar.Txt00` fetch — a member the same file's own comment
+records as ABSENT on `Info_Log_Bar02_C` and names as the 2026-07-17 fishing crash. The 07-24 "fix"
+put it inside a `pcall`, which cannot catch an undeclared-member abort. A map transition rebuilds
+the pooled bars, so the wrong subclass lands in `Info_Log_Bar00..04` and it aborts.
+The lint had missed it because it checked `IsValid`/`GetArrayNum`/`GetAddress` but not member
+fetches → new `dynamic-member-fetch` rule (subscripts built with `..`/`string.format`), which
+immediately found **13 more live sites** (screen_community, screen_fishing, screen_fishresult,
+screen_results, screen_shopinfo, screen_tutorial, keyhelp, ui_archetypes) — all fixed. Also named
+the 5 factory-registered adapters that were logging as `?`. Needs a restart; re-test the same
+map-change flow.
+
+**2026-07-26: THE ANSWER TO "users still crash on v0.1.2 while my log is clean" — the hardening was
+only ever applied to the MENU substrate.** Full write-up in
+[the crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md); the short version:
+
+* **Crashes.** `nav_tracker.lua` (3,848 lines, every tick in free roam, over actors level streaming
+  frees) was never swept: 24 bare `IsValid()` — which since 07-25 we know *faults* on a freed handle
+  rather than rejecting it — plus ~95 naked member fetches, including on `target.actor`, a handle
+  held for MINUTES across streaming boundaries. The dev tests menus; users play the game. That is
+  the entire discrepancy. All 24 → `Core.valid`, 37 fetches → `Core.member`. Same shape fixed in
+  `keyhelp.lua` (a `Txt_Keyhelp_01..09` loop bounded by ONE class's member count).
+* **Substrate holes:** `Core.pane_live` — the playbook's mandatory pooled-pane liveness test, called
+  with the adapter's own cached handle — was itself unguarded; `ui_directory.prop()` had no
+  property-existence gate while two callers fetch undeclared members by design.
+* **Slow menus, two causes, both ours.** (1) The 07-25 crash fix made `Core.valid` ~3× costlier and
+  `first_on_screen` runs it over entire pools every tick → per-tick memo added. (2) `begin_scan_tick`
+  had SIX callers and each refilled the budget, so "2 scans/tick" was really a dozen at ~65 ms —
+  the playbook's own *a scan slot is not a rate limit* rule, broken inside the substrate that
+  enforces it. Refill is now wall-clock keyed. This explains the old unaccountable 31%-of-game-thread
+  measurement.
+* **Prevention:** `tools/lint-lua.ps1` (syntax + globals + guards, all 70 files) is now a hard gate
+  in `package.ps1`. Nothing validated the Lua on the way out before.
+* **Combat specifically:** `quest_objective.first_text` was the strongest mid-combat candidate —
+  it tries candidate member names *expected to be absent*, at 300 ms, on a host the game hides and
+  rebuilds when a battle starts, behind a comment claiming absent members "read as nil — safe"
+  (they abort). Same shape in `guide_watch` (`win[m]` from a candidate list, as a call argument).
+  `battle_monitor` was already clean. Coverage checked: every continuously-running loop is now
+  gated (`pad_poll` touches no UObject at all).
+* **CRASH BLACK BOX (new, `mem_bridge`):** a 64-slot ring in a memory-mapped file records what the
+  mod was doing (~180 ms of trail); the OS flushes it when the process dies, and `main.lua` prints
+  the previous session's trail into `UE4SS.log` at boot. Every adapter `is_active`/`update` is
+  marked by name, plus the nav/quest/battle/guide loop steps. **Tested standalone** (kill with
+  TerminateProcess, recover from a second process) — which is how its first build was caught
+  faulting on recovery from an 8224-into-8192 overflow. So the next crash names its own site.
+* **Diagnosability:** `ui_registry` prints one `screen -> <adapter>` breadcrumb per commit, adapters
+  are pcall-isolated and log their name on fault, and the README tells players to copy `UE4SS.log`
+  after a crash, relaunch once, and send that second log too (it carries the black-box trail).
+* **Rejected:** disabling the UE4SS hook flags. UE4SS drains `ExecuteInGameThread` through
+  `ProcessEvent` — the mod's whole poll loop — so turning them off would silence the mod from boot.
+
+**ALL OF THIS IS SOURCE-ONLY AND UNVERIFIED IN GAME.** It is luac- and lint-clean. `main.lua`,
+`i18n.lua` and `ui_registry.lua` changed, so testing needs a **full game restart**, not Ctrl+Shift+R.
+What to check: free-roam for several minutes with the radar tracking a target across a streaming
+boundary (the crash path), and menu entry latency (should be no worse, likely better).
+
+**Still open, deliberately not done in this batch:** 17 shared pooled classes
+(`Xcmn_Keyhelp_C`, `Xcmn_Header_C`, `CFUIMultiLineTextBox`, `Info_Log*`, …) cannot be
+directory-mapped and remain on the ~65 ms `FindAllOf` path, contending for the budget. That is the
+remaining structural cause of menu latency and wants its own pass — after this batch is verified,
+not stacked on top of it.
 
 **2026-07-25 (p): release hygiene.** Sweeping for diagnostics before packaging found TWO left
 enabled that were NOT gated on the dev build, i.e. they shipped: `screen_cooking.LATCH_DEBUG`

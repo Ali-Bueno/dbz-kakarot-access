@@ -107,21 +107,21 @@ local function diag_once(f)
         f:write("plat CurrentActionID=" .. plat.CurrentActionID:ToString() .. "\n")
         local arr, na = Core.array_of(plat, "CurrentDynamicAssignInputControllerId")
         if arr then
-            for i = 1, na do f:write("plat ctrlId[" .. i .. "]=" .. arr[i]:ToString() .. "\n") end
+            for i = 1, na do f:write("plat ctrlId[" .. i .. "]=" .. arr[i]:ToString() .. "\n") end   -- lint:plain-table
         end
         local ids, ni = Core.array_of(plat, "CurrentKeyIds")
         if ids then
-            for i = 1, ni do f:write("plat keyId[" .. i .. "]=" .. tostring(ids[i]) .. "\n") end
+            for i = 1, ni do f:write("plat keyId[" .. i .. "]=" .. tostring(ids[i]) .. "\n") end   -- lint:plain-table
         end
     end)
     for n = 0, 3 do
         pcall(function()
-            local ab = fish["ActionBtn0" .. n]
+            local ab = Core.member(fish, "ActionBtn0" .. n)
             f:write(string.format("ActionBtn0%d KeyConfigActionId=%s Dyn=%s", n,
                 ab.KeyConfigActionId:ToString(), ab.DynamicAssignInputId:ToString()))
             local ids, ni = Core.array_of(ab, "KeyIdsForPad")
             if ids then
-                for i = 1, ni do f:write(" pad[" .. i .. "]=" .. tostring(ids[i])) end
+                for i = 1, ni do f:write(" pad[" .. i .. "]=" .. tostring(ids[i])) end   -- lint:plain-table
             end
             f:write("\n")
         end)
@@ -458,7 +458,7 @@ function Fishing.update()
                 if t then
                     local spoken = A.markup_to_speech(t) or t
                     -- A tips change = a PHASE change -> re-announce the button too.
-                    if said["tips_" .. prop] ~= spoken then said.btn = nil end
+                    if said["tips_" .. prop] ~= spoken then said.btn = nil end   -- lint:plain-table
                     say_once("tips_" .. prop, spoken, false)
                 end
             end

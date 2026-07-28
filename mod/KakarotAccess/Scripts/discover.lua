@@ -337,10 +337,16 @@ function Discover.run()
                 local Speech = require("speech")
                 local Mem = require("mem")
                 local OFF = require("native_offsets").mapWorld
-                local function tvalid(o) return o ~= nil and o:IsValid() == true end
+                -- Core.valid, NEVER a bare IsValid: IsValid dereferences the object BEFORE the
+                -- object-set lookup that could have caught a freed handle, so on a dead pooled
+                -- widget it FAULTS instead of returning false, and that fault pierces pcall.
+                local tvalid = Core.valid
                 local function tlive(o) return tvalid(o) and o:GetFullName():find("/Engine/Transient", 1, true) ~= nil end
+                -- The class the mapWorld offsets were derived for; used BOTH to find the host
+                -- and to assert it before the write below (see Mem.write_i32's expect_class).
+                local MAP_HOST_CLASS = "Map_World_C"
                 local host = nil
-                for _, o in pairs(FindAllOf("Map_World_C") or {}) do
+                for _, o in pairs(FindAllOf(MAP_HOST_CLASS) or {}) do
                     if tlive(o) then host = o break end
                 end
                 if not tvalid(host) then return false end   -- not on the world map -> normal dump
@@ -356,7 +362,9 @@ function Discover.run()
                 -- pick the next target index (cycles 0..count-1), write it, then confirm.
                 local target = ((_G.__fttgt or -1) + 1) % count
                 _G.__fttgt = target
-                local wrote = Mem.write_i32(host, OFF.selIndex, target)
+                -- An offset bound stops a WILD offset; it cannot stop a right-offset-WRONG-OBJECT
+                -- write, which corrupts silently. Assert the host class the offset belongs to.
+                local wrote = Mem.write_i32(host, OFF.selIndex, target, MAP_HOST_CLASS)
                 local sel_after = Mem.i32(host, OFF.selIndex)
                 local called = pcall(function() host:InputConfirm() end)
                 Speech.say(string.format("target %d of %d, wrote %s, sel now %s, confirm %s",
@@ -388,6 +396,10 @@ function Discover.run()
         -- it destroys the evidence it was written to collect.
         local valid = Core.valid
         local function live(o) return valid(o) and o:GetFullName():find("/Engine/Transient", 1, true) ~= nil end
+        -- A REAL instance, never the class default object: a CDO's own pointer members are not
+        -- the live ones, and following them walks into freed/never-initialised memory. Hoisted
+        -- here (it was local to the fast-travel block) so every section can filter with it.
+        local function real(o) return valid(o) and not o:GetFullName():find("Default__", 1, true) end
         local function cname(o) return valid(o) and o:GetClass():GetFName():ToString() or "?" end
         local function short(fn) return fn:match("([^%.]+%.?[^%.]*)$") or fn end
 
@@ -538,7 +550,6 @@ function Discover.run()
         out[#out + 1] = "==== FAST TRAVEL v2 (map widget / icons+brush / manager) ===="
         flush()
         do
-            local function real(o) return valid(o) and not o:GetFullName():find("Default__", 1, true) end
             -- class chain "A < B < C" up to (and including) the first native UI base.
             local function chain(o)
                 local parts, cls, d = {}, nil, 0
@@ -664,14 +675,15 @@ function Discover.run()
             -- host via the AT_Title pointer (the shipped adapter's route) + scan fallback.
             local ag = nil
             for _, gt in pairs(FindAllOf("Gametitle_C") or {}) do
-                if valid(gt) then
-                    pcall(function()
-                        local actor = gt.ActorTitle
-                        if actor and actor:IsValid() then
-                            local d = actor.AgreementDialog
-                            if d and d:IsValid() then ag = d end
-                        end
-                    end)
+                -- `real`, not just `valid`: the CDO (Default__Gametitle_C) has an ActorTitle
+                -- that is NOT the live one, and AT_Title is level-lifetime while Gametitle_C is
+                -- pooled — so off the title screen the old bare `actor:IsValid()` dereferenced a
+                -- freed pointer (IsValid faults on a dead handle instead of rejecting it).
+                -- Core.member validates owner AND result and brings its own pcall; it is the
+                -- exact walk the shipped adapter does (screen_agreement.find_host).
+                if real(gt) then
+                    local actor = Core.member(gt, "ActorTitle")
+                    if actor then ag = Core.member(actor, "AgreementDialog") end
                     if ag then break end
                 end
             end
@@ -896,7 +908,9 @@ function Discover.run()
                 local widget_cls
                 pcall(function() widget_cls = StaticFindObject("/Script/UMG.Widget") end)
                 local function is_widget(o)
-                    if not (widget_cls and widget_cls:IsValid()) then return false end
+                    -- valid(), not a bare IsValid: IsValid derefs the object before the lookup
+                    -- that could reject a dead handle, so it faults instead of returning false.
+                    if not valid(widget_cls) then return false end
                     local ok, r = pcall(function() return o:IsA(widget_cls) end)
                     return ok and r == true
                 end
@@ -906,7 +920,7 @@ function Discover.run()
                     out[#out + 1] = string.format("  %s cls=%s", label, obj:GetClass():GetFullName())
                     flush()
                     local cls = obj:GetClass()
-                    while cls and cls:IsValid() do
+                    while valid(cls) do
                         cls:ForEachProperty(function(prop)
                             local pn, pt = "?", "?"
                             pcall(function() pn = prop:GetFName():ToString() end)
@@ -914,7 +928,10 @@ function Discover.run()
                             if pt == "ObjectProperty" then
                                 local child
                                 pcall(function() child = obj[pn] end)
-                                if child and child:IsValid() then
+                                -- `child ~= nil` is not a null check (a dead ObjectProperty
+                                -- yields an INVALID RemoteObject) and IsValid faults on it
+                                -- rather than rejecting it — which then killed GetClass() below.
+                                if valid(child) then
                                     local ccls = "?"
                                     pcall(function() ccls = child:GetClass():GetFName():ToString() end)
                                     if is_widget(child) then
@@ -931,7 +948,7 @@ function Discover.run()
                         end)
                         local oks, sup = pcall(function() return cls:GetSuperStruct() end)
                         cls = (oks and sup) or nil
-                        if cls and cls:IsValid() then
+                        if valid(cls) then
                             local cn = "?"
                             pcall(function() cn = cls:GetFName():ToString() end)
                             if cn == "UserWidget" or cn == "Object" or cn == "CFUIUserWidget" then break end
@@ -952,7 +969,9 @@ function Discover.run()
                                 local cur = o
                                 for _ = 1, 6 do
                                     local oko, outer = pcall(function() return cur:GetOuter() end)
-                                    if not oko or not outer or not outer:IsValid() then break end
+                                    -- valid(), not IsValid: on a dead outer the IsValid call is
+                                    -- itself the dereference that faults (and pierces pcall).
+                                    if not oko or not valid(outer) then break end
                                     cur = outer
                                     -- The bar WIDGET's full name ENDS at its own name.
                                     if cur:GetFullName():match("%.Start_Item_Bar0" .. bi .. "$") then
@@ -965,7 +984,7 @@ function Discover.run()
                     end
                 end
                 for i = 1, 4 do
-                    if bars[i] and bars[i]:IsValid() then
+                    if valid(bars[i]) then
                         dump_children(string.format("BAR%02d", i - 1), bars[i])
                     else
                         out[#out + 1] = string.format("  BAR%02d not recovered", i - 1)

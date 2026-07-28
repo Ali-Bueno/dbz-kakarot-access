@@ -21,6 +21,7 @@
 -- latch per screen would re-blurt it on every menu.
 
 local Core = require("ui_core")
+local Mem = require("mem")            -- crash black box only (Mem.mark)
 local A = require("ui_archetypes")
 local Speech = require("speech")
 
@@ -56,24 +57,21 @@ local tick = 0           -- monotonic: doubles as the cache clock (keyhelp_watch
 --    IsVisible, exactly how discover.lua finds "visible rich text", NOT on_screen.
 local function rich_text(node)
     if not Core.valid(node) then return nil end
-    local rich
-    if not pcall(function() rich = node.ExMainTxt end) or not Core.valid(rich) then
-        return nil
-    end
-    local okv, vis = pcall(function() return rich:IsVisible() end)
-    if not okv or vis ~= true then return nil end
+    -- All member access here goes through the gate (2026-07-26). This runs on EVERY registry
+    -- tick, with or without an active adapter — so it is live during combat and cutscenes, over
+    -- pooled window nodes the game recycles. A fetch of a member the node's class does not
+    -- declare is an uncatchable abort that no pcall on this stack can contain.
+    local rich = Core.member(node, "ExMainTxt")
+    if not Core.valid(rich) then return nil end
+    if not Core.is_visible(rich) then return nil end
     -- Discriminator by VISIBILITY, not text: a NOTICE renders through the PLAIN block
     -- (mainTxt IsVisible) and a GUIDE through the RICH block. The old "plain text is
     -- empty" test failed because the pooled node keeps STALE plain text (so the guide
     -- was never detected — instructions never spoke, user 2026-07-16). If the plain
     -- block is itself shown, this is a notice; skip it (screen_dialog reads it).
-    local plain
-    pcall(function() plain = node.mainTxt end)
-    if Core.valid(plain) then
-        local okp, pv = pcall(function() return plain:IsVisible() end)
-        if okp and pv == true then return nil end
-    end
-    local ok, s = pcall(function() return rich.Text:ToString() end)
+    local plain = Core.member(node, "mainTxt")
+    if Core.is_visible(plain) then return nil end
+    local ok, s = pcall(function() return Core.member(rich, "Text"):ToString() end)
     if ok and s and s ~= "" then return A.markup_to_speech(s) end
     return nil
 end
@@ -85,8 +83,11 @@ local function guidance_of(win)
     if not Core.valid(win) then return nil end
     local parts = {}
     for _, m in ipairs(MEMBERS) do
+        -- `win[m]` as a call ARGUMENT was the worst shape available: the fetch is evaluated at
+        -- the call site, and MEMBERS is a candidate list, so most names are expected to be
+        -- absent on any given window class.
         local t
-        pcall(function() t = rich_text(win[m]) end)
+        pcall(function() t = rich_text(Core.member(win, m)) end)
         if t then parts[#parts + 1] = t end
     end
     if #parts == 0 then return nil end
@@ -119,6 +120,7 @@ local guide_trace_last = nil
 -- Called every registry tick (with or without an active adapter — a guide box can be
 -- pinned over free roam too), transition-gated by the registry.
 function W.update()
+    Mem.mark("guide.update")
     tick = tick + 1
     if tick % POLL_EVERY ~= 0 then return end
 

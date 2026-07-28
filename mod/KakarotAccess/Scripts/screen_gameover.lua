@@ -39,11 +39,15 @@ local GameOver = {}
 -- battle-HUD falling edge, which the sticky registry could never deliver reliably and whose
 -- flapping cost 124 scans in one session — audible as the audio cutting during cutscenes.
 --
--- The LIVENESS test is `Core.pane_live`, not `Core.on_screen`. Two reasons, both measured:
--- the parked host reads `enum=1:Collapsed op=1.0`, so pane_live rejects it cleanly; and
--- `on_screen` rejected the host even while the menu WAS up (the 2026-07-25 log: the watch found
--- it for 20 s and the adapter never claimed), because that walk also demands the root
--- UserWidget's `IsInViewport()` and this widget is shown through the field manager.
+-- LIVENESS — CORRECTED 2026-07-28, and the old reasoning is kept here because it was wrong in a
+-- way that cost three rounds. It used to read: "the test is `Core.pane_live`, not `Core.on_screen`
+-- … `on_screen` rejected the host even while the menu WAS up (the 2026-07-25 log), because that
+-- walk also demands the root UserWidget's `IsInViewport()`". The probe has now sampled the menu
+-- while it was genuinely on screen, and BOTH halves of that claim are false: `on_screen` reads
+-- TRUE and `IsInViewport` reads TRUE. What is actually false is `pane_live`, because the menu
+-- renders at ESlateVisibility 4 (SelfHitTestInvisible) and pane_live demands Visible(0).
+-- So the gate is `on_screen` (rejects the parked, Collapsed host) + `pane_rendered` (drops a
+-- fading close animation). See is_active for the measured numbers.
 local BAR_COUNT = 6   -- List_Bar00..05 probe cap (the menu shows 3; 03-05 are not even declared,
                       -- and the member gate now refuses them instead of fetching a null)
 
@@ -137,7 +141,18 @@ function GameOver.is_active()
     probe_signals(list)
     host = nil
     for _, h in ipairs(list) do
-        if Core.valid(h) and Core.pane_live(h) then
+        -- on_screen AND pane_rendered, NOT pane_live (2026-07-28). The probe finally caught the
+        -- menu while it was genuinely up and the numbers settle it:
+        --   live   -> on_screen=true  IsVisible=true  enum=4  opacity=1.0  inVP=true
+        --   parked -> on_screen=false IsVisible=false enum=1  opacity=1.0
+        -- enum 4 is SelfHitTestInvisible, and `pane_live` demands ESlateVisibility Visible(0), so
+        -- it returned FALSE on the live menu every single time — this adapter never once claimed
+        -- the screen, and `screen -> screen_gameover` appears nowhere in any log. The same gate
+        -- had already silenced screen_fishresult and screen_questreward; this is its third victim.
+        -- The pair below is exactly right in both directions and each half is load-bearing:
+        -- `on_screen` rejects the parked host (Collapsed) — which is the job pane_live was brought
+        -- in to do — and `pane_rendered` still drops a fading close animation.
+        if Core.valid(h) and Core.on_screen(h) and Core.pane_rendered(h) then
             host = h
             break
         end

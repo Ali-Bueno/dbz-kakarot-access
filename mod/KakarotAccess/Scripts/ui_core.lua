@@ -79,20 +79,75 @@ end
 -- grid, the tutorials list, the skill tree's orbs, keyhelp's glyph list, the dialog's choices.
 -- The 2026-07-24 cut had the same call in Core.valid, which is what silenced them then too.
 -- RULE: a TArray or struct handle goes through HERE; only a UObject goes through Core.valid.
+-- SCOPE, narrowed 2026-07-28: ARRAY and STRUCT handles ONLY. `IsValid` is a RemoteObject
+-- method; it does not exist on UE4SS's FName/FText bindings, and calling it there does not
+-- fail politely — the call resolves against the global FName CONSTRUCTOR and raises
+-- "No overload found for function 'FName'", an error that PIERCES pcall exactly like the
+-- GetAddress-on-polymorphic-type one above. See Core.name_str for the incident.
 function Core.valid_ref(o)
     if o == nil then return false end
     local ok, v = pcall(function() return o:IsValid() end)
     return ok and v == true
 end
 
+-- Read an FName/FString-ish member as a Lua string. nil = not readable.
+--
+-- WHY THIS EXISTS (2026-07-28). An FName is a VALUE (two indices), not a RemoteObject: it
+-- wraps no heap pointer we could outlive, so there is nothing a validity check could catch —
+-- and asking anyway is fatal, because `IsValid` is not one of its methods (see Core.valid_ref).
+-- That raise killed `Nav.list_targets` mid-flight on the FIRST field NPC the radar picker
+-- looked at, so `do_open()` never got a list and the R3 / V radar menu did not open AT ALL.
+-- 16 tracebacks in the user's log, every one entering through Core.member's result gate on
+-- the NameProperty `UniqueId`.
+-- So: no validity call here. The conversion IS the test — a handle that cannot answer
+-- `ToString()` yields nil, which is what every caller already treats as "no name".
+--
+-- CONTRACT: pass only Name/Str/Text property results. A UObject is survivable (indexing it with
+-- `ToString` yields an empty wrapper whose `__call` raises a pcall-CATCHABLE error), but a TArray
+-- wrapper is NOT: UE4SS coerces the method name to an integer index, gets 0, and reads element -1
+-- — a silent out-of-bounds read one slot before the buffer, with no error at all. Every call site
+-- today is a NameProperty or an FString verified against the CXX header; keep it that way.
+function Core.name_str(o)
+    if o == nil then return nil end
+    if type(o) == "string" then return o end
+    if type(o) ~= "userdata" then return nil end
+    local s
+    if not pcall(function() s = o:ToString() end) then return nil end
+    return (type(s) == "string" and s ~= "") and s or nil
+end
+
+-- Per-tick memo for Core.valid, keyed by the HANDLE itself (see Core.valid). Declared here,
+-- above its only two users, because a local referenced above its own declaration compiles to a
+-- global read, is nil at runtime and takes the mod down from boot — the 2026-07-25 lesson.
+-- Cleared in begin_scan_tick alongside os_memo.
+local valid_memo = {}
+
 function Core.valid(o)
     if o == nil then return false end
+    -- Memo FIRST, and keyed by the handle rather than by the object's address, because the
+    -- address is not free: obtaining it is most of what this function costs. Two RemoteObjects
+    -- wrapping one object therefore each pay once (unlike os_memo, which can share by address
+    -- since it has already paid for one) — and the case that matters is the same CACHED handle
+    -- being re-checked, which is what the pool walks do.
+    --
+    -- Why this became load-bearing (2026-07-26): before the crash fix this function was one
+    -- pcall'd IsValid. It is now GetAddress + two native reads + IsValid, and `first_on_screen`
+    -- runs it over the WHOLE cached pool on every call, several times per tick, for pools like
+    -- CFUIMultiLineTextBox that hold hundreds of entries. Hardening the reader is what made the
+    -- reader slow; the verdict simply cannot change within one game-thread tick, so caching it
+    -- costs nothing in correctness and takes the walk back to roughly its old price.
+    local memo = valid_memo[o]
+    if memo ~= nil then return memo end
     -- BEFORE IsValid, never after: IsValid is ITSELF a dereference of the object it is being
     -- asked about (UE4SS evaluates IsUnreachable() before its own object-set lookup), so this
     -- SEH-guarded memory pre-check is the only guard that can run first. See Mem.alive.
-    if not Mem.alive(o) then return false end
-    local ok, v = pcall(function() return o:IsValid() end)
-    return ok and v == true
+    local r = false
+    if Mem.alive(o) then
+        local ok, v = pcall(function() return o:IsValid() end)
+        r = ok and v == true
+    end
+    valid_memo[o] = r
+    return r
 end
 
 -- Guarded member fetch. `o.Name` is evaluated at the CALL SITE, so handing it
@@ -220,9 +275,37 @@ local function prop_set(o)
     return set, key
 end
 
-function Core.member(o, name)
+-- `strict` (2026-07-28): refuse the fetch when the property set is UNAVAILABLE, instead of
+-- falling open to a raw `o[name]`.
+--
+-- Fail-open is right for a single name the caller has positive reason to believe exists — the
+-- cost of being wrong is one ungated fetch on a class we know nothing about. It is exactly WRONG
+-- for a multi-candidate probe (Core.first_text / Core.first_member), whose contract is that most
+-- candidates DO NOT exist: there, an open gate is a licence to fetch names we have positive
+-- reason to believe are absent, which is the uncatchable abort. The set is unavailable whenever
+-- the per-tick enumeration budget is spent (PROP_SETS_PER_TICK = 1, shared by ~40 adapters, so a
+-- screen presenting several new classes needs several ticks) or the class introspected to nothing.
+--
+-- Failing closed here is BOUNDED, unlike the Options regression the standing rule warns about:
+-- one tick of silence per newly-seen class, self-healing the moment the set is built. The one
+-- unbounded case — `prop_sets[key] = false`, set permanently when a class enumerates to nothing —
+-- is logged, because that would mean permanent silence and we want it to name itself.
+local strict_warned = {}
+function Core.member(o, name, strict)
     if not Core.valid(o) then return nil end
     local set, key = prop_set(o)
+    if strict and not set and not custom_props[name] then
+        local cls
+        pcall(function() cls = o:GetClass():GetFName():ToString() end)
+        cls = cls or "?"
+        if not strict_warned[cls] then
+            strict_warned[cls] = true
+            print(string.format(
+                "[KakarotAccess] strict gate: no property set for %s (candidate '%s' skipped)\n",
+                cls, tostring(name)))
+        end
+        return nil
+    end
     if set and not set[name] and not custom_props[name] then
         local mark = tostring(key) .. ":" .. tostring(name)
         if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
@@ -237,6 +320,41 @@ function Core.member(o, name)
     end
     local v
     if not pcall(function() v = o[name] end) then return nil end
+    -- VALIDATE THE RESULT, not just the owner (2026-07-26 (c)). `o[name]` on a null or dead
+    -- field does NOT return nil — UE4SS hands back an INVALID RemoteObject — so every caller
+    -- that wrote `local d = Core.member(...) ; if not d then return end` was passing a dead
+    -- handle straight to its next hop. That is a whole CLASS of the +0x10 access violation, and
+    -- `ui_directory.prop` was the only place in the codebase that already knew it.
+    --
+    -- Which check applies depends on the property TYPE, and we already paid to learn it: the
+    -- gate above stores each member's type string. UObject-family results go through Core.valid
+    -- (memory pre-check first, because IsValid would dereference); struct/array handles go
+    -- through Core.valid_ref (IsValid only — Core.valid would call GetAddress on them, which
+    -- UE4SS raises THROUGH pcall). That distinction is the two-tier rule, applied automatically
+    -- instead of being remembered at ~200 call sites.
+    --
+    -- CORRECTED 2026-07-28. The first cut sent EVERY other named property type to valid_ref as
+    -- well ("anything with a known type string"), on the assumption that `IsValid` is universal
+    -- on RemoteObjects. It is not: an FName/FText is a VALUE, has no `IsValid`, and the call
+    -- resolves against the FName CONSTRUCTOR and raises through pcall. That took out the radar
+    -- picker entirely — `UniqueId` is a NameProperty and it is the first thing the target list
+    -- reads about an NPC. Only the two handle-shaped types are checked now; every other type is
+    -- a value that cannot dangle, so it FAILS OPEN, per the standing rule.
+    --
+    -- FAILS OPEN, like every guard here: a non-userdata value (string/number/bool), an unknown
+    -- type, or a spent property-set budget all return the value unchanged, so nothing that reads
+    -- today stops reading. It can only reject a handle we positively know the type of AND that
+    -- fails its own type-appropriate check. Kill switch: Ctrl+G (REFLECTION_GATES), same as the
+    -- existence gate.
+    if REFLECTION_GATES and type(v) == "userdata" and set then
+        local pt = set[name]
+        if pt == "ObjectProperty" or pt == "ClassProperty" or pt == "WeakObjectProperty"
+            or pt == "SoftObjectProperty" or pt == "InterfaceProperty" then
+            if not Core.valid(v) then return nil end
+        elseif pt == "ArrayProperty" or pt == "StructProperty" then
+            if not Core.valid_ref(v) then return nil end
+        end
+    end
     return v
 end
 
@@ -365,7 +483,32 @@ end
 -- open like every other guard here: an unknown class or an unenumerated member proceeds as before.
 function Core.array_of(owner, name)
     if not Core.valid(owner) then return nil, nil end
-    local set = prop_set(owner)
+    local set, key = prop_set(owner)
+    -- EXISTENCE gate, the same one Core.member applies (added 2026-07-27; it was missing here).
+    -- Fetching a member the owner's class does not declare is one of this game's UNCATCHABLE
+    -- aborts: UE4SS raises it below the Lua boundary, so the `pcall` around `owner[name]` below
+    -- does NOT catch it and the process dies. The type check that follows only rejects a member
+    -- declared with the WRONG type, so a member that does not exist AT ALL used to fall straight
+    -- through to that raw fetch — live every tick, not theoretical: screen_dialog probes
+    -- {WL_TextPlateCtn, UIChoice_List} against whatever dialogue window is on screen and by design
+    -- each window class declares only one of the two.
+    -- FAILS OPEN when the class is unknown (`set` nil: gates off, per-tick budget spent, or the
+    -- enumeration yielded nothing) — a guard that fails closed on this shared path takes out every
+    -- screen at once with nothing in the log. Blocks only on positive evidence of absence.
+    -- custom_props is consulted because `RegisterCustomProperty` members live in UE4SS's own map
+    -- and are INVISIBLE to ForEachProperty, so they must never be rejected here.
+    if set and not set[name] and not custom_props[name] then
+        local mark = tostring(key) .. ":arr:" .. tostring(name)
+        if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
+            blocked_seen[mark] = true
+            blocked_logged = blocked_logged + 1
+            local cn = "?"
+            pcall(function() cn = owner:GetClass():GetFName():ToString() end)
+            print(string.format("[KakarotAccess] array gate: %s has no '%s' (not read)\n",
+                cn, tostring(name)))
+        end
+        return nil, nil
+    end
     local declared = set and set[name]
     if declared and declared ~= "ArrayProperty" and not custom_props[name] then
         local mark = "arr:" .. tostring(name) .. ":" .. declared
@@ -470,8 +613,25 @@ local SCANS_PER_TICK = 2   -- was 3: three FindAllOf in one tick was the measure
 -- NOTE: the registry loop is NOT the only caller — battle_monitor and quest_objective run
 -- their own loops and call this at their step tops (they must, or they'd inherit a spent
 -- budget). All callers are serialized on the game thread, so the shared per-tick state
--- (budget + os_memo) being reset by any of them is harmless — but don't assume "per tick"
--- means "per registry tick" here.
+-- (os_memo) being reset by any of them is harmless.
+--
+-- The BUDGET is a different matter, and the note that used to stand here called that
+-- harmless too. It is not (2026-07-26). `begin_scan_tick` has SIX call sites — this loop,
+-- battle_monitor, quest_objective (three times in its own step), and ui_directory — and each
+-- one refilled the budget outright, so "2 scans per tick" was really up to a dozen. This is
+-- the playbook's own rule violated in the substrate that enforces it: A SCAN SLOT IS NOT A
+-- RATE LIMIT. A budget apportions work BETWEEN competing callers; it does nothing to stop the
+-- callers themselves asking again, and a refill counted in CALLS is confirmed in milliseconds
+-- by a poll invoked from several loops. It matches the measurement nobody could explain:
+-- 1576 scans in 5.5 min = 31% of the game thread spent inside FindAllOf, at a nominal ceiling
+-- that should have made that arithmetic impossible.
+--
+-- So the refill is now keyed to WALL TIME, and the ceiling means what it says: SCANS_PER_TICK
+-- per REFILL_EVERY_S, however many loops ask. Nothing else changes — deferred classes still
+-- just retry, and the event lanes (watch + boost) still run first, so screen-entry latency is
+-- untouched. What goes away is only the steady-state multiplication.
+local REFILL_EVERY_S = 0.1   -- the registry poll period: one refill per tick, not per caller
+local last_refill = 0
 local service_watches   -- forward decl — assigned below the watch lane (Core.watch_for)
 
 -- WORLD-EPOCH POLL — the transition gate's only signal since 2026-07-25 (it replaced the
@@ -497,6 +657,21 @@ function Core.poll_world()
     -- begin_scan_tick left that budget permanently at zero whenever the reader was toggled off,
     -- so the gate was open exactly where it mattered most.
     prop_budget = PROP_SETS_PER_TICK
+    -- The per-tick memos are dropped HERE as well as in begin_scan_tick, for the same reason the
+    -- budget above is refilled here: THE NAV LOOP CALLS ONLY THIS FUNCTION. Miss this and the
+    -- validity memo added on 2026-07-26 becomes a bug that is strictly worse than the cost it was
+    -- meant to save — nav's cross-tick handles are the same userdata every tick, so they are
+    -- exactly what hits the memo, and their verdict would be answered from a lookup computed one
+    -- to three nav ticks earlier (the clear would depend on foreign loops: the registry at 100 ms,
+    -- which Ctrl+M stops entirely; battle_monitor at 250 ms, which returns early during a
+    -- transition; quest_objective at 300 ms, which returns early while an adapter is active).
+    -- `Mem.alive` would then be skipped for up to 300 ms on the handles most likely to be freed
+    -- in that window: enemy actors, which the engine destroys the moment they die. A cached
+    -- "valid" is not a cheap answer, it is the dangling-handle bug with extra steps.
+    -- Cost of clearing twice per registry tick: two empty tables. The sweep runs after this call,
+    -- so it still gets the full benefit of the memo.
+    os_memo = {}
+    valid_memo = {}
     local d = dir_mod()
     if not d then return end
     local ok, e = pcall(d.world_epoch)
@@ -504,8 +679,20 @@ function Core.poll_world()
 end
 
 function Core.begin_scan_tick()
-    scan_budget = SCANS_PER_TICK
+    -- Wall-clock refill (see REFILL_EVERY_S): whichever loop gets here first in a window
+    -- opens the budget, the rest of that window's callers inherit whatever is left. Never
+    -- top up mid-window — that was the bug.
+    local t = os.clock()
+    if t - last_refill >= REFILL_EVERY_S then
+        scan_budget = SCANS_PER_TICK
+        last_refill = t
+    end
+    -- The on_screen and validity memos are per-CALL correctness caches, not budgets: they must
+    -- still be dropped every time, or a caller could read a verdict computed for a previous
+    -- tick — and a validity verdict that outlives its tick is exactly the dangling-handle bug
+    -- these guards exist to prevent.
     os_memo = {}
+    valid_memo = {}
     -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
     -- thread). Kept now that the mod registers NO construction notify at all (2026-07-25): it is
     -- the reference any future callback must check itself against, so we can never again ASSUME
@@ -563,6 +750,14 @@ local QUIET_EXEMPT = {
     -- Info_Name_C was here 2026-07-17..17: the intro-card reader now detects via
     -- the fm.InfoName pointer (no scans) — the pooled class is a dead end.
     ["Mgame_Result_C"]       = true, -- minigame "¡BRAVO!" result sheet (screen_fishresult)
+    -- World-map travel icons: the SAME self-sustaining deadlock as the loading screens above,
+    -- found 2026-07-28 behind "the map d-pad sometimes works, sometimes not". The open world map
+    -- looks exactly like a camera cutscene to the quiet heuristic (no committed adapter, mm root
+    -- reachable, no battle, no minimap), so this pool's scan was deferred; but screen_map only
+    -- commits once it SEES these icons, and without the commit quiet never lifts. Self-sustaining,
+    -- and broken only by the player mashing a face button — which is why it felt random. The
+    -- nothing-live refinement bounds the exemption to exactly the case that matters.
+    ["Map_World_Icon_C"]     = true, -- fast-travel destination icons (screen_map)
 }
 
 -- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from
@@ -1064,10 +1259,107 @@ end
 -- under another state — AND RenderOpacity > ~0 (close animations fade to 0 while the
 -- visibility flags lag). Both pcall-guarded: an unreadable signal counts as live.
 function Core.pane_live(h)
+    -- The playbook makes this the mandatory liveness test for EVERY pooled-pane adapter, and
+    -- an adapter calls it with the handle it cached on entry — i.e. precisely the handle most
+    -- likely to have been freed since. Yet until 2026-07-26 it went straight to a method call
+    -- on that handle: `GetVisibility()` dereferences, the pcall below cannot catch what UE4SS
+    -- raises under the Lua boundary, and the whole point of Mem.alive is that the check has to
+    -- run BEFORE the engine touches the object. A guard the whole codebase is told to rely on
+    -- must not itself be the unguarded call. `Core.valid` fails OPEN on "cannot tell", so a
+    -- pane that merely cannot answer still reports live and nothing goes quiet; only a handle
+    -- proven dead returns false here, which is the right answer for a dead pane anyway.
+    if not Core.valid(h) then return false end
     local ok, v = pcall(function() return h:GetVisibility() end)
     if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
     local ok2, op = pcall(function() return h:GetRenderOpacity() end)
     if ok2 and type(op) == "number" and op < 0.05 then return false end
+    return true
+end
+
+-- First readable text among several CANDIDATE member names on `owner`, or nil.
+--
+-- The candidates are ALTERNATIVES — a native spelling and its Blueprint-tree twin, say
+-- (`TextBox_Label` / `Txt_List`) — so most of them are expected NOT to exist on any given class.
+-- That is exactly why this must go through Core.member: asking a class for a member it does not
+-- declare is an uncatchable abort that no pcall on the stack can contain (the 2026-07-26
+-- screen_toasts crash), and Core.member's existence gate is the only thing that turns "this class
+-- does not have that node" into a quiet nil.
+--
+-- Adapters kept rolling this by hand (screen_questreward, screen_fishresult, and both 2026-07-28
+-- newcomers), which is three chances to omit a guard; it lives here now.
+-- STRICT by construction: see the `strict` argument of Core.member. A candidate whose existence
+-- the gate cannot confirm is SKIPPED, never fetched.
+local function first_text_by(pred, owner, names)
+    if not Core.valid(owner) then return nil end
+    for _, name in ipairs(names) do
+        local node = Core.member(owner, name, true)
+        if Core.valid(node) and pred(node) then
+            local t = Core.read_text(node)
+            if t and t ~= "" then return t end
+        end
+    end
+    return nil
+end
+
+-- Default: ON-SCREEN, so stale text on a parked/pooled page does not answer.
+function Core.first_text(owner, ...)
+    return first_text_by(Core.on_screen, owner, { ... })
+end
+
+-- OFF-VIEWPORT variant, for widgets the game renders into a TEXTURE instead of the viewport.
+--
+-- This is a third liveness domain, discovered 2026-07-28 on the Z Encyclopedia and worth stating
+-- plainly because no amount of guard-tightening finds it: that book's pages
+-- (`UAT_UICompZPageBase.RenderTarget`, driven by `UCompZMenu.UMGRender` onto an `AZCW_BookActor`)
+-- are drawn into render targets and mapped onto a 3D book mesh. They are never parented into the
+-- viewport widget tree, so `on_screen` — an ancestor walk ending at the viewport — returns false
+-- for a page the player is looking at, and `IsInViewport` is false too. The adapter found no live
+-- page, said nothing, and logged nothing: no error, because nothing went wrong.
+--
+-- So for these hosts the widget's OWN slate visibility is the only signal there is. That is
+-- genuinely weaker (a parked page keeps reporting its children visible), so callers must earn the
+-- screen some other way — readable text plus a marked cursor row, in screen_compz's case.
+-- Never reach for this on an ordinary viewport widget; `Core.first_text` is the default for a
+-- reason.
+function Core.first_text_offviewport(owner, ...)
+    return first_text_by(Core.is_visible, owner, { ... })
+end
+
+-- First member of `owner` that exists and is a live object, among candidate names. Same
+-- alternatives-not-requirements contract as Core.first_text, for pointer hops rather than text.
+function Core.first_member(owner, ...)
+    if not Core.valid(owner) then return nil end
+    for _, name in ipairs({ ... }) do
+        local m = Core.member(owner, name, true)
+        if Core.valid(m) then return m end
+    end
+    return nil
+end
+
+-- Liveness for a PASSIVE OVERLAY — rendered and not fading out, WITHOUT pane_live's
+-- `GetVisibility() == Visible(0)` requirement.
+--
+-- Why this is a separate gate and not a laxer pane_live: the two answer different questions.
+-- pane_live asks "does this pooled INTERACTIVE pane genuinely own the screen", and there the
+-- visibility check is load-bearing — a parked cooking/shop pane keeps rendering under another
+-- ESlateVisibility and would otherwise shadow every adapter below it. A passive notice cannot
+-- shadow anything (it speaks once and releases the dispatcher on the same tick), and in this game
+-- passive overlays render as HitTestInvisible / SelfHitTestInvisible — the Xcmn_Subtitles
+-- precedent — so applying the interactive gate to one holds it SILENT FOREVER.
+--
+-- Learned twice, which is why it now lives here: screen_fishresult 2026-07-17 (the "¡BRAVO!"
+-- catch sheet read only after pressing "Siguiente", because that press flipped the visibility
+-- state) and screen_questreward 2026-07-28 (the substory "Recompensas de historia" sheet never
+-- read at all — the adapter was registered and correct, but `pane_live` rejected the host on
+-- every tick, so it never appeared in the log once while the F7 census proved its title and all
+-- four reward rows were on screen and fully opaque).
+--
+-- `on_screen` already drops Collapsed/Hidden; the opacity check still drops the close-animation
+-- ghost (opacity fades to 0 while the visibility flags lag).
+function Core.pane_rendered(h)
+    if not Core.valid(h) then return false end
+    local ok, op = pcall(function() return h:GetRenderOpacity() end)
+    if ok and type(op) == "number" and op < 0.05 then return false end
     return true
 end
 

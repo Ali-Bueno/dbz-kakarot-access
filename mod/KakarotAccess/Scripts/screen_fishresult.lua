@@ -44,18 +44,21 @@ local spoken = {}    -- line -> true while the sheet stays up (cleared on close)
 local queue = nil    -- lines to speak this tick (computed in is_active)
 local gone = 0       -- consecutive ticks without a live sheet (absence debounce)
 
--- Close-animation ghost: opacity fades to 0 while visibility flags lag.
-local function faded(h)
-    local ok, op = pcall(function() return h:GetRenderOpacity() end)
-    return ok and type(op) == "number" and op < 0.05
-end
+-- Close-animation ghost: opacity fades to 0 while visibility flags lag. This test moved into
+-- ui_core as Core.pane_rendered on 2026-07-28, when screen_questreward turned out to need the
+-- very same passive-overlay gate; the reasoning now lives there.
+local function faded(h) return not Core.pane_rendered(h) end
 
 -- First readable text among the given member names (native vs BP tree spelling).
 local function node_text(owner, ...)
     for _, m in ipairs({ ... }) do
+        -- Core.member, not `owner[m]`: the names passed in are ALTERNATIVES (BP twin vs native),
+        -- so most of them are expected NOT to exist on any given class — and an undeclared-member
+        -- fetch is the uncatchable abort that killed the process on 2026-07-26 in screen_toasts.
+        -- The `pcall` around it never protected this.
         local t
         pcall(function()
-            local node = owner[m]
+            local node = Core.member(owner, m)
             if Core.valid(node) and Core.is_visible(node) then
                 t = A.markup_to_speech(Core.read_text(node))
             end
@@ -85,7 +88,7 @@ local function lines(host)
     if #rows == 0 then
         for i = 0, ROW_MAX - 1 do
             local row
-            pcall(function() row = host[string.format("Xlist_Bar02_%02d", i)] end)
+            pcall(function() row = Core.member(host, string.format("Xlist_Bar02_%02d", i)) end)
             if not Core.valid(row) then break end
             rows[#rows + 1] = row
         end

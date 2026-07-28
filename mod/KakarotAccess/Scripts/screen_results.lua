@@ -100,7 +100,7 @@ local function debug_dump_detail(d, key, label)
                         end
                         pcall(function()
                             local p = ro.Parent
-                            if p and p:IsValid() then
+                            if Core.valid(p) then
                                 params = params .. " parent=" .. p:GetFullName()
                             end
                         end)
@@ -177,7 +177,7 @@ local function lines()
                 for j = 0, DETAIL_COUNT - 1 do
                     local d
                     pcall(function()
-                        d = bar["Quest_Main_Clear_Detail" .. string.format("%02d", j)]
+                        d = Core.member(bar, "Quest_Main_Clear_Detail" .. string.format("%02d", j))
                     end)
                     if Core.valid(d) and Core.on_screen(d) then
                         local dn = Core.read_text(Core.member(d, "TextBox_Detail"))

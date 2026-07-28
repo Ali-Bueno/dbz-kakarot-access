@@ -39,6 +39,35 @@ function Mem.thread_id()
     return nil
 end
 
+-- ---- crash black box ---------------------------------------------------------------------
+--
+-- The mod's crashes kill the process from inside UE4SS with an uncatchable C++ throw: no Lua
+-- traceback, and the UE crash dump only gives offsets into a stripped 19 MB DLL. So every round
+-- of diagnosis has been inference from code reading. This records what the mod was DOING, in a
+-- memory-mapped ring the OS writes out when the process dies, so the next crash names its own
+-- site. See the block comment in mem_bridge.c for the mechanism and its honest limits.
+--
+-- `Mem.mark` must stay free enough to call on hot paths (it is one memcpy) and must never be
+-- able to throw: the whole point is a diagnostic that cannot become a new failure mode.
+local marking = false
+
+-- Opens the ring and returns the PREVIOUS session's trail (oldest -> newest) before resetting
+-- it. If the last run crashed, this is its final few hundred milliseconds.
+function Mem.mark_open(path)
+    if not (loaded and m.mark_open) then return nil end
+    local ok, trail = pcall(m.mark_open, path)
+    if not ok then return nil end
+    marking = trail ~= nil
+    return trail
+end
+
+function Mem.mark(text)
+    if not marking then return end
+    pcall(m.mark, text)
+end
+
+function Mem.marking() return marking end
+
 -- The STORED pointer behind a handle, WITHOUT dereferencing it — the only question that is
 -- safe to ask about a possibly-freed UObject. `Mem.addr` below cannot be used for that: it
 -- calls `obj:IsValid()` first, and IsValid is ITSELF a dereference — UE4SS evaluates
@@ -282,13 +311,85 @@ function Mem.at_u8(addr, off) if loaded and addr then return m.read_u8(addr, off
 function Mem.at_ptr(addr, off) if loaded and addr then return m.read_ptr(addr, off or 0) end end
 function Mem.at_bytes(addr, off, n) if loaded and addr then return m.read_bytes(addr, off or 0, n) end end
 
+-- ---- writes: the HOST-CLASS assertion ----------------------------------------------------
+--
+-- The bridge bounds the OFFSET, which stops a wild offset from landing outside the object.
+-- It cannot stop the other half of the problem: a right-offset-WRONG-OBJECT write. Every
+-- offset in native_offsets.lua was derived for ONE class, so storing an int at that offset on
+-- any other object overwrites a field nobody can name — silently, with no bad address and no
+-- error, and a crash somewhere unrelated much later. A read on the wrong object is a wrong
+-- number; a write on the wrong object is corruption.
+--
+-- So a writer takes the class the offset belongs to and refuses when the host positively is
+-- not it. The name is not invented here: callers pass the SAME class name they already looked
+-- the host up by (Core.cached_all / FindAllOf), so the assertion is "the object I write to is
+-- the object I asked for".
+--
+-- FAILS OPEN on "don't know", CLOSED only on evidence (the 2026-07-25 rule): no expected class,
+-- or a host whose class chain cannot be read, writes exactly as before — a guard that failed
+-- closed here would silently break world-map fast travel, which is precisely the failure mode
+-- this codebase keeps paying for. It refuses only on a chain we DID read that does not contain
+-- the expected name.
+local CLASS_CHAIN_MAX = 16   -- inheritance-chain bound, same as ui_core's SUPER_MAX: this
+                             -- game's widget chains run ~6-10 (BP _C -> game base ->
+                             -- UUserWidget -> UWidget -> UVisual -> UObject).
+
+-- The host's class name and its ancestors as a set, plus the leaf name for logging. Returns
+-- nil when nothing could be read at all — the "don't know" case, which must not block.
+-- The SUPER walk matters: a lookup by class name can legitimately return a SUBCLASS instance,
+-- and rejecting that would be a false refusal.
+local function class_chain(obj)
+    local cls
+    if not pcall(function() cls = obj:GetClass() end) then return nil end
+    local names, leaf, d = {}, nil, 0
+    while cls ~= nil and d < CLASS_CHAIN_MAX do
+        -- Mem.alive BEFORE IsValid, for the reason this whole file exists: IsValid is itself a
+        -- dereference (see the block comment above), so on a freed super-struct handle it would
+        -- fault instead of rejecting. Inlined rather than calling Core.valid because ui_core
+        -- requires THIS module — a require back would be a cycle.
+        if not Mem.alive(cls) then break end
+        local okv, v = pcall(function() return cls:IsValid() end)
+        if not (okv and v == true) then break end
+        local n
+        if not pcall(function() n = cls:GetFName():ToString() end) or type(n) ~= "string" then break end
+        names[n] = true
+        leaf = leaf or n
+        local sup
+        if not pcall(function() sup = cls:GetSuperStruct() end) then break end
+        cls = sup
+        d = d + 1
+    end
+    if leaf == nil then return nil end
+    return names, leaf
+end
+
+-- One line per distinct (expected, actual) pair — never per tick. A game patch that renames or
+-- re-parents the host then shows up in UE4SS.log instead of silently disabling the feature.
+local refused_seen = {}
+local function class_ok(obj, expect)
+    if expect == nil then return true end               -- caller said nothing: do not block
+    local names, leaf = class_chain(obj)
+    if names == nil then return true end                -- cannot tell: do not block
+    if names[expect] then return true end
+    local mark = expect .. "<-" .. tostring(leaf)
+    if not refused_seen[mark] then
+        refused_seen[mark] = true
+        print(string.format("[KakarotAccess] memory WRITE refused: expected a %s, host is a %s "
+            .. "(offset belongs to another class)\n", expect, tostring(leaf)))
+    end
+    return false
+end
+
 -- Guarded WRITES. Same SEH guard as reads (a bad address is a no-op returning false).
 -- Used to snap a game cursor onto a target by overwriting the member the game reads back
 -- as its own source (world-map fast travel). Return true only if the store succeeded.
+-- `expect_class` is the class the offset was derived for (see the note above) — optional only
+-- so the guard can fail open, NOT so new call sites can skip it.
 local function writer(fn_name)
-    return function(obj, off, v)
+    return function(obj, off, v, expect_class)
         local a = Mem.addr(obj)
         if not a or not m[fn_name] then return false end
+        if not class_ok(obj, expect_class) then return false end
         return m[fn_name](a, off or 0, v) == true
     end
 end

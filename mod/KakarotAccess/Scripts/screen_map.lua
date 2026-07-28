@@ -43,6 +43,10 @@ local obj_read_at = nil    -- tick to fire the deferred objective re-read (nil =
 -- "Go to X?" YesNo. No stick injection, no cursor math — the selected index IS the source of
 -- truth the confirm reads (verified in-game: write index + InputConfirm travels to that point).
 local FT = OFF.mapWorld
+-- The BP class the mapWorld offsets belong to, used BOTH to look the host up and to assert it
+-- before writing selIndex. The bridge bounds the offset; only this stops a right-offset-wrong-
+-- object write, which corrupts silently and crashes later with no trace.
+local FT_HOST_CLASS = "Map_World_C"
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
@@ -251,9 +255,10 @@ local function dump_struct(host)
                 local child
                 pcall(function() child = host[pn] end)
                 if type(child) == "userdata" then
-                    local ok_v = false
-                    pcall(function() ok_v = child:IsValid() == true end)
-                    if ok_v then
+                    -- Core.valid, not a pcall'd IsValid: this walks arbitrary members of a
+                    -- pooled map widget, so `child` may well be a freed handle — and IsValid
+                    -- dereferences before it checks, so it faults instead of answering false.
+                    if Core.valid(child) then
                         local ccls, txt = "?", nil
                         pcall(function() ccls = child:GetClass():GetFName():ToString() end)
                         pcall(function() txt = Core.read_text(child) end)
@@ -344,14 +349,45 @@ function Map.is_active()
 end
 
 -- The live UAT_UIMapWorld host (BP Map_World_C) whose selection machine we drive, or nil.
--- Uses the SAME pick as the validated in-game test (first transient instance), so the address
--- we read/write is the one the confirm core actually reads.
+--
+-- TWO FIXES, 2026-07-28 (user: the map d-pad is slow, and dead from the SECOND time the map is
+-- opened). Both were in this function.
+--
+-- 1. ON_SCREEN, not just valid. It used to take the first `Core.valid` instance whose path is
+--    Transient. These hosts are POOLED and multi-instance (see the file header), and a closed
+--    pooled widget stays valid forever — so on the second open this happily returned the previous,
+--    off-screen instance and every native selIndex write went to a host the confirm core is not
+--    reading. Works the first time, dead from the second: the exact intermittency CLAUDE.md's
+--    "invalidate by on_screen, never by validity alone" rule describes.
+-- 2. MEMOISED. This runs on the 20 ms pad loop, and the walk below calls `GetFullName()` on every
+--    pooled instance — a reflection call per instance per tick, growing as instances accumulate
+--    over a session. That is the sluggish d-pad. The resolved host is now reused; `Core.valid`
+--    still runs on every use (it is the guard that must never be skipped), and the costlier
+--    on_screen re-check is throttled. Cleared in reset(), so each map entry resolves afresh.
+local FT_RECHECK_S = 0.25
+local ft_cached, ft_checked_at = nil, 0
+
 local function ft_host()
-    for _, o in ipairs(Core.cached_all("Map_World_C", tick)) do
-        if Core.valid(o) then
+    if ft_cached and Core.valid(ft_cached) then
+        local now = os.clock()
+        if now - ft_checked_at < FT_RECHECK_S then return ft_cached end
+        if Core.on_screen(ft_cached) then ft_checked_at = now return ft_cached end
+    end
+    ft_cached = nil
+    -- peek_all, not cached_all: this runs on the 20 ms pad loop, which never calls
+    -- `Core.begin_scan_tick` and so never REFILLS the shared scan budget. `cached_all` can fall to
+    -- the scan path when the directory cannot answer, and doing that fifty times a second drains
+    -- the budget five times faster than the 100 ms registry refills it — starving the very icon
+    -- scan the destination list is waiting on. `peek_all` serves the directory list or the cached
+    -- pool and never scans.
+    for _, o in ipairs(Core.peek_all(FT_HOST_CLASS)) do
+        if Core.valid(o) and Core.on_screen(o) then
             local fn = ""
             pcall(function() fn = o:GetFullName() end)
-            if fn:find("/Engine/Transient", 1, true) then return o end
+            if fn:find("/Engine/Transient", 1, true) then
+                ft_cached, ft_checked_at = o, os.clock()
+                return o
+            end
         end
     end
     return nil
@@ -391,49 +427,108 @@ end
 -- index and announce the name. Confirm (A) writes the index again and calls InputConfirm() so
 -- the game opens its own "Go to X?" YesNo for the CHOSEN point — regardless of where the analog
 -- cursor sits. We re-assert the chosen index each tick so a stray hover can't retarget Confirm.
-local function ft_guidance(host)
-    if not ft_points then ft_points = ft_build(host) end
-    local n = #ft_points
-    if n == 0 then return end
+-- The ONE place that writes the game's selection index, so the host-class assertion is stated
+-- once instead of at all four call sites below.
+local function ft_write_sel(host, idx)
+    return Mem.write_i32(host, FT.selIndex, idx, FT_HOST_CLASS)
+end
 
-    -- Keyboard first: the arrows drive this exactly like the d-pad does, and the pad
-    -- snapshot below returns early on a machine with no controller, so a keyboard command
-    -- handled after it would never run. Queued by main.lua's keybinds and consumed HERE,
-    -- on the game thread, because moving a point WRITES the game's own selection index.
+-- Fast-loop self-build throttle, and a direction pressed before the list existed.
+local FT_BUILD_S = 0.25
+local ft_built_at, ft_pending = 0, nil
+-- The NAME of the point last selected. Survives reset(), which is the whole point: pressing A
+-- opens the game's yes/no travel prompt, that prompt is a different adapter, the registry commits
+-- it and calls Map.reset() — so declining used to drop you back at the start of the list and you
+-- had to walk all the way down again (user, 2026-07-28). Kept by NAME rather than by index, the
+-- same choice nav_tracker makes for `resume_pick`: the list is rebuilt from scratch on every map
+-- open and an index would silently point at a different place, whereas a name either still exists
+-- or it does not.
+local ft_last_name = nil
+
+local function ft_guidance(host)
+    -- EDGE BOOKKEEPING FIRST (2026-07-28 — "a veces funciona, a veces no"). `ft_prevbtn` used to
+    -- be updated only at the very END of this function, i.e. AFTER the "no list yet" early return.
+    -- Every press made while the list was still being built was therefore swallowed without even
+    -- being remembered, and the player had to press again — which is exactly what intermittent
+    -- feels like. Read the pad once, up front, decide the edges, and commit `ft_prevbtn`
+    -- immediately so no path can skip it.
+    local snap = Input.read()
+    local B = Input.BTN
+    local buttons = snap and snap.buttons or 0
+    local function pressed(m) return (buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
+    local hit_down, hit_up, hit_ok = pressed(B.DPAD_DOWN), pressed(B.DPAD_UP), pressed(B.A)
+    ft_prevbtn = buttons
+
+    -- Keyboard: the arrows drive this exactly like the d-pad. Queued by main.lua's keybinds and
+    -- consumed HERE, on the game thread, because moving a point WRITES the game's selection index.
     local kcmd = ft_kb_cmd
     ft_kb_cmd = nil
+
+    -- SELF-SUFFICIENT BUILD. This used to wait for Map.update() (100 ms) to produce the list,
+    -- which made the d-pad hostage to the SLOW loop's scan luck: the icon pool the build needs
+    -- sits on the budgeted scan path, is deferred by quiet mode, and its backoff after a re-open
+    -- can be seconds. The old comment was right that a 20 ms rebuild would re-walk the pool fifty
+    -- times a second on a map with genuinely no travel points — so the rebuild is throttled by
+    -- WALL CLOCK instead of being refused outright.
+    local n = ft_points and #ft_points or 0
+    if n == 0 then
+        local now = os.clock()
+        if now - ft_built_at >= FT_BUILD_S then
+            ft_built_at = now
+            ft_points = ft_build(host)
+        end
+        n = ft_points and #ft_points or 0
+    end
+    if n == 0 then
+        -- No list yet: REMEMBER the direction instead of dropping it, and replay it on the first
+        -- tick there is one.
+        if hit_down then ft_pending = 1 elseif hit_up then ft_pending = -1 end
+        return
+    end
+
+    -- Restore the previous selection by NAME, silently: the player asked to "keep moving from
+    -- where I was", not to be told again where that is — the next press announces the new point.
+    -- A name that no longer exists simply leaves the selection unset, which is the old behaviour.
+    if ft_sel == nil and ft_last_name then
+        for i = 1, n do
+            if ft_points[i] == ft_last_name then
+                ft_sel = i - 1
+                ft_write_sel(host, ft_sel)
+                break
+            end
+        end
+    end
+
     local function move(delta)
         ft_sel = ((ft_sel or (delta > 0 and -1 or 0)) + delta) % n
-        Mem.write_i32(host, FT.selIndex, ft_sel)
+        ft_write_sel(host, ft_sel)
+        ft_last_name = ft_points[ft_sel + 1]
         Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
     end
     local function confirm()
         if not ft_sel then return end
-        Mem.write_i32(host, FT.selIndex, ft_sel)
+        ft_write_sel(host, ft_sel)
         pcall(function() host:InputConfirm() end)
+    end
+    -- A direction pressed before the list existed fires now, once.
+    if ft_pending then
+        local d = ft_pending
+        ft_pending = nil
+        move(d)
     end
     if kcmd == "next" then move(1)
     elseif kcmd == "prev" then move(-1)
     elseif kcmd == "select" then confirm() end
 
-    local snap = Input.read()
-    if not snap then
-        -- No pad: keep the chosen index pinned so the game's own confirm still targets it.
-        if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
-        return
-    end
-    local B = Input.BTN
-    local function pressed(m) return (snap.buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
-    if pressed(B.DPAD_DOWN) then
+    if hit_down then
         move(1)
-    elseif pressed(B.DPAD_UP) then
+    elseif hit_up then
         move(-1)
     end
     -- Confirm: pin the chosen index and fire the game's own confirm for it (validated in-game).
-    if pressed(B.A) then confirm() end
-    ft_prevbtn = snap.buttons
+    if hit_ok then confirm() end
     -- keep the chosen index pinned so the game's own Confirm (A) also targets it.
-    if ft_sel then Mem.write_i32(host, FT.selIndex, ft_sel) end
+    if ft_sel then ft_write_sel(host, ft_sel) end
 end
 
 -- Area map: announce the POI the cursor is focused on (FocusTarget), each time it changes.
@@ -464,6 +559,21 @@ end
 function Map.reset()
     ann:reset(); dests_said = false
     ft_points, ft_sel, ft_prevbtn = nil, nil, 0
+    -- Drop the memoised fast-travel host: the map is rebuilt on every open, so a handle from the
+    -- previous visit is exactly the stale instance that killed the d-pad on re-entry (ft_host).
+    ft_cached, ft_checked_at = nil, 0
+    ft_kb_cmd = nil   -- a keyboard command left unconsumed from the previous visit must not fire
+    ft_built_at, ft_pending = 0, nil   -- and neither must a direction pressed on the way out
+    -- `ft_last_name` is DELIBERATELY NOT cleared here. reset() runs whenever another adapter takes
+    -- the screen, and the travel yes/no prompt is exactly that — so clearing it here is what made
+    -- declining a trip send you back to the top of the list. It self-expires: a name that is not
+    -- in the rebuilt list is simply never restored.
+    -- The other half of the same rule: ft_build matches InfoIcon entries to icon widgets BY
+    -- ADDRESS, and the game recreates `Map_World_Icon_C` every time the map opens. A pool cache
+    -- from the previous visit therefore matches nothing and every point degrades to "map point
+    -- N". The class is on the scan path (it cannot be directory-mapped), so ask for the re-scan
+    -- explicitly on entry instead of waiting out its backoff. Budget-gated inside Core.
+    Core.refresh_all("Map_World_Icon_C")
     area_focus_key = nil
     wake_disarm()
     -- Opening the map re-reads the current quest objective on demand: the HUD reader only
@@ -473,6 +583,10 @@ function Map.reset()
     obj_read_at = tick + OBJ_READ_DELAY
 end
 
+-- Wall-clock floor between two on-demand objective re-reads (see Map.update).
+local OBJ_REPEAT_S = 20
+local obj_said_at = nil
+
 function Map.update()
     local s = state
     if not s then return end
@@ -481,8 +595,17 @@ function Map.update()
     ann:focus(s.screen, nil, s.name or s.screen, nil, Keyhelp.helpmsg)
     -- Deferred quest-objective re-read: fire once, a few polls after opening, QUEUED
     -- (interrupt=false) so it follows the readout above instead of overlapping it.
-    if obj_read_at and tick >= obj_read_at then
+    -- AREA MAP ONLY, and rate-limited (user 2026-07-28: "los objetivos se están anunciando un
+    -- montón de veces, hasta cuando abro el world map y lo cierro"). Two things were wrong:
+    -- `reset()` arms this, and reset runs on EVERY screen change — so opening the world map,
+    -- closing it, and every dispatcher flip in between each re-armed a re-read. And the world map
+    -- is not where anyone reviews the current objective; the area map is.
+    -- So: never on the world map, and never twice within OBJ_REPEAT_S, which bounds the damage if
+    -- some other path starts re-arming it again.
+    if obj_read_at and tick >= obj_read_at and not s.world
+        and (obj_said_at == nil or os.clock() - obj_said_at >= OBJ_REPEAT_S) then
         obj_read_at = nil
+        obj_said_at = os.clock()
         pcall(function() require("quest_objective").reannounce(false) end)
     end
     if s.world then
@@ -490,10 +613,24 @@ function Map.update()
         if not host then return end
         -- List the reachable fast-travel points once (so a blind player knows what's
         -- there). The d-pad selection itself runs on the FAST loop below, not here.
+        -- NEVER LATCH AN EMPTY BUILD (user: "the d-pad on the world map works sometimes,
+        -- especially not when I open the map several times", 2026-07-26). `dests_said` used to
+        -- be set BEFORE knowing whether the build produced anything, and `ft_guidance` only
+        -- rebuilds when `ft_points` is nil — an empty TABLE is not nil. So one unlucky first
+        -- tick (the travel icons not materialised yet, or the native InfoIcon block not yet
+        -- populated) latched an empty list for the WHOLE visit: no destinations announced and a
+        -- dead d-pad, with everything else about the map working normally. Re-opening the map is
+        -- exactly what re-rolls that dice, which is why it looked random and got worse the more
+        -- the map was opened.
+        --
+        -- This is the items-menu rule again (2026-07-15): an adapter that collects a REBUILT
+        -- screen's children must never cache an empty collection as final. The latch now closes
+        -- only on success, so the build simply retries on the next 100 ms poll until the game has
+        -- the points ready — and stops for good once it does.
         if not dests_said then
-            dests_said = true
             ft_points = ft_build(host)
             if #ft_points > 0 then
+                dests_said = true
                 Speech.say(string.format(I18n.t("map_travel_points"), #ft_points, table.concat(ft_points, ", ")), false)
             end
         end

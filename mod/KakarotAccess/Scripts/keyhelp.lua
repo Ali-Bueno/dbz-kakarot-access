@@ -110,7 +110,10 @@ local function glyph_tokens(plat)
     local toks = {}
     if not Core.valid(plat) then return toks end
     for i = 0, MAX_GLYPH_IMAGES - 1 do
-        local img = plat["Dmy_Btn_" .. string.format("%02d", i)]
+        -- Core.member, not a raw fetch: the bound below is the member count of ONE class, and
+        -- asking a sibling class for a name it does not declare is an uncatchable abort, not a
+        -- nil. See the loop in Keyhelp.read for the full reasoning.
+        local img = Core.member(plat, "Dmy_Btn_" .. string.format("%02d", i))
         if Core.is_visible(img) then
             local t = texture_token(img)
             if t then toks[#toks + 1] = t end
@@ -186,9 +189,9 @@ local function dbg_dump(kh, entries)
         end
         for n = 1, MAX_ENTRIES do
             local suffix = string.format("%02d", n)
-            local txt = kh["Txt_Keyhelp_" .. suffix]
+            local txt = Core.member(kh, "Txt_Keyhelp_" .. suffix)
             if Core.is_visible(txt) then
-                local plat = kh["Xcmn_Btn_Plat_" .. suffix]
+                local plat = Core.member(kh, "Xcmn_Btn_Plat_" .. suffix)
                 lines[#lines + 1] = string.format("  %s label=%q tex=%s -> token=%s x=%s",
                     suffix, tostring(Core.text_of(txt)),
                     table.concat(glyph_tokens(plat), "+"),
@@ -231,11 +234,19 @@ function Keyhelp.read(visible_only, tick)
     local entries, placed = {}, true
     for n = 1, MAX_ENTRIES do
         local suffix = string.format("%02d", n)
-        local txt = kh["Txt_Keyhelp_" .. suffix]
+        -- These two fetches MUST go through the property gate (2026-07-26). MAX_ENTRIES is the
+        -- member count of `Xcmn_Keyhelp_C`, but `Keyhelp.bar` returns whatever keyhelp-family
+        -- widget is on screen — and asking a class for a member it does not declare is one of
+        -- this game's UNCATCHABLE aborts, which no enclosing pcall can contain. It is the exact
+        -- shape that killed the process on 2026-07-17 (`bar.Txt00`, a name belonging to the
+        -- sibling item-log bar class). Nothing here had noticed because the classes seen in
+        -- testing all happen to declare all nine; a player reaching a screen with a shorter bar
+        -- crashes. Core.member refuses the undeclared name and returns nil instead.
+        local txt = Core.member(kh, "Txt_Keyhelp_" .. suffix)
         if Core.is_visible(txt) then
             local label = Core.text_of(txt)
             if label then
-                local plat = kh["Xcmn_Btn_Plat_" .. suffix]
+                local plat = Core.member(kh, "Xcmn_Btn_Plat_" .. suffix)
                 local button, nav = glyph_of(plat)
                 local x = slot_x(plat) or slot_x(txt)
                 if not x then placed = false end
@@ -274,7 +285,10 @@ function Keyhelp.label_sig(tick)
     if not kh then return "" end
     local parts = {}
     for n = 1, MAX_ENTRIES do
-        local txt = kh["Txt_Keyhelp_" .. string.format("%02d", n)]
+        -- Gated fetch, same reason as Keyhelp.read — and this one is the hotter of the two:
+        -- keyhelp_watch polls it in every menu, so an undeclared name here aborts the process
+        -- on whichever screen first shows a shorter bar.
+        local txt = Core.member(kh, "Txt_Keyhelp_" .. string.format("%02d", n))
         if Core.is_visible(txt) then
             local label = Core.text_of(txt)
             if label then parts[#parts + 1] = label end

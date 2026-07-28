@@ -185,6 +185,49 @@ it falls back to English, so you can't break it. See `lang/README.txt` for the f
 
 ---
 
+## Reporting a crash
+
+If the game closes on its own, **one file tells us almost everything** — and without it a crash
+report can only be guessed at. Please send it along with your report.
+
+**The file:** `UE4SS.log`, in your game folder, next to the game's executable:
+
+```
+…\steamapps\common\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\UE4SS.log
+```
+
+The quickest way to get there: press <kbd>Windows</kbd>+<kbd>R</kbd>, paste the path below, and
+press Enter — the folder opens with the file in it.
+
+```
+%ProgramFiles(x86)%\Steam\steamapps\common\DRAGON BALL Z KAKAROT\AT\Binaries\Win64
+```
+
+(If Steam is on another drive, open the game's folder from Steam: *Library → right-click DRAGON
+BALL Z KAKAROT → Manage → Browse local files*, then go into `AT`, `Binaries`, `Win64`.)
+
+**The order matters, because the file is overwritten every time the game starts:**
+
+1. **Right after the crash, copy `UE4SS.log` somewhere safe** (your desktop is fine). This copy
+   records which screen the reader was on as you played, up to the moment it stopped.
+2. **Then start the game once more and quit normally.** The mod keeps a small flight recorder of
+   its last operations, which survives a crash; on the next launch it writes them into the new
+   `UE4SS.log` under *PREVIOUS SESSION ENDED HERE*. That section says what the mod was doing in
+   the final fraction of a second.
+3. **Send us both copies.**
+
+Neither file contains personal information beyond your game folder's path.
+
+**Also useful, if it exists:** Windows may have written a crash report to
+`%LOCALAPPDATA%\AT\Saved\Crashes\` — if there is a folder there with a recent date, zip it up
+too.
+
+**What to tell us:** what you were doing (which menu, or free roam), whether it had been running
+long, and whether it is repeatable. Report on
+[GitHub Issues](https://github.com/Ali-Bueno/dbz-kakarot-access/issues) or the Discord below.
+
+---
+
 ## Links & community
 
 - **Latest release:** https://github.com/Ali-Bueno/dbz-kakarot-access/releases/latest

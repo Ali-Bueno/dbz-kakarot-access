@@ -18,7 +18,8 @@ from the former `UE4ss study` docs.
 
 | File | Purpose |
 |---|---|
-| **`ue4ss-live-workflow.md`** | **START HERE — the zero-restart loop**: what replaces dumping, dumpers as callable functions, hot reload, the non-visual text pipeline |
+| **`ue4ss-mod-architecture.md`** | **READ FIRST — the design layer**: *resolve, don't scan*. The decision ladder, scan cost measured on two games, and what both rejected (construction notifies, UFunction hooks, map-load hooks) |
+| **`ue4ss-live-workflow.md`** | **START HERE for the dev loop — zero restarts**: what replaces dumping, dumpers as callable functions, hot reload, the non-visual text pipeline |
 | `ue4ss-reflection-cookbook.md` | Enumerate a class **in place** (properties, types, functions, super chain) + the text-mode "which value flips?" probe |
 | `ue4ss-installation-guide.md` | Install UE4SS on a target game, central install, custom game configs, missing AOBs |
 | `ue4ss-api-reference.md` | UE4SS Lua API (finding, hooks, console, threading) + **cost matrix** |

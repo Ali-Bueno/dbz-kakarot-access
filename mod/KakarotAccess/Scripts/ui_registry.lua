@@ -6,6 +6,7 @@
 -- adapter's update(). Adding a screen = register it; no engine changes.
 
 local Core = require("ui_core")
+local Mem = require("mem")            -- crash black box only (Mem.mark)
 local Transition = require("transition")
 local KeyhelpWatch = require("keyhelp_watch")
 local GuideWatch = require("guide_watch")
@@ -130,13 +131,46 @@ local function pad_boost()
     end
 end
 
-function Registry.register(adapter)
+-- `name` is the adapter's module name, used only for the crash breadcrumb below. Optional, so
+-- an adapter registered without one still works — it just shows up as "?" in the log.
+local adapter_name = {}
+function Registry.register(adapter, name)
     adapters[#adapters + 1] = adapter
+    if name then adapter_name[adapter] = name end
+end
+
+-- FAULT ISOLATION (2026-07-26). Every adapter probe used to run bare, so one adapter raising an
+-- ordinary Lua error aborted the WHOLE sweep for that tick — every adapter below it in the list
+-- went unpolled, and the only trace was the loop's outer pcall swallowing it with no idea which
+-- one was at fault. Two things this buys, both of which the generic-strategy doc asks for and the
+-- code did not do: a broken screen now degrades LOCALLY instead of silencing everything under it,
+-- and the log NAMES the culprit.
+--
+-- Honest limit: this cannot contain the UNCATCHABLE aborts (a fetch on a freed handle, a member
+-- the class does not declare) — those unwind below the Lua boundary and kill the process whatever
+-- pcall is on the stack. Guarding the call sites is the only defence against those. What this
+-- catches is the ordinary-error case, and — the reason it earns its place while we are hunting a
+-- crash — it turns "the reader went quiet" into a named line in the user's log.
+local fault_logged = {}
+local function probe(a)
+    -- Black-box mark BEFORE the call, not after: the whole value is that if this adapter's
+    -- is_active is the one that kills the process, the last thing in the ring is its name.
+    -- One memcpy; the sweep does ~36 of these per tick and that is still nothing.
+    Mem.mark("ui.is_active " .. (adapter_name[a] or "?"))
+    local ok, r = pcall(a.is_active)
+    if ok then return r end
+    local nm = adapter_name[a] or "?"
+    if not fault_logged[nm] then
+        fault_logged[nm] = true       -- once per adapter per session: never a per-tick storm
+        print(string.format("[KakarotAccess] adapter '%s' faulted in is_active: %s\n",
+            nm, tostring(r)))
+    end
+    return false
 end
 
 local function sweep()
     for _, a in ipairs(adapters) do
-        if a.is_active() then return a end
+        if probe(a) then return a end
     end
     return nil
 end
@@ -161,7 +195,7 @@ local function step()
     if active and pending == nil and tick_n % SWEEP_EVERY ~= 0 then
         -- Sticky fast path: the active screen is still up → keep it, poll nobody else.
         -- The moment it stops being active, fall through to a full sweep THIS tick.
-        cur = active.is_active() and active or sweep()
+        cur = probe(active) and active or sweep()
     elseif active == nil and pending == nil and tick_n > hot_until
         and tick_n % SWEEP_EVERY ~= 0 then
         -- Idle throttle (see HOT_TICKS): nothing active, no switch being confirmed,
@@ -192,6 +226,20 @@ local function step()
         -- the winning adapter by its registration index (cross-ref app.lua order; 0 =
         -- none). Names any adapter silently shadowing a late-registered one. Turn OFF
         -- once the emblems first-visit timeline is closed.
+        -- CRASH BREADCRUMB — deliberately always on (2026-07-26).
+        --
+        -- Every crash reported by a player so far has been un-diagnosable for the same reason:
+        -- the mod is silent in the steady state (correctly — never log every frame), so the
+        -- tail of their UE4SS.log says nothing about what was on screen when the process died.
+        -- We were reasoning about user crashes from a developer log that shows no fault at all.
+        -- A screen commit happens a few times a minute, not a few times a second, so one line
+        -- per commit is well inside the no-spam rule and it turns the log tail into the single
+        -- most useful fact a report can carry: the last screen the reader was on.
+        --
+        -- The NAME, not the index the old trace printed: adapter indices shift whenever another
+        -- adapter is registered, so a number is unreadable across versions.
+        local nm = (cur and (adapter_name[cur] or "?")) or "none"
+        print(string.format("[KakarotAccess] screen -> %s\n", nm))
         if TRACE_COMMITS then
             local idx = 0
             if cur then
@@ -257,7 +305,18 @@ local function step()
     _G.__KakarotPadRelax = quiet
 
     if active then
-        active.update()
+        -- Isolated like the probe above: an adapter that raises while speaking must not take
+        -- the keyhelp and guidance readers down with it on the same tick.
+        Mem.mark("ui.update " .. (adapter_name[active] or "?"))
+        local ok, err = pcall(active.update)
+        if not ok then
+            local nm = adapter_name[active] or "?"
+            if not fault_logged[nm .. ":update"] then   -- lint:plain-table
+                fault_logged[nm .. ":update"] = true   -- lint:plain-table
+                print(string.format("[KakarotAccess] adapter '%s' faulted in update: %s\n",
+                    nm, tostring(err)))
+            end
+        end
         KeyhelpWatch.update()
     end
     -- Tutorial guidance line (guide_watch.lua): runs with OR without an active

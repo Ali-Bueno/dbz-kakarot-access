@@ -57,9 +57,20 @@ typedef struct {
 typedef DWORD (WINAPI *XInputGetState_t)(DWORD, XI_STATE *);
 
 static XInputGetState_t g_realGetState = NULL;   /* original, from the IAT/LoadLibrary */
-static volatile LONG    g_block = 0;             /* 1 = hide the pad from the game    */
 static XI_STATE         g_last;                  /* true latest state (user 0)        */
 static volatile LONG    g_haveLast = 0;
+/* g_last is WRITTEN on the game's input-pump thread (inside hookGetState) and READ on the
+ * game thread (l_poll), so a plain 16-byte struct copy can tear — half of one pad frame and
+ * half of the next. A SEQLOCK is the cheap correct fix: the writer sits inside the game's own
+ * input hook and must never block, and a seqlock writer never waits (two counter bumps around
+ * the copy; InterlockedIncrement is a full barrier on x64). The reader retries while the
+ * counter is odd (write in flight) or changed across its copy. */
+static volatile LONG    g_lastSeq = 0;           /* even = stable, odd = write in progress */
+/* Bounded so a reader can never spin on a wedged writer. The pump updates the pad once per
+ * frame while poll() runs every 20 ms (pad_poll.lua TICK_MS), so a single retry already
+ * covers real contention; giving up simply reports no snapshot for one tick — the same
+ * outcome the caller already handles for an unplugged pad. */
+#define PAD_SNAPSHOT_TRIES 8
 static int              g_hooked = 0;
 /* Left-stick INJECTION (map-cursor auto-move). g_injTTL = game frames the injected value
  * stays live; it counts DOWN every poll, so if Lua stops refreshing (map closed, error)
@@ -68,6 +79,31 @@ static int              g_hooked = 0;
 static volatile LONG    g_injTTL = 0;
 static volatile LONG    g_injLX = 0;             /* injected left-stick X (-32767..32767) */
 static volatile LONG    g_injLY = 0;
+
+/* ---- PAD blocking: a LEASE, like the keyboard's (see g_kbUntil) -----------------------
+ * block(true) used to be a plain latch, so a Lua error unwinding — or a mod reload —
+ * between block(true) and block(false) left the game permanently deaf to the pad, with no
+ * way out but killing the process. It now carries a wall-clock DEADLINE which poll() renews,
+ * and poll() is exactly what both pad menus call every tick while they are open
+ * (radar_menu / config_menu step through Input.read()). So the Lua API is unchanged: nothing
+ * stops working, but nothing keeps the pad blocked either once the mod stops stepping.
+ * Renewal only EXTENDS a LIVE lease, never resurrects an expired one — poll() also runs every
+ * tick with no menu open, so renewing unconditionally would make a stale block immortal. */
+#define PAD_BLOCK_LEASE_MS 1000   /* the pad step runs every 20 ms (pad_poll.lua TICK_MS), so
+                                     50 ticks of slack: long enough to ride out a frame hitch,
+                                     short enough to self-heal within a second. */
+static volatile LONG64  g_blockUntil = 0;        /* GetTickCount64 deadline; 0 = not blocking */
+
+static int pad_blocking(void) {
+    LONG64 until = InterlockedCompareExchange64((volatile LONG64 *)&g_blockUntil, 0, 0);
+    return until != 0 && (LONG64)GetTickCount64() < until;
+}
+
+static void pad_block_renew(void) {
+    if (pad_blocking())
+        InterlockedExchange64((volatile LONG64 *)&g_blockUntil,
+                              (LONG64)GetTickCount64() + PAD_BLOCK_LEASE_MS);
+}
 
 /* ---- KEYBOARD blocking ---------------------------------------------------------------
  * Same goal as block() above, for the keyboard: while the radar menu is open, our Lua must
@@ -138,8 +174,13 @@ static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
     if (!g_realGetState) return (DWORD)-1 /*ERROR_DEVICE_NOT_CONNECTED path*/;
     DWORD r = g_realGetState(idx, pState);
     if (r == 0 /*ERROR_SUCCESS*/ && pState) {
-        if (idx == 0) { g_last = *pState; g_haveLast = 1; }
-        if (InterlockedCompareExchange(&g_block, 0, 0)) {
+        if (idx == 0) {
+            InterlockedIncrement(&g_lastSeq);      /* -> odd: write in progress */
+            g_last = *pState;
+            InterlockedIncrement(&g_lastSeq);      /* -> even: stable again */
+            g_haveLast = 1;
+        }
+        if (pad_blocking()) {
             /* Hand the GAME a neutral pad; keep the packet number moving so the
              * game doesn't treat it as a stale/disconnected read. */
             unsigned long pkt = pState->dwPacketNumber + 1;
@@ -158,8 +199,9 @@ static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
 }
 
 /* Walk the import descriptors of `mod`, find the entry importing `dll`!`func`,
- * overwrite its thunk with `repl`, and return the original pointer (or NULL). */
-static void *iat_hook(HMODULE mod, const char *dll, const char *func, void *repl) {
+ * overwrite its thunk with `repl`, and return the original pointer (or NULL).
+ * Call it through iat_hook() below, never directly — see the guard there. */
+static void *iat_hook_unguarded(HMODULE mod, const char *dll, const char *func, void *repl) {
     if (!mod) return NULL;
     unsigned char *base = (unsigned char *)mod;
     IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
@@ -204,6 +246,19 @@ static void *iat_hook(HMODULE mod, const char *dll, const char *func, void *repl
     return NULL;
 }
 
+/* SEH guard around that walk. It parses the PE headers and import tables of modules we do
+ * not control, following RVAs it cannot validate, and iat_hook_any() feeds it a Toolhelp
+ * SNAPSHOT that can go stale — a module unloaded between the snapshot and the walk leaves a
+ * base address that is no longer mapped. A fault here would kill the game at mod init, so it
+ * degrades to "this module does not import it" instead. */
+static void *iat_hook(HMODULE mod, const char *dll, const char *func, void *repl) {
+    __try {
+        return iat_hook_unguarded(mod, dll, func, repl);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return NULL;
+    }
+}
+
 /* Try the IAT hook on the exe first; if the import lives in some other loaded module
  * (a UE build that pulls XInput in via a DLL), scan every module and hook the first
  * that imports it. Returns the original pointer, or NULL if nothing imports it. */
@@ -228,6 +283,10 @@ static void *iat_hook_any(const char *dll, const char *func, void *repl) {
  * back to a plain LoadLibrary'd XInputGetState (read-only, no blocking) if the
  * import can't be patched. */
 static int l_install(lua_State *L) {
+    /* A fresh mod session always starts with the pad free: install() is called once from
+     * Input.init(), so a block left over from a previous session (reload after a Lua error)
+     * is released here rather than waiting for its lease to lapse. */
+    InterlockedExchange64((volatile LONG64 *)&g_blockUntil, 0);
     /* The keyboard hook is independent of the XInput one (a keyboard player may have no
      * pad at all), so it is installed on every call until it takes, and never removed.
      * PIN our own module first: the IAT slot points into this DLL, so unloading it while
@@ -259,6 +318,19 @@ static int l_install(lua_State *L) {
     return 1;
 }
 
+/* Seqlock reader for g_last (see the note above g_lastSeq). Returns 1 on a torn-free copy. */
+static int pad_snapshot(XI_STATE *out) {
+    int i;
+    if (!InterlockedCompareExchange(&g_haveLast, 0, 0)) return 0;
+    for (i = 0; i < PAD_SNAPSHOT_TRIES; ++i) {
+        LONG s = InterlockedCompareExchange(&g_lastSeq, 0, 0);
+        if (s & 1) continue;                       /* writer mid-update */
+        *out = g_last;
+        if (InterlockedCompareExchange(&g_lastSeq, 0, 0) == s) return 1;
+    }
+    return 0;
+}
+
 /* poll([userIndex=0]) -> wButtons, leftTrigger, rightTrigger, lx, ly, rx, ry
  * Buttons is the raw XINPUT bitmask; triggers are 0..255; sticks are -1..1
  * (raw shorts /32767). Returns nil if the pad can't be read / isn't connected.
@@ -268,8 +340,11 @@ static int l_poll(lua_State *L) {
     int idx = (int)luaL_optinteger(L, 1, 0);
     XI_STATE st;
     int have = 0;
-    if (g_hooked && idx == 0 && g_haveLast) {
-        st = g_last; have = 1;
+    /* Renew the pad-block lease: the Lua menus poll every tick while they hold the block,
+     * so this is what keeps it alive — and stopping is what releases it. */
+    pad_block_renew();
+    if (g_hooked && idx == 0 && pad_snapshot(&st)) {
+        have = 1;
     } else if (g_realGetState) {
         if (g_realGetState((DWORD)idx, &st) == 0) have = 1;
     }
@@ -284,10 +359,12 @@ static int l_poll(lua_State *L) {
     return 7;
 }
 
-/* block(on) : while on, the game receives a neutral pad. No-op if not hooked. */
+/* block(on) : while on, the game receives a neutral pad. No-op if not hooked. The block is
+ * a lease that poll() renews — see the note above g_blockUntil. */
 static int l_block(lua_State *L) {
     int on = lua_toboolean(L, 1);
-    InterlockedExchange(&g_block, on ? 1 : 0);
+    InterlockedExchange64((volatile LONG64 *)&g_blockUntil,
+                          on ? (LONG64)GetTickCount64() + PAD_BLOCK_LEASE_MS : 0);
     lua_pushboolean(L, g_hooked && on);
     return 1;
 }

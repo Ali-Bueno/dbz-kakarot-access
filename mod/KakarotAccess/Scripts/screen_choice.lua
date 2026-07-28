@@ -47,9 +47,8 @@ end
 -- A choice row's label (native TextBox_Choice or blueprint Txt_Choice) and whether it's
 -- the hovered/selected one (native HoverImage or blueprint Dmy_Choice_Hover visible).
 local function row_label(c)
-    local label
-    pcall(function() label = node_speech(c.TextBox_Choice) end)
-    if not label then pcall(function() label = node_speech(c.Txt_Choice) end) end
+    local label = node_speech(Core.member(c, "TextBox_Choice"))
+    if not label then label = node_speech(Core.member(c, "Txt_Choice")) end
     return label
 end
 local function row_hover(c)
@@ -113,8 +112,7 @@ local function options(win)
     local rows = {}
     if Core.valid(win) then
         for _, m in ipairs({ "UIChoiceCmd_Yes", "UIChoiceCmd_No" }) do
-            local r
-            pcall(function() r = win[m] end)
+            local r = Core.member(win, m)
             if Core.valid(r) and Core.on_screen(r) then rows[#rows + 1] = r end
         end
     end
@@ -133,16 +131,12 @@ end
 -- else the sub-story accept window's quest title + description.
 local function context(win)
     if Core.valid(win) then
-        local t
-        pcall(function() t = node_speech(win.TextBox_Message) or node_speech(win.Txt_Choice) end)
+        local t = node_speech(Core.member(win, "TextBox_Message")) or node_speech(Core.member(win, "Txt_Choice"))
         if t then return t end
     end
     local qs = Core.cached_live("Quest_Sub_C", tick)
     if Core.on_screen(qs) then
-        local t
-        pcall(function()
-            t = Core.phrase(node_speech(qs.TextBox_Title), node_speech(qs.TextBox_Detail))
-        end)
+        local t = Core.phrase(node_speech(Core.member(qs, "TextBox_Title")), node_speech(Core.member(qs, "TextBox_Detail")))
         if t and t ~= "" then return t end
     end
     return nil

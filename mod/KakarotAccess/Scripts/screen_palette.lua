@@ -145,6 +145,14 @@ function Palette.is_active()
     -- (Visible) ONLY while it is genuinely open; closed it parks at 3
     -- (HitTestInvisible). The earlier Txt_Msg on_screen gate read false even when
     -- open (and true in one earlier run) — unreliable, dropped.
+    -- The collect above is THROTTLED, so it can be skipped on this very tick — and `reset()`
+    -- sets `nodes` to nil on every screen change, which is how the two met: a reset landing
+    -- inside a live throttle window left `nodes` nil here and the next line indexed it.
+    -- The registry's pcall isolation turned that into `adapter 'screen_palette' faulted in
+    -- is_active (nil value in upvalue 'nodes')`, the adapter counted as inactive, the item list
+    -- claimed the tick, and the next tick faulted again — 23 flips in 10 s in the user's log,
+    -- audible as the whole screen re-announcing over and over (2026-07-28).
+    if not nodes then state = nil return false end
     local he
     pcall(function() he = tonumber(host:GetVisibility()) end)
     if he ~= 0 then state = nil return false end
@@ -170,7 +178,9 @@ function Palette.is_active()
     return true
 end
 
-function Palette.reset() ann:reset() nodes = nil end
+-- next_collect is cleared too: leaving a stale throttle armed is what let `nodes` stay nil for
+-- several ticks after a reset (see is_active), and it also delayed the first readout on re-entry.
+function Palette.reset() ann:reset() nodes, next_collect = nil, 0 end
 
 function Palette.update()
     local s = state
