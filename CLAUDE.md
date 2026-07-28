@@ -558,6 +558,13 @@ host is pooled.
   accessibilized, and the requirements (framework if applicable, PRISM, system screen reader).
 - Avoid committing unnecessary binaries. **Don't create releases automatically**: only when the user
   explicitly asks.
+- **Every link you hand to a user points at `/releases/latest`, never at a tag** (user directive,
+  2026-07-28). An announcement lives on a forum or a Discord for years; a tag link starts serving
+  the wrong version the day the next release ships. Use the direct, always-current asset URLs —
+  `…/releases/latest/download/<AssetName>` — which is why `package.ps1` deliberately keeps the asset
+  names version-free. A tag URL is fine in one place only: inside that release's own notes.
+- **Announcements are short and informal.** Lead with the one thing that matters to a player, in a
+  sentence. Keep the caveats for the changelog, which is where someone goes when they want detail.
 
 ---
 
