@@ -4,7 +4,25 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-07-28 (k) — **shops announce the Zeni balance; map remembers the travel
+**Last updated:** 2026-07-28 (l) — **six more screens leave the scan set (screen directory sweep).**
+Prompted by a "could we use the Sparking Zero menu approach here" question, which the CXX dump
+answered NO (see `notes/sparkingzero-reference-scope.md`: `UCFUIUserWidget` has 428 subclasses and
+declares ONE member, `UATUIUserWidget` 131 and one function — there is no uniform focus property to
+build a generic reader on, so the per-screen adapters are forced by the class layout, not by us).
+The half that DOES port is the directory, and a sweep of every still-scanning host against AT.hpp
+found six with a real, unused owner field: `Start_Quest_C` (mm.m_xQuestMenu.m_UIStartQuest —
+screen_story's own comment already complained about being an ABSENT class),
+`AT_UIStartDragonBallMenu`, `Xcmn_Win00_C` + `Xcmn_Win02_C` (the two `UAT_UIWindowManager` cores
+sitting NEXT TO the already-mapped `GameWindowCore`), `Gametitle_C`, and `AT_UIXcmnAgreement` (two
+chains). **`Gametitle_C`'s "deliberately unmapped" note had EXPIRED** — it said "no HUD yet", written
+before the `tt` root existed; that root is the very actor declaring the pointer. Four reachable
+hosts were deliberately NOT mapped and the reasons are in-file: the two dialogue surfaces are
+pooled multi-instance (mapping them re-opens the 07-06 "narrator lines unread" bug — the
+multi-instance rule outranks the pointer), `Quest_Sub_Reward_C` is a freshly-fixed screen not yet
+verified in game, and `Map_World_Curs_C` needs its raw `FindAllOf` call site moved to Core first.
+VERIFIED IN GAME the same day (user: "se lee todo") — none of the six hit the documented failure
+mode (owner reachable + field never set = asserted absent = silent screen), so the mapping stands
+and those classes no longer pay a FindAllOf per ABSENT_BACKOFF. Previous entry: 2026-07-28 (k) — **shops announce the Zeni balance; map remembers the travel
 point.** (1) No adapter read the wallet at all. Every shop embeds the same `UAT_UIShopCmnMoney`
 sub-widget (AT.hpp:35622, figure in `WL_Txt_Num_Money`) but under a DIFFERENT member per host
 (`Shop_Cmn_Money` / `WL_Shop_Cmn_Money` / `WL_CmnMoney`), and `UAT_UIShopCommon` skips the

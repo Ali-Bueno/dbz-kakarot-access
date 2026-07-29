@@ -35,7 +35,7 @@ notes are the evidence behind them.
 | [Input icons reference](dbz-kakarot-input-icons-ref.md) | The inline `<inputicon>` / KeyConfig glyph system |
 | [NPC names](dbz-kakarot-npc-names.md) | Why there is no safe automatic name resolver on this game |
 | [UE4SS screen-reader template](ue4ss-screenreader-template.md) | The reusable PRISM bridge, for the next UE4SS game |
-| [SparkingZero reference scope](sparkingzero-reference-scope.md) | Reuse its bridge only — not its hooking/polling design |
+| [SparkingZero reference scope](sparkingzero-reference-scope.md) | Reuse its bridge only — not its hooking/polling design; and why its adapter-free menu architecture cannot work on this game's empty UI base classes |
 
 ## Solved subsystems (the offsets and the technique that found them)
 

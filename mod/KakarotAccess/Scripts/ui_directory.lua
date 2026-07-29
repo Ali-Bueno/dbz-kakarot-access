@@ -244,6 +244,18 @@ local MAP = {
                                    {"tt", "TitleOptionMenuComponent", "m_xOptionMenu", "m_UIStartOption"} },
     ["AT_UIStartTips"]         = { {"mm", "m_xTipsMenu", "m_UIStartTips"},
                                    {"hud", "UIPause", "UIStartTips"} },
+    -- Dragon Ball menu: UMenuManager.m_xDragonBallMenu @0x110 (AT.hpp:41840) ->
+    -- UDragonBallMenu.DragonBallMenuUI @0x130 (AT.hpp:40985). Same two-hop shape as every
+    -- other submenu here; registered in app.lua as a plain ListScreen, one instance.
+    ["AT_UIStartDragonBallMenu"] = { {"mm", "m_xDragonBallMenu", "DragonBallMenuUI"} },
+    -- STORY menu: UMenuManager.m_xQuestMenu @0x140 (AT.hpp:41846) -> UQuestMenu.m_UIStartQuest
+    -- @0x170 (AT.hpp:42935). screen_story's own comment (line 96) records that Start_Quest_C is
+    -- an ABSENT class paying a full FindAllOf every backoff, which is exactly what this retires.
+    -- The mapped key is the BLUEPRINT name because that is what the adapter asks for; the field's
+    -- declared type is the native UAT_UIStartQuest and the live instance is its BP subclass, which
+    -- the resolver does not care about — it returns the pointer, not a name match (same as
+    -- Start_Save_Load_C above).
+    ["Start_Quest_C"]          = { {"mm", "m_xQuestMenu", "m_UIStartQuest"} },
     ["Tips_C"]                 = { {"fm", "Tips"}, {"mm", "m_xTipsMenu", "m_UITips"},
                                    {"hud", "UIPause", "UITips"} },
 
@@ -333,13 +345,61 @@ local MAP = {
     -- (screen_fishing finds the core as its own pooled instance via the scan path).
 
     -- GameInstance-held screens
+    -- The window manager holds all three cores side by side (UAT_UIWindowManager, AT.hpp):
+    -- GameWindowCore, SystemWindowCore @0x40 (AT.hpp:37735), NumberWindowCore @0x50
+    -- (AT.hpp:37737). Only the first was ever mapped; the other two are the exact classes
+    -- screen_dialog lists in WINDOW_CLASSES and fetches with Core.cached_live (one instance
+    -- per class), so the single-pointer mapping matches how they are read.
     ["Xcmn_Win01_C"]           = { {"wm", "GameWindowCore"} },
+    ["Xcmn_Win00_C"]           = { {"wm", "SystemWindowCore"} },
+    ["Xcmn_Win02_C"]           = { {"wm", "NumberWindowCore"} },
     ["Loading_C"]              = { {"gi", "LoadingScreen"} },
+
+    -- Title-level screens (the `tt` root — ATTitleLevelScriptActor, AT.hpp:14119)
+    -- Gametitle_C was listed as deliberately unmapped for a reason that EXPIRED: the note said
+    -- "lives on the title level script actor, no HUD yet", written before the tt root existed.
+    -- It does now (added for the title's load/options flows), and that same actor declares the
+    -- pointer outright: AATTitleLevelScriptActor.UIGameTitleWidget @0x380 (AT.hpp:14131).
+    -- In a gameplay world the tt root is absent, no owner is reached, the resolver returns nil
+    -- and the scan path serves it as before — the fallback this file's header describes.
+    ["Gametitle_C"]            = { {"tt", "UIGameTitleWidget"} },
+    -- Boot agreement / privacy viewer. Two independent owners, both from the dump:
+    --   AAT_Title.AgreementDialog @0x340 (AT.hpp:14780), reached through the title widget's
+    --   own back-pointer UAT_UIGameTitle.ActorTitle @0x430 (AT.hpp:33258); and
+    --   UAT_UIStartOption.AgreementDialog @0x478 (AT.hpp:36643), i.e. the already-mapped
+    --   options host, which serves the in-game "view the agreement again" route.
+    ["AT_UIXcmnAgreement"]     = { {"tt", "UIGameTitleWidget", "ActorTitle", "AgreementDialog"},
+                                   {"mm", "m_xOptionMenu", "m_UIStartOption", "AgreementDialog"} },
 }
 -- Deliberately UNMAPPED (they keep the scan path): pooled multi-instance widgets whose
 -- copies the adapters must enumerate (Xcmn_Keyhelp_C, Xcmn_Header_C, list rows/bars,
--- CFUIMultiLineTextBox, Map_World_Icon_C, Quest_Main_Telop_C, Xcmn_Win00_Choice_C) and
--- the title screen (Gametitle_C — lives on the title level script actor, no HUD yet).
+-- CFUIMultiLineTextBox, Map_World_Icon_C, Quest_Main_Telop_C, Xcmn_Win00_Choice_C).
+--
+-- The 2026-07-28 sweep re-checked every scan-based host against AT.hpp for an owner field.
+-- Six gained a chain (above). These four have a real, verified pointer and STILL stay on the
+-- scan path — a reachable owner is not a reason to map, it is only a precondition:
+--   * Xcmn_Subtitles_C (AAT_GameHUD.Subtitles @0x590 / .InMenuSubtitles @0x598,
+--     AT.hpp:14685-86) and Field_Talk_Win_C (UAT_UIFieldManager.FieldTalkWin @0x548,
+--     AT.hpp:32869) — screen_dialogue reads these through line_from_any/cached_all
+--     precisely BECAUSE the game pools several instances (Xcmn_Subtitles_C_0.._2 live) and
+--     swaps which one it drives across scene changes. Two HUD pointers cannot represent
+--     three instances, so mapping would re-open the 2026-07-06 "narrator lines unread" bug.
+--     The multi-instance rule outranks the pointer.
+--   * Quest_Sub_Reward_C (UAT_UIQuestSub.UIReward @0x478, AT.hpp:35487) — the owner is the
+--     already-mapped fm.QuestSub, so a null UIReward while the sheet is up would assert
+--     "absent" and kill the fallback: the fishing ring-core failure shape exactly. This
+--     adapter only started running on 2026-07-28 (the pane_rendered fix) and is still
+--     pending in-game verification; re-risking it before it has been seen working is
+--     backwards. Revisit once it is confirmed good.
+--   * Map_World_Curs_C (UAT_UIMapWorld.Map_World_Curs @0x498, AT.hpp:34210) — reachable,
+--     but screen_map.lua:115 calls raw FindAllOf and so bypasses the directory entirely.
+--     Mapping alone would change nothing; it needs that call site moved to Core first, and
+--     the map d-pad path has its own regression history worth not disturbing in the same
+--     batch.
+-- Also checked and genuinely NOT reachable: the CompZ_Page_* family (Z-Encyclopedia). No
+-- class in the dump declares a pointer to those pages — UCompZMenu exposes only CompZMgr /
+-- BookActor / UMGRender — which matches the adapter's own note that they are found through
+-- the list controller. Scanning is correct there, not a gap.
 
 -- ---- resolver ----------------------------------------------------------------
 -- Per-tick memo: the registry sweep resolves the same classes many times per step. The
