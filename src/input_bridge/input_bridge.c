@@ -173,12 +173,24 @@ static BOOL WINAPI hookPeekMessageW(LPMSG lpMsg, HWND hWnd, UINT minMsg, UINT ma
 static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
     if (!g_realGetState) return (DWORD)-1 /*ERROR_DEVICE_NOT_CONNECTED path*/;
     DWORD r = g_realGetState(idx, pState);
+    /* Pad GONE -> clear the snapshot latch (fixed 2026-07-29, crash sweep).
+     *
+     * g_haveLast used to be a ONE-WAY latch: set on the first successful read and never cleared,
+     * while g_last is only refreshed on ERROR_SUCCESS. So after a disconnect -- a wireless pad
+     * going to sleep or running out of battery, routine in a long session -- pad_snapshot kept
+     * serving the FROZEN last frame forever and l_poll never returned nil. That silently disabled
+     * the only pad-loss recovery both pad menus have (`if not snap then ... Input.block(false)`),
+     * and the radar picker, still latched `open`, went on renewing kb_block every 20 ms: the game
+     * went PERMANENTLY DEAF to the keyboard too, with no in-game way out. Nothing errored, which
+     * is exactly why it was invisible. Clearing the latch routes l_poll to its direct-read
+     * fallback, which correctly reports a disconnected pad; it re-arms on the next good read. */
+    if (idx == 0 && r != 0) InterlockedExchange(&g_haveLast, 0);
     if (r == 0 /*ERROR_SUCCESS*/ && pState) {
         if (idx == 0) {
             InterlockedIncrement(&g_lastSeq);      /* -> odd: write in progress */
             g_last = *pState;
             InterlockedIncrement(&g_lastSeq);      /* -> even: stable again */
-            g_haveLast = 1;
+            InterlockedExchange(&g_haveLast, 1);   /* interlocked, to match the reader */
         }
         if (pad_blocking()) {
             /* Hand the GAME a neutral pad; keep the packet number moving so the

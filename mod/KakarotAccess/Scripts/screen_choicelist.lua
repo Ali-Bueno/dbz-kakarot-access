@@ -27,7 +27,18 @@ local tick = 0
 local function options()
     local list = {}
     for _, it in pairs(Core.cached_all("Xcmn_Win01_List_C", tick)) do
-        if it:GetFullName():find("/Engine/Transient", 1, true) and Core.on_screen(it) then
+        -- GUARD FIRST, name second (fixed 2026-07-29 — crash sweep). `GetFullName()`
+        -- DEREFERENCES the handle, and this pool is not directory-mapped: `Core.cached_all`
+        -- serves it from the FindAllOf cache, which keeps the whole list on its ~30 s refresh
+        -- as long as ONE entry is still alive, so freed rows sit in it. `Xcmn_Win01_List_C` is
+        -- not private to this screen — the substory reward sheet builds fresh instances of the
+        -- same class and its host is destroyed on close, no map switch involved — so opening
+        -- any system window shortly after one dereferenced those freed rows. `Core.on_screen`
+        -- routes through Core.valid -> Mem.alive (and is memoised per tick), so testing it
+        -- first is both the guard and a saving: the path string is now built only for rows
+        -- that survive. Every other GetFullName-on-a-cached-pool site in the mod already does
+        -- this; this was the sole outlier.
+        if Core.on_screen(it) and it:GetFullName():find("/Engine/Transient", 1, true) then
             local label = Core.text_of(Core.member(it, "Txt_Item"))
             if label then list[#list + 1] = { it = it, label = label } end
         end

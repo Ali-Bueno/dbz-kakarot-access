@@ -144,14 +144,26 @@ RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function() App.toggle() end)
 -- the require cache, then re-require app.lua (which re-requires its features
 -- fresh) and start again. The PRISM bridge is untouched; leftover poll loops
 -- stop themselves via each feature's generation guard.
+--
+-- ON THE GAME THREAD (fixed 2026-07-29 — crash sweep). UE4SS runs keybind handlers on its own
+-- UpdateThread, and this handler is the heaviest thing the mod can do off it: `require("app")`
+-- reparses ~60 modules — string interning, proto/closure/table allocation, incremental-GC steps —
+-- for tens of milliseconds on the keybind thread while ui_core, nav, battle, quest and pad_poll
+-- are all executing Lua on the SAME global_State. That is the allocator + GC race documented in
+-- the construction-notify episode, and it corrupts the state to crash minutes later somewhere
+-- unrelated. This bind is NOT dev-only — it is above the `if Build.debug` block and the README
+-- advertises it to players, so it shipped in every release. (The stop()/start() halves are pure
+-- Lua state plus bridge calls and were never the hazard; the reload is.)
 RegisterKeyBind(Key.R, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function()
-    App.stop()
-    for name in pairs(package.loaded) do
-        if not protected[name] then package.loaded[name] = nil end
-    end
-    App = require("app")
-    App.start()
-    Speech.say("Mod reloaded", true)
+    ExecuteInGameThread(function()
+        App.stop()
+        for name in pairs(package.loaded) do
+            if not protected[name] then package.loaded[name] = nil end
+        end
+        App = require("app")
+        App.start()
+        Speech.say("Mod reloaded", true)
+    end)
 end)
 
 -- === Developer / diagnostic keybinds — NOT shipped in releases =================

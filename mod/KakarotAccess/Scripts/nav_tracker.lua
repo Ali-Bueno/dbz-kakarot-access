@@ -1428,6 +1428,40 @@ local function enemy_alert(px, py, pz)
 end
 
 
+-- Release every WORLD-ACTOR handle this loop is holding, on the falling edge of ANY gate.
+--
+-- Why this is a function and not inline in the world branch (2026-07-29 crash sweep): all three
+-- gates share ONE `gated_prev` latch, but this release used to live only inside the world gate's
+-- `not gated_prev` edge. So if a muting adapter was already on screen on the tick the world went
+-- away — a fishing HUD that lingers ~3 s, a loading pane that holds the adapter ~10 s, an NPC
+-- Yes/No that answers straight into a battle — the UI branch above set the latch FIRST, and the
+-- world branch's edge block could then never run for the whole gated period. The loop carried
+-- `enemy_cache`, `navi_icons` and `chain_wait.actor` across an entire battle or cutscene, which
+-- is precisely what destroys those actors. Re-validating per use is NOT a defence: an address the
+-- engine has recycled passes both `Mem.alive` and `IsValid` (mem.lua says so in as many words),
+-- and `actor_pos` then makes a raw `K2_GetActorLocation` call on it.
+--
+-- nil, NOT {}: an empty list would be SERVED as "nothing there" — nil is what forces a real
+-- FindAllOf on the first call once the world is back.
+--
+-- Deliberately NOT released here: `mm_cache`. It is a pooled WIDGET, not a world actor, and
+-- dropping it would arm the 5 s MM_RETRY FindAllOf backoff on every menu that mutes us.
+-- On the module table rather than a `local`: this file is at Lua's 200-local ceiling for a main
+-- chunk, and one more would not compile. Not part of the public API — nothing outside calls it.
+function Nav.release_world_refs()
+    enemy_cache, enemy_next = nil, 0
+    navi_icons, navi_next = nil, 0
+    -- ONLY the handle is released; the rest of the record (key, grp, label, manual, stateful) is
+    -- plain Lua data, so WORLD_DROP_TICKS, remember_pick() and the resume path behave exactly as
+    -- before — that design never needed the live pointer to survive the gate, only the metadata
+    -- to re-acquire the pick by category+key once the world is back.
+    if target then target.actor = nil end
+    -- Same defect, same fix: `chain_step` dereferences this the moment the gate reopens, and
+    -- nothing below WORLD_DROP_TICKS was clearing it, so a gated period SHORTER than the timer
+    -- still handed it a dead pointer.
+    if chain_wait then chain_wait.actor = nil end
+end
+
 local function step()
     Mem.mark("nav.step")
     tick = tick + 1
@@ -1458,6 +1492,12 @@ local function step()
         if not gated_prev then
             gated_prev = true
             Audio.stop()
+            -- Release the world-actor handles HERE TOO (2026-07-29). This branch shares
+            -- `gated_prev` with the world gate below, so whichever gate closes FIRST owns the
+            -- edge — and when a muting adapter is already up as the world goes away, that is
+            -- this one. Without this call the world branch's release could never run for the
+            -- rest of the gated period. See release_world_refs.
+            Nav.release_world_refs()
         end
         route, route_idx = nil, 0
         return
@@ -1476,22 +1516,7 @@ local function step()
             -- hold. After a SHORT fight (under RESCAN_CLASSES ticks) neither list has expired
             -- and neither gets refreshed, so the first post-battle tick would hand
             -- enemy_alert / best_candidate handles to actors the fight has already freed.
-            -- Re-validating per use is NOT a defence: an address the engine has recycled
-            -- passes both Mem.alive and IsValid (mem.lua says so in as many words).
-            -- nil, NOT {}: an empty list would be SERVED as "nothing there" — nil is what
-            -- forces a real FindAllOf on the first call once the world is back.
-            enemy_cache, enemy_next = nil, 0
-            navi_icons, navi_next = nil, 0
-            -- The tracked actor's handle goes with them: holding a raw world-actor pointer
-            -- across a CLOSED world gate is the same defect, and WORLD_DROP_TICKS below is
-            -- only that defect with a timer on it — a battle shorter than the timer used to
-            -- hand a freed AT_Character straight back to actor_pos on the first tick after
-            -- the fight. ONLY the handle is released: the rest of the record (key, grp,
-            -- label, manual, stateful) is plain Lua data, so WORLD_DROP_TICKS,
-            -- remember_pick() and the resume path behave exactly as before. The resume
-            -- design never needed the live pointer to survive the gate, only the metadata
-            -- to re-acquire the pick by category+key once the world is back.
-            if target then target.actor = nil end
+            Nav.release_world_refs()
         end
         route, route_idx = nil, 0
         world_gone = world_gone + 1
@@ -1894,6 +1919,20 @@ end
 -- Heavy POI scan (Nav.list_targets), flattened with each POI's current position cached.
 -- Displacement-gated by the caller so this is infrequent, never per tick.
 local function explore_rescan(px, py, pz, ms)
+    -- Never during a load/cutscene (added 2026-07-29 — crash sweep). This is the single most
+    -- expensive thing the mod does: `Nav.list_targets` issues SEVENTEEN raw `FindAllOf` calls,
+    -- none of which takes a scan slot or routes through `timed_findall`, and at this repo's own
+    -- measured 68.2 ms per scan that is roughly 1.2 s of game-thread work in ONE tick — fired
+    -- every 4 s, indefinitely, while the player runs or flies with explore mode on. Quiet mode is
+    -- the game's own "something else owns the screen" signal, which is exactly when a freeze is
+    -- least affordable. Deliberately NOT budget-gated with `take_scan_slot`: `list_targets` is
+    -- shared with the R3 picker, and this loop only refills the PROPERTY budget, so a scan-budget
+    -- gate here would silently hand the picker a near-empty list whenever the registry loop is
+    -- stopped — the fail-closed-on-shared-substrate trap. STILL OPEN: the 1.2 s burst itself.
+    -- It needs a cheaper source (the minimap pointer walk + the already-cached enemies list)
+    -- rather than the full 17-class sweep; that changes what explore mode can find, so it wants
+    -- a measurement (Ctrl+F5 nav avg/max with explore on) and a deliberate decision first.
+    if Core.scan_quiet() then return end
     local pois = {}
     for _, cat in ipairs(Nav.list_targets()) do
         for _, it in ipairs(cat.items or {}) do
@@ -2143,19 +2182,29 @@ function Nav.cycle_companion()
 end
 
 -- Shift+F3: NavMesh route guidance on/off (falls back to straight-line beacon).
+-- MUST run on the game thread (fixed 2026-07-29 — crash sweep). UE4SS runs keybind handlers on
+-- its own UpdateThread, and this one is not a pure flag flip: `clear_invoker` does a
+-- `FindFirstOf("PlayerController")` (a GUObjectArray walk), `Core.valid`/`Core.member` (which
+-- MUTATE the shared valid_memo / prop_sets / prop_budget tables the 100 ms step() is reading in
+-- the same instant), and finally `UnregisterNavigationInvoker` — a ProcessEvent into the live
+-- navigation system. All of that on the SAME lua_State as the poll loop, which is the allocator +
+-- GC race that kills the process minutes later somewhere unrelated. Same wrapper as Nav.where and
+-- Nav.cycle_companion. The 2026-07-27 keybind sweep found "only 1 of ~19 handlers wrong" and
+-- missed this one, because it is delegated through app.lua rather than bound directly.
 function Nav.toggle_route()
-    route_mode = not route_mode
-    route_fails = 0   -- re-arm pathfinding attempts
-    if not route_mode then
-        route, route_idx = nil, 0
-        clear_invoker()   -- stop forcing tile generation when route guidance is off
-    else
-        -- Manual escape hatch (Shift+F3 off->on): also re-arm the raycast fuses, so
-        -- obstacle avoidance can be re-probed on the spot without a map change.
-        _G.__KakarotRayNative, _G.__KakarotRayChan = nil, nil
-    end
-    Speech.say(I18n.t(route_mode and "nav_route_on" or "nav_route_off"), true)
-    return route_mode
+    ExecuteInGameThread(function()
+        route_mode = not route_mode
+        route_fails = 0   -- re-arm pathfinding attempts
+        if not route_mode then
+            route, route_idx = nil, 0
+            clear_invoker()   -- stop forcing tile generation when route guidance is off
+        else
+            -- Manual escape hatch (Shift+F3 off->on): also re-arm the raycast fuses, so
+            -- obstacle avoidance can be re-probed on the spot without a map change.
+            _G.__KakarotRayNative, _G.__KakarotRayChan = nil, nil
+        end
+        Speech.say(I18n.t(route_mode and "nav_route_on" or "nav_route_off"), true)
+    end)
 end
 
 -- F5: on-demand "where is it?" — type, distance, clock direction, above/below.

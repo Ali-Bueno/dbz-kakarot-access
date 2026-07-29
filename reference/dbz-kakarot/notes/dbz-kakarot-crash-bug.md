@@ -1,5 +1,132 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-29 (b) — MULTI-AGENT CRASH SWEEP: ALL 74 LUA FILES + ALL 4 NATIVE BRIDGES AGAINST THE
+> LEDGER'S OWN MECHANISM CATALOGUE, 7 OF 14 CANDIDATES CONFIRMED AND FIXED.** Not driven by a user
+> report: a systematic re-read of every Lua file and every native bridge against the crash mechanisms
+> this ledger has already catalogued (dangling handles, keybind-thread races, truncated reflection,
+> fail-open/fail-closed guard mistakes, pooled-widget staleness…). 14 candidates were raised; each was
+> handed to an independent OPUS agent whose job was to REFUTE it, not confirm it. **7 died, 7
+> survived** — a 50% kill rate, consistent with the 07-27 pass (37 of 48 died). All 7 survivors are
+> **FIXED IN THE WORKING TREE, SOURCE-ONLY, UNVERIFIED IN GAME** — needs a full restart, not a
+> Ctrl+Shift+R (`input_bridge.dll` was rebuilt).
+>
+> **THE SEVEN CONFIRMED AND FIXED:**
+>
+> 1. **`nav_tracker.lua` `step()` — world-actor handles were never released when a MENU was already
+>    open as the world went away.** All three gates (Transition, UI-mute, world) share ONE
+>    `gated_prev` latch, but the world-actor release lived only inside the world gate's
+>    `not gated_prev` edge. So when a muting adapter was already on screen the tick the world closed,
+>    the UI branch set the latch FIRST and the world branch's release never ran for the whole gated
+>    period — `enemy_cache`, `navi_icons`, `target.actor` and `chain_wait.actor` rode across an entire
+>    battle or cutscene, which is exactly what destroys those actors. Reachable via `screen_fishing`
+>    (pooled HUD lingers ~3 s), `screen_loading` (parked pane holds the adapter ~10 s) and
+>    `screen_choice` (an NPC Yes/No answering straight into a battle) — a battle/cutscene is
+>    explicitly NOT a `Transition`, so `Transition.on_begin` never covered it either. Re-validating
+>    per use is not a defence: a recycled address passes both `Mem.alive` and `IsValid`, and
+>    `actor_pos` then makes a raw `K2_GetActorLocation` on it. This is a REGRESSION of a fix
+>    originally written for a confirmed user crash (see 07-26 (c) above). Fix: hoisted the release
+>    into `Nav.release_world_refs()`, called from the UI branch too, and extended to release
+>    `chain_wait.actor` (nothing below `WORLD_DROP_TICKS` was clearing it). Deliberately does NOT
+>    release `mm_cache` (a pooled widget, not a world actor — dropping it would arm the 5 s
+>    MM_RETRY backoff on every menu).
+> 2. **`nav_tracker.lua` `Nav.toggle_route` (Shift+F3) ran on UE4SS's keybind thread.** Not a pure
+>    flag flip: `clear_invoker` does `FindFirstOf("PlayerController")` (a `GUObjectArray` walk),
+>    `Core.valid`/`Core.member` (mutating the shared `valid_memo`/`prop_sets`/`prop_budget` tables
+>    the 100 ms `step()` reads in the same instant), and `UnregisterNavigationInvoker` — a
+>    `ProcessEvent` into the live navigation system — all on the same `lua_State` as the poll loop.
+>    Shipped defaults (`on=true`, `route_mode=true`) put `invoker_key` set within a tick or two of
+>    free roam, so the path is open in ordinary play. The 07-27 keybind sweep concluded "only 1 of
+>    ~19 handlers was wrong" and MISSED this one because it is delegated through `app.lua` rather
+>    than bound directly. Fix: body wrapped in `ExecuteInGameThread`, matching `Nav.where` /
+>    `Nav.cycle_companion`; the unused `return route_mode` dropped.
+> 3. **`main.lua` Ctrl+Shift+R (the mod reload) ran on the keybind thread.** Not dev-only — it sits
+>    above the `if Build.debug` block and the README advertises it to players, so it shipped in
+>    every release. The fatal part is not the teardown (every `stop()` body is pure Lua plus bridge
+>    calls) but `App = require("app")`: it reparses ~60 modules — string interning, proto/closure/
+>    table allocation, incremental-GC steps — for tens of milliseconds on the keybind thread while
+>    ui_core, nav, battle, quest and pad_poll all execute Lua on the SAME `global_State`. Same
+>    allocator+GC race as the construction-notify episode. Fix: whole handler body wrapped in
+>    `ExecuteInGameThread`. NOTE the sweep originally filed this against `pad_poll.lua:35`
+>    (`steppers[name] = nil`); the refuter showed that write is a one-instruction torn window that
+>    is a no-op on an absent key and will essentially never fire — `pad_poll.lua` needs NO change.
+>    Recorded here so nobody "fixes" pad_poll later.
+> 4. **`screen_choicelist.lua` called `GetFullName()` BEFORE the validity guard.** The conjunction
+>    `if it:GetFullName():find(...) and Core.on_screen(it)` dereferences the handle first.
+>    `Xcmn_Win01_List_C` is not directory-mapped, so `Core.cached_all` serves it from the
+>    `FindAllOf` pool cache on its ~30 s refresh as long as ONE entry lives, so freed rows sit in it.
+>    Not private to this screen: the substory reward sheet builds fresh instances and its host is
+>    destroyed on close (no map switch), so opening any system window shortly after dereferenced the
+>    freed rows. Every other `GetFullName`-on-a-cached-pool site in the mod already guards first;
+>    this was the sole outlier. Fix: conjunction reordered (also a saving — the path string is now
+>    built only for rows that survive the on-screen test).
+> 5. **`ui_archetypes.lua` `A.shop_money` was a multi-candidate probe using NON-STRICT
+>    `Core.member`.** `MONEY_HOLDERS` is documented as exactly-one-exists-per-host, so the other
+>    candidates are names with positive reason to be ABSENT — and non-strict `Core.member` falls
+>    through to a RAW fetch whenever the per-tick property-set budget is unavailable
+>    (`PROP_SETS_PER_TICK = 1`, shared by ~40 adapters) or the class's set came back partial.
+>    Opening a shop presents TWO never-seen classes on the same tick, so the budget is
+>    deterministically exhausted exactly when these probes run — the normal path on every shop
+>    open, repeating every 100 ms for the whole visit. The function's own comment claimed the
+>    existence gate made an inapplicable name "a quiet nil instead of the uncatchable abort", which
+>    is precisely the false belief the 07-28 (a) strict-gate rule exists to prevent; that comment is
+>    now corrected in place. Fix: all probes routed through `Core.first_member` (`strict = true`).
+> 6. **`nav_tracker.lua` `explore_rescan` — a ~1.2 s game-thread freeze every 4 s.**
+>    `Nav.list_targets` issues SEVENTEEN raw `FindAllOf` calls, none taking a scan slot, checking
+>    quiet mode, or routing through `timed_findall` (invisible to `__KakarotScanStats`). At the
+>    repo's own measured 68.2 ms per scan that is ~1.2 s in ONE tick, fired every 4 s indefinitely
+>    while running or flying with explore mode on (double-R3, a shipped feature). NOT a crash and
+>    NOT a pcall pierce — the refuter confirmed `explore_pois` stores only plain values, no handles
+>    survive the rescan. PARTIAL FIX ONLY: an early `Core.scan_quiet()` return, so it cannot fire
+>    during a load or cutscene. STILL OPEN — the 1.2 s burst itself needs a cheaper source (the
+>    minimap pointer walk plus the already-cached enemies list) instead of the 17-class sweep; that
+>    changes what explore mode can FIND, so it wants a Ctrl+F5 measurement and a deliberate decision
+>    first. Explicitly do NOT budget-gate `list_targets` with `take_scan_slot`: it is shared with the
+>    R3 picker and this loop only refills the PROPERTY budget, so that would hand the picker a
+>    near-empty list whenever the registry loop is stopped — the fail-closed-on-shared-substrate trap.
+> 7. **`src/input_bridge/input_bridge.c` — `g_haveLast` was a ONE-WAY latch, and losing the pad made
+>    the game permanently deaf to the KEYBOARD.** Set on the first successful `XInputGetState` and
+>    never cleared, while `g_last` only refreshes on `ERROR_SUCCESS`. After a disconnect (a wireless
+>    pad sleeping or running out of battery — routine in a long session) `pad_snapshot` served the
+>    FROZEN last frame forever and `Input.read()` never returned nil, breaking `l_poll`'s own
+>    documented contract. That silently disabled the only pad-loss recovery both pad menus have
+>    (`if not snap then ... Input.block(false)`), and the radar picker — still latched `open` —
+>    went on renewing `Input.kb_block(300)` every 20 ms, so the keyboard was blocked for the rest of
+>    the session with no in-game way out. Nothing errored at all, which is why it was invisible. Fix:
+>    clear the latch on a failed read for user 0 (`if (idx == 0 && r != 0) InterlockedExchange(&g_haveLast, 0);`),
+>    routing `l_poll` to its direct-read fallback which correctly reports a disconnected pad; the set
+>    is now interlocked too, matching the reader. DLL rebuilt. **This one needs a full game RESTART,
+>    not a Ctrl+Shift+R.**
+>
+> **THE SEVEN THAT DIED (recorded so they are not re-opened):**
+> - `screen_community.lua:1201` `read(det.Txt_Name)` — raw fetch, but `Txt_Name` IS a reflected
+>   property of `Start_Commu_Detail_C` (CXX header dump + an F7 census showing the value), and the
+>   owner has already survived several full dereferences in the same atomic game-thread callback. An
+>   absent name would be a deterministic 100%-reproducible kill on a screen marked verified, not an
+>   intermittent crash.
+> - `nav_tracker.lua` `Nav.toggle` (plain F3) — on the keybind thread, but touches NO engine object:
+>   `drop_target` and every preempt/chain write is a plain Lua upvalue, `Audio.stop` is a native
+>   bridge call. Wrapping it would also defer the documented "F3 off = immediate silence". Contrast
+>   with item 2 above — the distinction is whether the handler dereferences anything.
+> - `ui_directory.lua:66` `prop()` non-strict — the fail-open mechanism is real but the fatal step
+>   was refuted by a live in-game trace.
+> - `ui_core.lua:701` — `Core.array_of` has no `strict` parameter, but release history refutes the
+>   crash: the existence gate is not even in shipped v0.1.2 while the pcall has been there far
+>   longer, so the released mod already ran exactly this path.
+> - `ui_core.lua:1430` — `custom_props` is not flushed on transition, which IS the documented
+>   `RegisterCustomProperty` trap, but the only consumer (`screen_community.skills_text`) is a
+>   `local function` with ZERO call sites: dead code in every build.
+> - `src/input_bridge/input_bridge.c:345` `pad_block_renew()` in `l_poll` — "any reader renews the
+>   lease" is real (worse than claimed: `ui_registry.pad_boost` calls `Input.read()` ungated every
+>   100 ms, so a live lease never lapses) but the refuter showed it does not produce the claimed
+>   failure.
+> - `src/audio_bridge/audio_bridge.cpp:159` — the `SetOutputMatrix` channel clamp is real and
+>   release-reachable, but it fails on SEVERITY, not reachability.
+>
+> **METHOD NOTE.** The sweep's value came from grouping files by hot-path risk and giving every
+> candidate an independent adversarial refuter — a 50% kill rate, consistent with the 07-27 pass (37
+> of 48 died). A candidate list without refutation would have produced seven unnecessary edits to
+> working code, on a mod where a wrong "fix" means a blind player hears nothing.
+
 > **2026-07-29 — A CRASH REPORT NAMED THE WRONG SCREEN, AND FOLLOWING THE LOG DOWN FOUND A NEW
 > SUBSTRATE BUG: A REFLECTION WALK CAN TRUNCATE SILENTLY AND GET CACHED AS AUTHORITY.** User reported
 > a crash "on the party screen." `UE4SS.log` (00:58:56 → 01:25:12) ends with no shutdown line, no

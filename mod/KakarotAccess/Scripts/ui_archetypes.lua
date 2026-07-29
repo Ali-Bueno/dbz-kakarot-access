@@ -703,22 +703,30 @@ end
 -- `WL_Txt_Num_Money` @0x0440 holds the figure) but under a DIFFERENT member name per host —
 -- `Shop_Cmn_Money` on the shop top, `WL_Shop_Cmn_Money` on the info shop, `WL_CmnMoney` on the
 -- cooking menu — and `UAT_UIShopCommon` (the buy/sell list) skips the sub-widget entirely and
--- inlines its own `WL_Txt_Num_Money`. Hence the candidate list; each name is tried through
--- Core.member's existence gate, so the ones that do not apply to this host cost a quiet nil
--- instead of the uncatchable abort.
+-- inlines its own `WL_Txt_Num_Money`. Hence the candidate list: exactly ONE of these names exists
+-- per host, so every other candidate is a name we have positive reason to believe is ABSENT.
+--
+-- CORRECTED 2026-07-29 (crash sweep). This comment used to claim each name was "tried through
+-- Core.member's existence gate, so the ones that do not apply cost a quiet nil instead of the
+-- uncatchable abort". That is FALSE, and it is the multi-candidate fail-open hazard CLAUDE.md
+-- records: `Core.member` falls back to a RAW fetch whenever the per-tick property-set budget is
+-- unavailable (PROP_SETS_PER_TICK = 1, shared by ~40 adapters) or the class's set came back
+-- partial. Opening a shop presents two never-seen classes (the host and the money sub-widget) on
+-- the SAME tick, so the budget is deterministically exhausted exactly when these probes run —
+-- i.e. the fetch of a known-absent name was not a rare race but the normal path on every shop
+-- open, repeating every 100 ms for the whole visit. A multi-candidate probe therefore takes the
+-- STRICT contract: `Core.first_member` passes `strict = true`, so a candidate is SKIPPED rather
+-- than fetched when the gate cannot answer. Failing closed here is bounded and self-healing —
+-- the wallet reads nil for a tick — and the permanent case logs itself.
 local MONEY_HOLDERS = { "Shop_Cmn_Money", "WL_Shop_Cmn_Money", "WL_CmnMoney" }
 
 function A.shop_money(host)
     if not Core.valid(host) then return nil end
-    local t = Core.read_text(Core.member(host, "WL_Txt_Num_Money"))   -- inlined (Shop_Cmn_C)
+    local t = Core.read_text(Core.first_member(host, "WL_Txt_Num_Money"))   -- inlined (Shop_Cmn_C)
     if not t then
-        for _, m in ipairs(MONEY_HOLDERS) do
-            local w = Core.member(host, m)
-            if Core.valid(w) then
-                t = Core.read_text(Core.member(w, "Txt_Num_Money"))
-                    or Core.read_text(Core.member(w, "WL_Txt_Num_Money"))
-                if t then break end
-            end
+        local w = Core.first_member(host, table.unpack(MONEY_HOLDERS))
+        if w then
+            t = Core.read_text(Core.first_member(w, "Txt_Num_Money", "WL_Txt_Num_Money"))
         end
     end
     if not t or t == "" then return nil end
