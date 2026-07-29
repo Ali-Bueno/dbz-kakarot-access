@@ -72,17 +72,21 @@ local function message(w)
     -- the difficulty box, but the untitled layouts COLLAPSE the title block — the
     -- rendered state is the discriminator text presence never was (the food confirm
     -- read the difficulty title+help glued around its question).
+    -- `w` is one of three window classes (WINDOW_CLASSES) that between them declare only
+    -- SOME of these text members each — a multi-candidate probe across host classes, same
+    -- shape as the pool-name probes below, so every member here goes through the STRICT
+    -- gate: a class that genuinely lacks the member must be refused, never raw-fetched.
     local title
-    pcall(function() title = node_rt(w.Txt_Title) end)
+    pcall(function() title = node_rt(Core.member(w, "Txt_Title", true)) end)
     if title and title ~= "" then
         local body
-        pcall(function() body = node_rt(w.Txt_Help) end)
+        pcall(function() body = node_rt(Core.member(w, "Txt_Help", true)) end)
         return (body and body ~= "") and (title .. ", " .. body) or title
     end
     local parts = {}
     for _, m in ipairs(UNTITLED_MEMBERS) do
         local t
-        pcall(function() t = node_speech(w[m]) end)
+        pcall(function() t = node_speech(Core.member(w, m, true)) end)
         -- consecutive-duplicate guard: the Win02 info box repeats its header as the
         -- subtitle ("Z Warrior Community, Z Warrior Community" read live)
         if t and t ~= parts[#parts] then parts[#parts + 1] = t end
@@ -146,9 +150,11 @@ local function emblems_received(w)
             local row = arr[i]
             if Core.valid(row) and Core.is_visible(row) then
                 local name, lv
-                pcall(function() name = cell(row.Txt_Name) end)
-                if not name then pcall(function() name = cell(row.WL_CharName) end) end
-                pcall(function() lv = cell(row.Txt_Num00) end)
+                -- Txt_Name / WL_CharName is the documented BP-vs-native fallback (see the
+                -- function comment) — a genuine multi-candidate probe, so strict.
+                pcall(function() name = cell(Core.member(row, "Txt_Name", true)) end)
+                if not name then pcall(function() name = cell(Core.member(row, "WL_CharName", true)) end) end
+                pcall(function() lv = cell(Core.member(row, "Txt_Num00")) end)
                 if name then
                     parts[#parts + 1] = lv
                         and (name .. ", " .. string.format(I18n.t("commu_lv"), lv))
@@ -172,7 +178,7 @@ local function plates(w)
                 if Core.valid(row) and Core.is_visible(row) then
                     local p = {}
                     for _, m in ipairs(pool.texts) do
-                        p[#p + 1] = cell(row[m])
+                        p[#p + 1] = cell(Core.member(row, m))
                     end
                     if #p > 0 then parts[#parts + 1] = table.concat(p, ", ") end
                 end
@@ -180,9 +186,12 @@ local function plates(w)
         end) end
     end
     pcall(function()
-        local dr = w.WL_DetailReward
+        -- WL_DetailReward, like Txt_Title/Txt_Help above, is only declared on SOME of the
+        -- three window classes `w` can be — strict gate for the same reason.
+        local dr = Core.member(w, "WL_DetailReward", true)
         if Core.valid(dr) and Core.on_screen(dr) then
-            local s = Core.phrase(node_rt(dr.TxtReward), node_rt(dr.TxtName), node_rt(dr.TxtNum))
+            local s = Core.phrase(node_rt(Core.member(dr, "TxtReward")),
+                node_rt(Core.member(dr, "TxtName")), node_rt(Core.member(dr, "TxtNum")))
             if s ~= "" then parts[#parts + 1] = s end
         end
     end)
@@ -219,12 +228,15 @@ local function choices()
             for i = 1, n do
                 local ch = arr[i]
                 if Core.valid(ch) and Core.on_screen(ch) then
-                    local label = A.markup_to_speech(Core.read_text(Core.member(ch, "Txt_Choice")))
-                        or A.markup_to_speech(Core.read_text(Core.member(ch, "ChoiceTxt")))
+                    -- Two row shapes share this loop (Sort popup's Xcmn_Win00_Choice_C vs the
+                    -- field decision box's UAT_UISystemWindowChoice) — each declares only ONE
+                    -- of these name pairs, so both fallbacks are strict multi-candidate probes.
+                    local label = A.markup_to_speech(Core.read_text(Core.member(ch, "Txt_Choice", true)))
+                        or A.markup_to_speech(Core.read_text(Core.member(ch, "ChoiceTxt", true)))
                     if label then
                         labels[#labels + 1] = label
-                        local hi = Core.is_visible(Core.member(ch, "Img_Xwin01_List"))
-                            or Core.is_visible(Core.member(ch, "BasePlate"))
+                        local hi = Core.is_visible(Core.member(ch, "Img_Xwin01_List", true))
+                            or Core.is_visible(Core.member(ch, "BasePlate", true))
                         if hi then sel = label end
                     end
                 end
@@ -248,8 +260,9 @@ local function choices()
                     A.markup_to_speech(Core.read_text(Core.member(row, "ItemNum"))))
                 if label ~= "" then
                     ilabels[#ilabels + 1] = label
-                    local hi = Core.is_visible(Core.member(row, "ImgXwin01List"))
-                        or Core.is_visible(Core.member(row, "Img_Xwin01_List"))
+                    -- Native/BP spelling fallback (see the item-list comment above) — strict.
+                    local hi = Core.is_visible(Core.member(row, "ImgXwin01List", true))
+                        or Core.is_visible(Core.member(row, "Img_Xwin01_List", true))
                     if hi then isel = label end
                 end
             end
@@ -267,7 +280,8 @@ end
 -- picker repopulates it per cursor move). Tooltip in item-list mode only.
 local function item_detail()
     local t
-    pcall(function() t = node_rt(win.WL_TxtDetailItem) end)
+    -- Only some window classes declare WL_TxtDetailItem — strict, same as WL_DetailReward.
+    pcall(function() t = node_rt(Core.member(win, "WL_TxtDetailItem", true)) end)
     return t
 end
 
@@ -527,9 +541,11 @@ local function fresh_notice(w, rows_ok)
     -- evicted its mark minutes later ("Ajustes de dificultad" glued around the food
     -- confirm). Rendered-state first, novelty second.
     local title, help
-    pcall(function() title = node_rt(w.Txt_Title) end)
+    -- Strict: see message()'s comment — `w` is one of three window classes and Title/Help
+    -- are declared on only some of them.
+    pcall(function() title = node_rt(Core.member(w, "Txt_Title", true)) end)
     if title == "" then title = nil end
-    pcall(function() help = node_rt(w.Txt_Help) end)
+    pcall(function() help = node_rt(Core.member(w, "Txt_Help", true)) end)
     if help == "" then help = nil end
     -- Round 16: there is no clean titled/untitled split — "Bonificaciones" carried a
     -- fresh title AND its live body in Txt_Detail while Txt_Help was stale from the
@@ -551,7 +567,7 @@ local function fresh_notice(w, rows_ok)
     if title then parts[#parts + 1] = title end
     for _, m in ipairs(UNTITLED_MEMBERS) do
         local t
-        pcall(function() t = node_speech(w[m]) end)
+        pcall(function() t = node_speech(Core.member(w, m, true)) end)
         if t and t ~= "" and not was_recent(t) and t ~= parts[#parts] then
             parts[#parts + 1] = t
             news = true
@@ -589,13 +605,13 @@ end
 local function mark_window_nodes(w)
     if not Core.valid(w) then return end
     local title, help
-    pcall(function() title = node_rt(w.Txt_Title) end)
+    pcall(function() title = node_rt(Core.member(w, "Txt_Title", true)) end)
     if title and title ~= "" then mark_recent(title) end
-    pcall(function() help = node_rt(w.Txt_Help) end)
+    pcall(function() help = node_rt(Core.member(w, "Txt_Help", true)) end)
     if help and help ~= "" then mark_recent(help) end
     for _, m in ipairs(UNTITLED_MEMBERS) do
         local t
-        pcall(function() t = node_speech(w[m]) end)
+        pcall(function() t = node_speech(Core.member(w, m, true)) end)
         if t and t ~= "" then mark_recent(t) end
     end
 end

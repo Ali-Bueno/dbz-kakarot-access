@@ -23,7 +23,10 @@ end
 
 -- The volume gauge value as a percentage, or nil if the row isn't a slider.
 local function gauge_value(row)
-    local g = row.Xlist_Bar_03_Gauge
+    -- Gated hop (was a raw `row.Xlist_Bar_03_Gauge`): row is a pooled Xlist_Bar03_C list
+    -- row, and a fetch of a member the row's class may not declare is the uncatchable
+    -- abort (CLAUDE.md §8) — nothing here previously caught it, not even a pcall.
+    local g = Core.member(row, "Xlist_Bar_03_Gauge")
     if not Core.is_visible(g) then return nil end
     local on = 0
     for i = 0, GAUGE_SEGMENTS - 1 do
@@ -76,10 +79,14 @@ local FKEY_TOKEN = {
 -- readout (which, on the button-config screen, is the one readout that matters).
 local function input_assign()
     local Dir = require("ui_directory")
-    local mgr, savesys, ia = Dir and Dir.peek("gi", "SaveManager"), nil, nil
-    if Core.valid(mgr) then pcall(function() savesys = mgr.SaveSystem end) end
+    -- Both hops gated (were raw `mgr.SaveSystem` / `savesys.InputAssign`): both are
+    -- UObject member fetches, so a class that doesn't declare the name is the uncatchable
+    -- abort — Core.member is the guard, not the pcall that used to wrap only the second one.
+    local mgr = Dir and Dir.peek("gi", "SaveManager")
+    local savesys = Core.valid(mgr) and Core.member(mgr, "SaveSystem") or nil
     if not Core.valid(savesys) then return nil end
-    if not pcall(function() ia = savesys.InputAssign end) or ia == nil then return nil end
+    local ia = Core.member(savesys, "InputAssign")
+    if ia == nil then return nil end
     return ia
 end
 
@@ -118,8 +125,11 @@ local function assign_value(name)
     if not name or not assign_declares(name) then return nil end
     local ia = input_assign()
     if ia == nil then return nil end
-    local v
-    if not pcall(function() v = ia[name] end) or v == nil then return nil end
+    -- ia is a STRUCT handle (FATSaveSystemInputAssign): assign_declares already proved the
+    -- name exists on the struct, so Core.struct_member only needs to add the handle-liveness
+    -- half (Core.valid_ref) — same contract as struct_str below.
+    local v = Core.struct_member(ia, name)
+    if v == nil then return nil end
     local ok, s = pcall(function() return v:ToString() end)
     if not ok or not s or s == "" or s == "None" then return nil end
     return s
@@ -264,8 +274,10 @@ local ICON_DATA = "/Game/CFramework/DataAssets/CFTextIconData.CFTextIconData"
 local bindings -- { configToCtrl = {}, configToDyn = {}, dynToCtrl = {} } or nil
 
 local function struct_str(e, field)
-    local ok, v = pcall(function() return e[field] end)
-    if not ok or v == nil then return "" end
+    -- e is a struct handle out of KeyConfigList (a TArray<struct>); Core.struct_member
+    -- covers the handle-liveness half a bare pcall around `e[field]` never checked.
+    local v = Core.struct_member(e, field)
+    if v == nil then return "" end
     if type(v) == "userdata" then
         local oks, s = pcall(function() return v:ToString() end)
         return oks and s or ""
@@ -288,9 +300,11 @@ local function build_bindings()
         ico = StaticFindObject(ICON_DATA)
     end
     if not Core.valid(ico) then return nil end
-    local arr = ico.KeyConfigList
-    local n = 0
-    pcall(function() n = #arr end)
+    -- KeyConfigList is a real TArray<struct> (Core.array_of confirms the type), not the
+    -- fixed-C-array case; was a raw `ico.KeyConfigList` + `#arr`, which is the uncatchable
+    -- abort family twice over (undeclared-member fetch, then array length on a non-TArray).
+    local arr, n = Core.array_of(ico, "KeyConfigList")
+    if not arr then return nil end
     for i = 1, n do
         local e = arr[i]
         if e then
@@ -310,6 +324,19 @@ local function build_bindings()
                 m.idxToCtrl[tonumber(idx)] = ctrl
             end
         end
+    end
+    -- A map that resolved NOTHING is not an answer either (2026-07-29). The rule stated above
+    -- this function — return nil, never an empty map, so the cache retries — was only applied to
+    -- the asset-not-loaded exits at :302/:307, yet the array can be readable while every struct
+    -- read still comes back "": `struct_str` yields "" for a handle that fails its liveness
+    -- check, and that outcome used to be cached as fact for the whole session, which is exactly
+    -- the silent failure the 2026-07-03 note describes (the fishing button spoke in one session
+    -- and not the next). Retrying costs a rebuild per call in that state, which is a visible
+    -- cost rather than an invisible one — and it is the same trade the two exits above already
+    -- accepted.
+    if next(m.configToCtrl) == nil and next(m.configToDyn) == nil
+        and next(m.configToIcon) == nil and next(m.idxToCtrl) == nil then
+        return nil
     end
     return m
 end
@@ -365,9 +392,15 @@ end
 function A.row_keyconfig(row)
     local tm = Core.member(row, "Txt_Mode")
     if not Core.valid(tm) then return nil end
-    local rich = tm.ExMainTxt
+    -- Gated hop (was a raw `tm.ExMainTxt` with NO pcall at all): tm is a pooled row widget.
+    local rich = Core.member(tm, "ExMainTxt")
     if not Core.is_visible(rich) then return nil end
-    local ok, s = pcall(function() return rich.Text:ToString() end)
+    -- `Text` is likewise gated; `:ToString()` on the returned FText is a method call, not a
+    -- member fetch, so it stays a plain pcall'd call.
+    local ok, s = pcall(function()
+        local t = Core.member(rich, "Text")
+        return t and t:ToString()
+    end)
     if not ok or not s then return nil end
     return s:match('KeyConfigId="([^"]+)"')
 end
@@ -536,7 +569,10 @@ function A.platbtn_token(plat)
     end
     if tok then return tok end
     pcall(function()
-        local act = plat.CurrentActionID:ToString()
+        -- Gated hop (was a raw `plat.CurrentActionID`); `:ToString()` on the FName result
+        -- is a method call, not a member fetch.
+        local id = Core.member(plat, "CurrentActionID")
+        local act = id and id:ToString()
         if act and act ~= "" and act ~= "None" then
             local ctrl = resolve_ctrl(act) or act
             tok = A.physical_token(ctrl:match("Btn_(.+)$"))

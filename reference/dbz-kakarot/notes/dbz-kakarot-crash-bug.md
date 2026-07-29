@@ -1,5 +1,86 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-29 — A CRASH REPORT NAMED THE WRONG SCREEN, AND FOLLOWING THE LOG DOWN FOUND A NEW
+> SUBSTRATE BUG: A REFLECTION WALK CAN TRUNCATE SILENTLY AND GET CACHED AS AUTHORITY.** User reported
+> a crash "on the party screen." `UE4SS.log` (00:58:56 → 01:25:12) ends with no shutdown line, no
+> traceback, no `faulted in is_active` — a hard process death, nothing caught it. **It was not the
+> party screen**: `screen_party` was entered and left cleanly twice (01:23:58, 01:24:56). The process
+> died 8 s later, the same second the SKILL TREE was entered, and the log's LAST line is
+> `array gate: Start_Skilltree_C has no 'WL_Skilltree_Zorb00' (not read)`.
+>
+> **Why that one line was the whole investigation.** The gate log dedupes per `(class address,
+> member)`, so it prints only on the FIRST refusal of a given member all session — and the skill tree
+> had opened cleanly three times earlier in the same log (01:24:02, 01:24:11, 01:24:36). `array_of`
+> fails OPEN while no property set exists yet for a class (budget is 1 class/tick shared by ~40
+> adapters), so those three earlier visits read `WL_Skilltree_Zorb00` RAW and succeeded — proof the
+> member is real, corroborated independently by `STATUS.md:291` (the 12 orbs verified in-game
+> 2026-07-14). So between visit 3 and visit 4, something turned a real, previously-readable member
+> into a permanently refused one. Nothing about the member changed; the CACHE did.
+>
+> **ROOT CAUSE.** `prop_set`'s `GetSuperStruct()` walk in `ui_core.lua` (the one that builds the
+> per-class property-name set `Core.member`/`Core.array_of` gate against, per the 2026-07-25 (b)
+> entry below) could stop EARLY and SILENTLY, short of the actual root of the class hierarchy —
+> typically at the Blueprint generated class, without ever reaching its native base. Four ways it
+> happened, all now named in code: (a) `GetSuperStruct()` raised, (b) the walk hit a super with
+> nothing usable below the declared root, (c) the `SUPER_MAX` depth cap was hit, (d)
+> `ForEachProperty` itself raised partway through a level. Whichever fired, the truncated set was
+> cached exactly like a complete one — same cache, same lifetime, flushed only on map transition —
+> and every later gated read of a member declared on the missing NATIVE base was refused forever,
+> with a single deduped log line and no error. A screen goes quiet after having worked, with nothing
+> in the log to say the cache is the reason.
+>
+> **FIX SHIPPED — SOURCE-ONLY, UNVERIFIED IN GAME, 31 files, +682/-299, needs a full RESTART**
+> (`ui_core.lua` changed, not hot-reloadable). A walk that does not reach the hierarchy root is now
+> marked PARTIAL rather than complete. A name ABSENT from a partial set means "don't know" and now
+> FAILS OPEN in both `Core.member` and `Core.array_of` — exactly the standing fail-open rule, just
+> applied to a set the code previously trusted as exhaustive. A name PRESENT in a partial set is
+> unaffected: the walk still recorded its real property TYPE, so `array_of`'s fixed-array check keeps
+> working. `strict` gates (the multi-candidate probes from 2026-07-28 (a)) still fail CLOSED on a
+> partial set — their whole contract is that most candidates are *expected* absent, so "don't know"
+> there stays a refusal, not a licence to fetch. Partial sets are logged once per class (depth reached
+> + which of the four cases fired), re-derived up to `PARTIAL_RETRIES = 3` times, wall-clock throttled
+> `PARTIAL_RETRY_S = 5.0`, drawn from the existing `PROP_SETS_PER_TICK` budget rather than a new one;
+> a completing retry logs itself so a transient truncation is visible as resolved, not just silent.
+> All partial state is flushed on map transition together with `prop_sets`.
+>
+> **THE NEAR-MISS, worth its own paragraph because it would have been worse than the bug it fixed.**
+> The first implementation treated `GetSuperStruct() == nil` as the natural end of the chain — the
+> obvious reading of "no more super". It is wrong: UE4SS wraps the raw pointer, so the TOP of a real
+> hierarchy answers an INVALID handle, not nil — every other super-walk already in this codebase
+> already terminates on `not IsValid` (`discover.lua:562`, `tools/ue4ss-inspector/Scripts/main.lua:136`
+> — this file just hadn't been checked against them). Had it shipped, `sup == nil` would never fire on
+> a genuine root, so EVERY class's walk would report "not yet at root", every set would be marked
+> PARTIAL, and both existence gates would go permanently open MOD-WIDE — including for
+> `screen_dialog`'s by-design multi-candidate array probe, which depends on the gate refusing a name
+> it knows is absent. That reintroduces the exact `GetAddress`-pierces-pcall class from 2026-07-25 (d),
+> on every dialogue tick. Caught in adversarial review before it ran. The shipped discriminator is the
+> ROOT NAME: a walk whose last resolved struct is `Object` is complete; anything else is truncated,
+> regardless of why the walk stopped.
+>
+> **Adversarial review also reverted three fixes from the same pass that would have SILENCED
+> screens** — same shape as every other round in this ledger, recorded so the pattern stays visible:
+> a `strict` gate applied to an ordinary (non-multi-candidate) member drops the whole row on a
+> budget-starved tick; an added `Core.on_screen` requirement silenced the skill-palette slot cursor
+> (a case the 2026-07-28 pane-liveness rule below already covers — different pane, same trap); and a
+> bare `nil` check standing in for `Core.valid` would have let a dead handle reach a native read.
+>
+> **STILL OPEN: whether the mod actually killed the process that session.** The log proves the LAST
+> thing it printed, not the cause of death — no traceback, no uncatchable-throw signature, just
+> silence where a shutdown line should be. The array-gate refusal is a strong correlate (it fired in
+> the same second) but is not proof: `array_of`'s refusal itself fails open into "not read", it does
+> not fetch. The decisive evidence is the mod's own crash black box (`mem_bridge.mark()` ring →
+> `crash_trail.bin`, printed at the next boot by `main.lua:34-43`, granularity `ui.update <adapter>`
+> from `ui_registry.lua:310`) — not yet seen for this session. Asked the user for the head of the next
+> session's log. **Do not write this up as solved until that trail is read.**
+>
+> **DIAGNOSTIC RECIPE for this bug class, for the next time a screen goes quiet after having worked:**
+> grep the log for `partial property set:` first — if a class the silent screen depends on shows up
+> there, the cache is truncated and every inherited member on it is now suspect, not just the one
+> that happened to log. Independently, grep for `array gate:` / `member gate:` naming a member you
+> have OTHER evidence is real (a prior successful read in the same log, a STATUS.md derived-fact row,
+> a CXX header declaring it) — a refusal of a member you can prove exists is the signature of this
+> bug, as opposed to a genuinely absent one.
+
 > **2026-07-28 — THE AUDIT'S OWN FIX BROKE A FEATURE: `IsValid` IS NOT UNIVERSAL, AND AN FName
 > RAISES THROUGH pcall.** The user reported the crashes gone and, in the same breath, that the radar
 > picker no longer opened **on either bind** (R3 and V). Both binds funnel through

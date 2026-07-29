@@ -62,9 +62,9 @@ end
 -- The row's button glyph resolved to speech: Txt_Btn's rich text (ExMainTxt) carries the
 -- inline <inputicon KeyConfigId=…> markup, resolved by A.markup_to_speech. nil if none.
 local function row_button(row)
-    local node = Core.valid(row) and row.Txt_Btn
+    local node = Core.valid(row) and Core.member(row, "Txt_Btn")
     if not Core.valid(node) then return nil end
-    local rich = node.ExMainTxt
+    local rich = Core.member(node, "ExMainTxt")
     if Core.valid(rich) then
         local ok, s = pcall(function() return rich.Text:ToString() end)
         if ok and s and s ~= "" then return A.markup_to_speech(s) end
@@ -96,7 +96,7 @@ local function content()
     for i = 0, ROW_COUNT - 1 do
         local row = Core.member(win, "Battle_Tips_List_0" .. i)
         if Core.on_screen(row) then
-            local action = Core.text_of(row.Txt_Operat)
+            local action = Core.text_of(Core.member(row, "Txt_Operat"))
             local button = row_button(row)
             local line = (button and action and (button .. ": " .. action)) or button or action
             if line then parts[#parts + 1] = line ; rowlines = rowlines + 1 end

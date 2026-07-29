@@ -41,11 +41,14 @@ local function dbg(s)
     end)
 end
 
--- Reflected text read off the host by property name (nil if missing/empty). Guarded.
+-- Reflected text read off the host by property name (nil if missing/empty). Routed through
+-- Core.member (existence gate on Start_Skilltree_C + Core.valid re-check on both the owner
+-- AND the result) instead of a raw `host[name]` pcall: the raw form does not catch a fetch of
+-- a member the class doesn't declare (fact 1 — the abort pierces pcall), and it never
+-- re-validated `host`, which is a file-local cached once per tick by is_active and can be
+-- stale by the time update() runs (2026-07-29 contract).
 local function field(name)
-    local node
-    if not pcall(function() node = host[name] end) or node == nil then return nil end
-    return Core.read_text(node)
+    return Core.read_text(Core.member(host, name))
 end
 
 -- Orb color, spoken: the slot's position within its 6-orb grid, in the fixed on-screen
@@ -112,8 +115,14 @@ local STATE = {
 -- id array at the same index — if the index arithmetic were wrong, they wouldn't match.
 local function hovered_state()
     if not Mem.is_loaded() then return nil end
-    local tree
-    if not pcall(function() tree = host.UISkillTree end) or not Core.valid(tree) then return nil end
+    -- Gated the same way cursor_padlock() reads it below: a raw `host.UISkillTree` skips both
+    -- the existence gate and the re-validation of the (possibly stale, file-local cached) host.
+    local tree = Core.member(host, "UISkillTree")
+    -- Core.valid stays EXPLICIT: Core.member's result check is conditional (it only runs when the
+    -- property set for this class is available, and it is skipped when the per-tick enumeration
+    -- budget is spent or the gates are toggled off with Ctrl+G), so `tree ~= nil` alone can still
+    -- be an INVALID RemoteObject — which every Mem.* read below would then take an address from.
+    if not Core.valid(tree) then return nil end
 
     local col, row = Mem.i32(tree, NO.cursorCol), Mem.i32(tree, NO.cursorRow)
     local max_col, max_row = Mem.i32(tree, NO.maxCol), Mem.i32(tree, NO.maxRow)

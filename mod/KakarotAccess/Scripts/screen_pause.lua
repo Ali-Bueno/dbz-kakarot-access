@@ -48,12 +48,17 @@ local function selected_label()
     if not idx or idx < 0 or idx >= BAR_COUNT then return nil end
     -- Prefer the reflected ListBarArray (the array the native index refers to);
     -- fall back to the positional List_Bar0N row.
+    -- Hardened 2026-07-29: `pause.ListBarArray` was a raw TArray fetch with no existence/type
+    -- gate and no bounds check against the array's real length (CLAUDE.md §8 — a raw
+    -- GetArrayNum-class read on the wrong member is an uncatchable abort). Core.array_of
+    -- gates both, and the length it returns lets us confirm idx is actually in range before
+    -- indexing.
     local row
-    local ok = pcall(function()
-        local arr = pause.ListBarArray
-        if arr then row = arr[idx + 1] end   -- UE4SS Lua arrays are 1-based
-    end)
-    if not (ok and Core.valid(row)) then row = Core.member(pause, "List_Bar0" .. idx) end
+    local arr, n = Core.array_of(pause, "ListBarArray")
+    if arr and n and idx < n then
+        pcall(function() row = arr[idx + 1] end)   -- UE4SS Lua arrays are 1-based
+    end
+    if not Core.valid(row) then row = Core.member(pause, "List_Bar0" .. idx) end
     if not Core.on_screen(row) then return nil end
     return Core.text_of(Core.member(row, "Txt_List"))
 end

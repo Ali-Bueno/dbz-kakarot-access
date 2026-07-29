@@ -199,6 +199,39 @@ function Core.toggle_gates()
 end
 
 local prop_sets = {}      -- class address -> { [name] = "<PropertyType>" } | false if unavailable
+-- PARTIAL SETS (2026-07-29, from a user crash log). The super-struct walk below can stop EARLY
+-- and SILENTLY, and a truncated set names only part of the class — typically the Blueprint
+-- generated class WITHOUT its native base. Cached as truth, that set then refuses every
+-- inherited member for the rest of the session: the log line
+--   "array gate: Start_Skilltree_C has no 'WL_Skilltree_Zorb00' (not read)"
+-- refused a member STATUS.md records as verified-readable, and which the mod had read raw
+-- (gate open, budget not yet spent) three times earlier in that same session. The screen went
+-- quiet with one log line and no error anywhere.
+-- So a partial set is kept — the names it DID find carry their real property type, which is
+-- what makes array_of's fixed-array check work — but it is NOT authority on ABSENCE: a name
+-- missing from it means "don't know", and the standing rule is that "don't know" fails OPEN.
+local prop_partial = {}   -- class address -> true while the cached set is known-incomplete
+local prop_retry = {}     -- class address -> os.clock() before the next re-derivation attempt
+local prop_tries = {}     -- class address -> re-derivations already spent
+local partial_logged = {} -- class NAME -> true (one line per class, like blocked_seen)
+-- Re-derivation cadence for a partial set. WALL TIME, not a tick/call counter: prop_set is
+-- reached from four independent loops (registry, nav, battle, quests), so a counter measured in
+-- CALLS is confirmed in milliseconds and throttles nothing — the same lesson REFILL_EVERY_S
+-- records below. 5 s is long enough that a class stuck partial costs at most one chain walk per
+-- 5 s (and it still has to win the shared PROP_SETS_PER_TICK slot, so retries can never
+-- cluster), short enough that a TRANSIENT early break — a super that momentarily failed its
+-- validity pre-check, a denied pcall during streaming — heals within one screen visit.
+-- Retries are also CAPPED: a STRUCTURAL early break (the SUPER_MAX cap, a super that never
+-- validates) would otherwise re-walk the chain every 5 s for the whole session and never learn
+-- anything new. After the cap the set simply stays partial, which is safe by construction — a
+-- partial set never refuses a fetch, it only informs one.
+local PARTIAL_RETRY_S = 5.0
+local PARTIAL_RETRIES = 3
+-- Name of the ROOT of the UObject class hierarchy — the one struct that legitimately has no
+-- super. Reflection strips the U prefix, so UObject's UClass is named "Object"; discover.lua's
+-- chain dumper already terminates on the same name. It is the only way to tell "the walk reached
+-- the top" from "the walk gave up", because both hand back an unusable super (see walk_props).
+local ROOT_STRUCT = "Object"
 local SUPER_MAX = 16      -- inheritance-chain depth cap. This game's widget chains run ~6-10
                           -- (WidgetBlueprintGeneratedClass → game base → UUserWidget → UWidget →
                           -- UVisual → UObject); 16 leaves margin, and stopping SHORT would drop
@@ -234,20 +267,20 @@ function Core.allow_member(name)
     if type(name) == "string" and name ~= "" then custom_props[name] = true end
 end
 
-local function prop_set(o)
-    if not REFLECTION_GATES then return nil end
-    local cls
-    if not pcall(function() cls = o:GetClass() end) or cls == nil then return nil end
-    local key = math.tointeger(Mem.raw_addr(cls) or 0)
-    if key == nil or key == 0 then return nil end
-    local cached = prop_sets[key]
-    if cached ~= nil then return cached or nil end
-    if prop_budget <= 0 then return nil end     -- not this tick: gate stays open
-    prop_budget = prop_budget - 1
+-- One pass over a class chain. Returns the name->type map, how many names it found, WHY it
+-- stopped (nil = it reached the top of the hierarchy, i.e. the set is COMPLETE) and the depth
+-- reached. The `why` codes are the four early-break cases, spelled out because the whole point
+-- of this rewrite is that an early break used to be indistinguishable from a full walk:
+--   (a) GetSuperStruct() itself raised
+--   (b) the super struct failed the validity pre-check
+--   (c) the SUPER_MAX depth cap was hit before the top
+--   (d) ForEachProperty raised at some level
+local function walk_props(cls)
     local set, count = {}, 0
     local s, depth = cls, 0
-    while s ~= nil and depth < SUPER_MAX do
-        pcall(function()
+    local why, complete = nil, false
+    while depth < SUPER_MAX do
+        if not pcall(function()
             s:ForEachProperty(function(p)
                 local pn, pt
                 if pcall(function() pn = p:GetFName():ToString() end)
@@ -261,18 +294,112 @@ local function prop_set(o)
                     count = count + 1
                 end
             end)
-        end)
+        end) then why = "d: ForEachProperty raised" break end
         local sup
-        if not pcall(function() sup = s:GetSuperStruct() end) then break end
-        if not Core.valid(sup) then break end
+        if not pcall(function() sup = s:GetSuperStruct() end) then why = "a: GetSuperStruct raised" break end
+        -- THE NATURAL END OF THE CHAIN IS NOT `sup == nil` (corrected 2026-07-29, adversarial
+        -- review of the partial-set change). UE4SS builds a RemoteObject around the raw pointer
+        -- it got, so the top of the hierarchy answers an INVALID handle, not nil — which is why
+        -- every other super-walk in this codebase (mem.lua, discover.lua, screen_map.lua,
+        -- tools/ue4ss-inspector) and UE4SS's own cookbook terminate on `not IsValid`, never on
+        -- nil. Classifying that as an early break would have marked EVERY class partial, and a
+        -- partial set switches BOTH existence gates off: screen_dialog's multi-candidate array
+        -- probe ({WL_TextPlateCtn, UIChoice_List} — each window class declares exactly one of
+        -- them, by design) would then hand the ABSENT name to a raw fetch on every dialogue
+        -- tick, which is precisely the uncatchable abort Core.array_of's gate was added for.
+        -- So the discriminator is the ROOT of the hierarchy: a walk whose LAST struct is
+        -- `Object` reached the top and is COMPLETE; a walk that runs out of super anywhere else
+        -- truncated, and stays partial (fails open) exactly as the partial-set fix intends.
+        if sup == nil or not Core.valid(sup) then
+            local sn
+            pcall(function() sn = s:GetFName():ToString() end)
+            if sn == ROOT_STRUCT then
+                complete = true
+            else
+                why = "b: no usable super below the root (last: " .. tostring(sn) .. ")"
+            end
+            break
+        end
         s, depth = sup, depth + 1
     end
+    if not complete and why == nil then why = "c: SUPER_MAX depth cap" end
+    return set, count, why, depth
+end
+
+local function log_partial(cls, depth, why)
+    local cn = "?"
+    pcall(function() cn = cls:GetFName():ToString() end)
+    if partial_logged[cn] then return end
+    partial_logged[cn] = true
+    print(string.format(
+        "[KakarotAccess] partial property set: %s (depth %d, stopped at %s) - "
+        .. "absent members FAIL OPEN until it is re-derived\n", cn, depth, why))
+end
+
+local function prop_set(o)
+    if not REFLECTION_GATES then return nil end
+    local cls
+    if not pcall(function() cls = o:GetClass() end) or cls == nil then return nil end
+    local key = math.tointeger(Mem.raw_addr(cls) or 0)
+    if key == nil or key == 0 then return nil end
+    local cached = prop_sets[key]
+    if cached ~= nil then
+        if cached == false then return nil end
+        if not prop_partial[key] then return cached, key, false end
+        -- A partial set is RETRYABLE: it may be cached, but it must never stand as the last
+        -- word for the whole session. The retry draws from the SAME per-tick budget as a
+        -- first-time derivation (PROP_SETS_PER_TICK, unchanged) so it can neither cluster nor
+        -- starve a class being seen for the first time, and it is additionally throttled by
+        -- wall time and capped by count (see PARTIAL_RETRY_S / PARTIAL_RETRIES).
+        local t = os.clock()
+        if prop_budget <= 0 or t < (prop_retry[key] or 0)
+            or (prop_tries[key] or 0) >= PARTIAL_RETRIES then
+            return cached, key, true
+        end
+        prop_budget = prop_budget - 1
+        prop_tries[key] = (prop_tries[key] or 0) + 1
+        prop_retry[key] = t + PARTIAL_RETRY_S
+        local set, count, why, depth = walk_props(cls)
+        if why then
+            -- Still partial: UNION with what we already knew. Two truncated walks can stop at
+            -- different levels, and a name only ever enters a set because a walk SAW it
+            -- declared, so the union is monotone knowledge. A COMPLETE walk is taken verbatim
+            -- instead (below): merging into it could keep a name the class does not declare and
+            -- turn a real authority back into a guess.
+            for n, ty in pairs(cached) do
+                if set[n] == nil then set[n] = ty count = count + 1 end
+            end
+            if count == 0 then return cached, key, true end
+            prop_sets[key] = set
+            return set, key, true
+        end
+        if count == 0 then return cached, key, true end
+        prop_sets[key] = set
+        prop_partial[key] = nil
+        local cn = "?"
+        pcall(function() cn = cls:GetFName():ToString() end)
+        print(string.format("[KakarotAccess] property set completed on retry: %s (depth %d)\n",
+            cn, depth))
+        return set, key, false
+    end
+    if prop_budget <= 0 then return nil end     -- not this tick: gate stays open
+    prop_budget = prop_budget - 1
+    local set, count, why, depth = walk_props(cls)
     if count == 0 then
         prop_sets[key] = false     -- introspection told us nothing: never gate on it
         return nil
     end
     prop_sets[key] = set
-    return set, key
+    if why then
+        -- A guard that quietly changes its mind must name itself in the log (the standing
+        -- rule): from here the two gates below stop refusing unknown names on this class, and
+        -- nothing else would say so.
+        prop_partial[key] = true
+        prop_retry[key] = os.clock() + PARTIAL_RETRY_S
+        log_partial(cls, depth, why)
+        return set, key, true
+    end
+    return set, key, false
 end
 
 -- `strict` (2026-07-28): refuse the fetch when the property set is UNAVAILABLE, instead of
@@ -290,10 +417,23 @@ end
 -- one tick of silence per newly-seen class, self-healing the moment the set is built. The one
 -- unbounded case — `prop_sets[key] = false`, set permanently when a class enumerates to nothing —
 -- is logged, because that would mean permanent silence and we want it to name itself.
+--
+-- STRICT vs a PARTIAL set (decided 2026-07-29, with the partial-set fix): strict still fails
+-- CLOSED — an absent name on a partial set is SKIPPED, not fetched. Two reasons.
+-- (1) The contracts point in opposite directions. The normal gate serves a caller that has
+--     positive reason to believe the member exists, so "don't know" costs one ungated fetch;
+--     strict serves a probe whose candidates are EXPECTED to be absent, so "don't know" is a
+--     licence to fetch a name we positively expect not to exist — the uncatchable abort, which
+--     is the exact thing `strict` was added for.
+-- (2) It is not a regression: before the partial fix a truncated set was treated as complete,
+--     so strict skipped those names anyway. What is NEW is that the set is now retryable, so a
+--     candidate hidden by a truncated walk gets a second chance instead of being lost for the
+--     session. Failing closed here stays BOUNDED (a probe reads nothing for a few seconds and
+--     self-heals); failing open would be unbounded and fatal.
 local strict_warned = {}
 function Core.member(o, name, strict)
     if not Core.valid(o) then return nil end
-    local set, key = prop_set(o)
+    local set, key, partial = prop_set(o)
     if strict and not set and not custom_props[name] then
         local cls
         pcall(function() cls = o:GetClass():GetFName():ToString() end)
@@ -306,15 +446,19 @@ function Core.member(o, name, strict)
         end
         return nil
     end
-    if set and not set[name] and not custom_props[name] then
+    -- `not partial or strict`: a name missing from a PARTIAL set proves nothing (the walk never
+    -- reached the native bases), so the normal gate falls open to the raw fetch exactly as it
+    -- did before any set existed; the strict probe keeps refusing, for the reasons above.
+    if set and not set[name] and not custom_props[name] and (strict or not partial) then
         local mark = tostring(key) .. ":" .. tostring(name)
         if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
             blocked_seen[mark] = true
             blocked_logged = blocked_logged + 1
             local cn = "?"
             pcall(function() cn = o:GetClass():GetFName():ToString() end)
-            print(string.format("[KakarotAccess] member gate: %s has no '%s' (not fetched)\n",
-                cn, tostring(name)))
+            print(string.format("[KakarotAccess] member gate: %s has no '%s' (not fetched%s)\n",
+                cn, tostring(name),
+                partial and ", partial set: strict candidate skipped" or ""))
         end
         return nil
     end
@@ -354,6 +498,54 @@ function Core.member(o, name, strict)
         elseif pt == "ArrayProperty" or pt == "StructProperty" then
             if not Core.valid_ref(v) then return nil end
         end
+    end
+    return v
+end
+
+-- Guarded hop through a STRUCT handle: `Core.struct_member(h, "ResourceObject")` for what the
+-- call sites still write raw as `o.Brush.ResourceObject`, `s.LayoutData.Offsets`,
+-- `o.ColorAndOpacity.A`, `o.RenderTransform.Translation`.
+--
+-- Why it cannot just be Core.member (2026-07-29): Core.member starts with Core.valid, which
+-- calls GetAddress — legal only on the UObject family. On a struct handle UE4SS raises
+-- "Call to RemoteObject:GetAddress on polymorphic type is not allowed", and that error PIERCES
+-- pcall (see Core.valid_ref), killing the caller mid-function while every enclosing pcall
+-- reports success. So the validity model here is `IsValid` and nothing else — a bare null check
+-- on these handles, which is cheap and safe.
+--
+-- WHAT THIS DOES NOT REMOVE, said plainly: there is NO existence gate here and there cannot be
+-- one. A struct handle has no UClass to enumerate — ForEachProperty walks UStructs reached from
+-- an object's class, and this helper is handed the struct VALUE — so `h[name]` on a name the
+-- struct does not declare is still whatever UE4SS does with it. What it DOES remove is the
+-- other half of the risk, which is the half that actually bites: a dead/NULL struct handle, and
+-- an ungated raw fetch sitting outside any pcall because `a.B.C` evaluates `a.B` at the CALL
+-- SITE. Keep passing only member names verified against the CXX header dump.
+--
+-- Returns nil when the handle is dead or the fetch raised — the same nil the failed pcall at
+-- each of these call sites already produced. The RESULT is never validated: it is usually a
+-- float or another struct, and asking a value for IsValid resolves against the FName
+-- constructor and raises through pcall (see Core.name_str).
+function Core.struct_member(h, name)
+    if not Core.valid_ref(h) then return nil end
+    local v
+    if not pcall(function() v = h[name] end) then return nil end
+    return v
+end
+
+-- One gated UObject hop followed by struct hops: `Core.member_path(w, "RenderTransform",
+-- "Translation", "X")` is `w.RenderTransform.Translation.X` with every hop guarded and every
+-- intermediate nil-checked (struct_member answers nil for a nil handle, so the chain simply
+-- collapses to nil).
+--
+-- CONTRACT, and it is the whole reason this is not a general path walker: `o` is a UObject and
+-- gets the full existence gate; EVERY name after the first must be a STRUCT member, because
+-- hops 2..n go through Core.struct_member, which has no existence gate. Do not use it to walk
+-- object-to-object chains — those are `Core.member` per hop, each with its own nil check.
+function Core.member_path(o, name, ...)
+    local v = Core.member(o, name)
+    for i = 1, select("#", ...) do
+        if v == nil then return nil end
+        v = Core.struct_member(v, (select(i, ...)))
     end
     return v
 end
@@ -441,9 +633,13 @@ function Core.text_of(node)
     if not Core.valid(node) then return nil end
     local m = Core.member(node, "mainTxt")
     if not Core.valid(m) then return nil end
-    local ok, s = pcall(function() return m.Text:ToString() end)
-    if ok and s and s ~= "" then return s end
-    return nil
+    -- `m.Text` was the last raw member fetch on this path (hardened 2026-07-29). It is called
+    -- from dozens of adapters and from the pool walks several times per tick, so it stays a
+    -- plain gated fetch plus a conversion: no scan, no extra walk, one more property-set lookup
+    -- (already cached for this class by the fetch above). Text is an FText — a VALUE — so it
+    -- goes to Core.name_str, which converts and lets the conversion be the test rather than
+    -- asking a value for IsValid (that raise pierces pcall).
+    return Core.name_str(Core.member(m, "Text"))
 end
 
 -- Robust text read: the plain mainTxt (Core.text_of), else the reflected GetText() on the
@@ -483,7 +679,7 @@ end
 -- open like every other guard here: an unknown class or an unenumerated member proceeds as before.
 function Core.array_of(owner, name)
     if not Core.valid(owner) then return nil, nil end
-    local set, key = prop_set(owner)
+    local set, key, partial = prop_set(owner)
     -- EXISTENCE gate, the same one Core.member applies (added 2026-07-27; it was missing here).
     -- Fetching a member the owner's class does not declare is one of this game's UNCATCHABLE
     -- aborts: UE4SS raises it below the Lua boundary, so the `pcall` around `owner[name]` below
@@ -497,7 +693,12 @@ function Core.array_of(owner, name)
     -- screen at once with nothing in the log. Blocks only on positive evidence of absence.
     -- custom_props is consulted because `RegisterCustomProperty` members live in UE4SS's own map
     -- and are INVISIBLE to ForEachProperty, so they must never be rejected here.
-    if set and not set[name] and not custom_props[name] then
+    -- `not partial` for the same reason (2026-07-29): a PARTIAL set stopped short of the native
+    -- bases, so absence from it is "don't know", not evidence — and this exact gate, standing on
+    -- a truncated Start_Skilltree_C set, refused a member the mod had read three times minutes
+    -- earlier. A partial set still carries a trustworthy TYPE for the names it DID find, so the
+    -- fixed-array check just below keeps working normally.
+    if set and not set[name] and not custom_props[name] and not partial then
         local mark = tostring(key) .. ":arr:" .. tostring(name)
         if not blocked_seen[mark] and blocked_logged < BLOCKED_LOG_MAX then
             blocked_seen[mark] = true
@@ -1227,6 +1428,10 @@ Transition.on_begin("ui_core", function()
     -- inherit its member list, which would make the gate reject real members. Cheap to drop
     -- (one enumeration per class on first use) and it removes the whole staleness question.
     prop_sets, blocked_seen = {}, {}
+    -- Everything keyed off those sets goes with them: the partial marks and their retry
+    -- budget/backoff (same address-reuse argument), and the one-line-per-class log memo, so a
+    -- class that is still truncated after the load says so again instead of going silent.
+    prop_partial, prop_retry, prop_tries, partial_logged = {}, {}, {}, {}
     -- probe_info / gi_prefix survive on purpose: GameInstance-child menus persist across
     -- maps, so their recorded paths let the probe rebuild the caches without scans right
     -- after a load. Per-level classes just miss and re-record on their next sighting.
@@ -1404,11 +1609,15 @@ end
 -- UNCATCHABLE abort on this game, so GetPosition() is only ever called on a CanvasPanelSlot.
 local function slot_of(w)
     if not Core.valid(w) then return nil, nil end
-    local s, cn
-    pcall(function()
-        s = w.Slot
-        if s and s:IsValid() then cn = s:GetClass():GetFName():ToString() end
-    end)
+    -- `Slot` is an ObjectProperty (UPanelSlot*), so it goes through Core.member: the existence
+    -- gate first (a raw fetch of a member the class does not declare is the uncatchable abort,
+    -- and this runs on every widget slot_pos walks), then Core.member's own result check, which
+    -- is the Core.valid this used to spell as `s:IsValid()` — the weaker test that cannot see a
+    -- handle wrapping NULL. Same return contract: (slot, class name) or (nil, nil).
+    local s = Core.member(w, "Slot")
+    if not Core.valid(s) then return nil, nil end
+    local cn
+    pcall(function() cn = s:GetClass():GetFName():ToString() end)
     if not cn then return nil, nil end
     return s, cn
 end
@@ -1427,12 +1636,14 @@ local function widget_axis(w, axis)
             if p then v = p[axis] end
         end)
         if type(v) == "number" and v ~= 0 then return v end
-        v = nil
-        pcall(function() v = s.LayoutData.Offsets[LAYOUT_EDGE[axis]] end)
+        -- `s.LayoutData.Offsets[edge]`: one gated UObject hop (LayoutData, a StructProperty on
+        -- the slot) then two struct hops. Written raw until 2026-07-29, i.e. `s.LayoutData` was
+        -- evaluated at the CALL SITE, outside the pcall that was supposed to be covering it.
+        v = Core.member_path(s, "LayoutData", "Offsets", LAYOUT_EDGE[axis])
         if type(v) == "number" and v ~= 0 then return v end
     end
-    local rt
-    pcall(function() rt = w.RenderTransform.Translation[axis] end)
+    -- Same shape: RenderTransform (StructProperty on UWidget) → Translation (FVector2D) → axis.
+    local rt = Core.member_path(w, "RenderTransform", "Translation", axis)
     if type(rt) == "number" and rt ~= 0 then return rt end
     return nil
 end

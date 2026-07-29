@@ -60,7 +60,7 @@ end
 -- count (e.g. "3/3") from the previous tutorial, so we keep it only when its page X matches the
 -- native current-page index (0-based) + 1. nil when stale or a 1-page tutorial.
 local function page_line(w, pidx)
-    local s = node(w.TextBox_Page)
+    local s = node(Core.member(w, "TextBox_Page"))
     if not s then return nil end
     if not pidx then return s end
     local x = tonumber(s:match("^(%d+)"))
@@ -73,24 +73,31 @@ end
 -- pidx = native current-page index (0-based) used to drop a stale page count.
 local function read_window(w, pidx)
     if not Core.valid(w) then return nil end
-    local controls = Core.on_screen(w.Canvas_KeyTips)
+    local controls = Core.on_screen(Core.member(w, "Canvas_KeyTips"))
     local body = nil
     if not controls then
         for _, L in ipairs(LAYOUTS) do
-            if Core.on_screen(w[L.canvas]) then body = node(w[L.box]); break end
+            if Core.on_screen(Core.member(w, L.canvas)) then body = node(Core.member(w, L.box)); break end
         end
     end
 
     local parts = {}
     local function add(s) if s and s ~= "" then parts[#parts + 1] = s end end
-    add(node(w.TextBox_Title)); add(node(w.TextBox_SubTitle)); add(page_line(w, pidx))
+    add(node(Core.member(w, "TextBox_Title"))); add(node(Core.member(w, "TextBox_SubTitle"))); add(page_line(w, pidx))
 
     if controls then
-        -- Controls-reference layout: read the command rows as "name: button".
+        -- Controls-reference layout: read the command rows as "name: button". NOT strict
+        -- (2026-07-29 review): the 12 slots are BindWidget properties DECLARED on the window
+        -- class — what varies per page is whether the game fills them, not whether the class
+        -- has them — so this is the "one name the caller has positive reason to believe
+        -- exists" case, which fails OPEN. Strict here would have skipped every row on any tick
+        -- the shared per-tick property-set budget was spent, and permanently if the class ever
+        -- introspected to nothing: the controls page would read its title and nothing else,
+        -- with one log line and no error.
         for _, it in ipairs(LIST_ITEMS) do
-            local item = w[it]
+            local item = Core.member(w, it)
             if Core.valid(item) then
-                local name, btn = node(item.Txt_Detail), node(item.Txt_Btn)
+                local name, btn = node(Core.member(item, "Txt_Detail")), node(Core.member(item, "Txt_Btn"))
                 if name and btn then add(name .. ": " .. btn)
                 elseif name then add(name) end
             end
@@ -112,7 +119,14 @@ function Tips.is_active()
     local pidx = Mem.i32(tips, OFF.tips.pageIndex)
     local wn = WINDOWS[(fw or 0) + 1]
     if wn then
-        local w = tips[wn]
+        -- NOT strict (2026-07-29 review). This looks like the multi-candidate pattern and is
+        -- not: `wn` is CHOSEN by the native front-window index, and BOTH windows are declared
+        -- on Tips_C and BOTH stay loaded (file header) — the name is expected to be PRESENT,
+        -- not absent, so the fetch fails open like any other single believed-present member.
+        -- Strict would have made is_active return false whenever the shared property-set budget
+        -- was spent that tick, and forever if Tips_C ever introspected to nothing — a silent,
+        -- total loss of the tutorial/loading-screen reader.
+        local w = Core.member(tips, wn)
         if Core.on_screen(w) then current = read_window(w, pidx) end
     end
     return current ~= nil

@@ -63,14 +63,15 @@ local function trace(line)
     end
 end
 
+-- Hardened 2026-07-29: `host[member]` was a raw, ungated fetch, and its caller (card_text
+-- below) tries two candidate names per field ("NameTxt" then "NameTxt_Large") — a
+-- multi-candidate probe, whose contract per CLAUDE.md §8 is the STRICT gate: most candidates
+-- are expected NOT to exist, so failing open would be a licence to fetch a name we positively
+-- expect to be absent (the uncatchable abort). Core.member(..., true) is exactly that gate.
 local function node_text(host, member)
-    local t
-    pcall(function()
-        local node = host[member]
-        if Core.valid(node) and Core.is_visible(node) then
-            t = A.markup_to_speech(Core.read_text(node))
-        end
-    end)
+    local node = Core.member(host, member, true)
+    if not (Core.valid(node) and Core.is_visible(node)) then return nil end
+    local t = A.markup_to_speech(Core.read_text(node))
     return (t and t ~= "") and t or nil
 end
 
@@ -90,8 +91,10 @@ function Card.is_active()
         trace("hidden")
         return false
     end
-    local core
-    pcall(function() core = ctn.InfoCoreCtn end)
+    -- Hardened 2026-07-29: `ctn.InfoCoreCtn` was a raw fetch protected only by the wrapping
+    -- pcall, which does not catch an uncatchable abort (CLAUDE.md §8). ctn is already
+    -- validated above (Core.valid(ctn) at entry to this function).
+    local core = Core.member(ctn, "InfoCoreCtn")
     if not Core.valid(core) then
         trace("shown core=nil")
         return false

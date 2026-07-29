@@ -31,7 +31,7 @@ function Memory.is_active()
     tick = tick + 1
     host = Core.cached_live("Field_Memory_C", tick)
     if not Core.on_screen(host) then msg = nil return false end
-    msg = read(host.Txt_Msg)
+    msg = read(Core.member(host, "Txt_Msg"))
     return msg ~= nil
 end
 
@@ -41,7 +41,7 @@ function Memory.update()
     -- Title = screen name (spoken once on entry); narration = the item (re-announced on
     -- each page turn, when Txt_Msg changes).
     local title
-    pcall(function() title = read(host.Txt_Title) end)
+    pcall(function() title = read(Core.member(host, "Txt_Title")) end)
     ann:focus(title, nil, msg, nil, nil)
 end
 

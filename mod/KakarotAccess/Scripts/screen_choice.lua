@@ -47,8 +47,9 @@ end
 -- A choice row's label (native TextBox_Choice or blueprint Txt_Choice) and whether it's
 -- the hovered/selected one (native HoverImage or blueprint Dmy_Choice_Hover visible).
 local function row_label(c)
-    local label = node_speech(Core.member(c, "TextBox_Choice"))
-    if not label then label = node_speech(Core.member(c, "Txt_Choice")) end
+    -- Native vs blueprint name for the same field — multi-candidate probe, strict gate.
+    local label = node_speech(Core.member(c, "TextBox_Choice", true))
+    if not label then label = node_speech(Core.member(c, "Txt_Choice", true)) end
     return label
 end
 local function row_hover(c)
@@ -62,12 +63,14 @@ local function row_hover(c)
     -- variant's field (HoverImage vs Dmy_Choice_Hover) is a null UObject on this row's class,
     -- and `.ColorAndOpacity` on it derefs null+0x10 through the pcall (the 2026-07-24 crash
     -- class). ColorAndOpacity is a struct on a VALID widget, so it's safe once the child is.
+    -- Core.member_path is exactly this shape: one gated UObject hop (HoverImage/Dmy_Choice_Hover
+    -- already fetched via Core.member above) then a struct hop (ColorAndOpacity -> A).
     local a
     local hi = Core.member(c, "HoverImage")
-    if Core.valid(hi) then pcall(function() a = hi.ColorAndOpacity.A end) end
+    if Core.valid(hi) then a = Core.member_path(hi, "ColorAndOpacity", "A") end
     if a == nil then
         local dh = Core.member(c, "Dmy_Choice_Hover")
-        if Core.valid(dh) then pcall(function() a = dh.ColorAndOpacity.A end) end
+        if Core.valid(dh) then a = Core.member_path(dh, "ColorAndOpacity", "A") end
     end
     if type(a) == "number" then return a >= 0.5 end
     -- Fallback for an unknown choice-row variant with no HoverImage: visibility, then the
@@ -76,7 +79,13 @@ local function row_hover(c)
         or Core.is_visible(Core.member(c, "Dmy_Choice_Hover"))
     if hov then return true end
     pcall(function()
-        local a = Core.member(c, "Anim_Loop") or Core.member(c, "Loop")
+        -- STRICT (2026-07-29): native `Anim_Loop` and blueprint `Loop` are VARIANT names, so one
+        -- of the two is absent by construction on any given row class — a multi-candidate probe,
+        -- which must never fail open (a fail-open gate fetches the name we positively expect to
+        -- be absent, which is the uncatchable abort). Note the HoverImage / Dmy_Choice_Hover pair
+        -- above is deliberately NOT strict: per the dated comment there, both are declared on the
+        -- row class and the unused one merely holds null, so absence is not what separates them.
+        local a = Core.member(c, "Anim_Loop", true) or Core.member(c, "Loop", true)
         hov = Core.valid(a) and c:IsAnimationPlaying(a)
     end)
     return hov == true
@@ -131,7 +140,8 @@ end
 -- else the sub-story accept window's quest title + description.
 local function context(win)
     if Core.valid(win) then
-        local t = node_speech(Core.member(win, "TextBox_Message")) or node_speech(Core.member(win, "Txt_Choice"))
+        -- TextBox_Message / Txt_Choice fallback — multi-candidate probe, strict gate.
+        local t = node_speech(Core.member(win, "TextBox_Message", true)) or node_speech(Core.member(win, "Txt_Choice", true))
         if t then return t end
     end
     local qs = Core.cached_live("Quest_Sub_C", tick)
@@ -162,7 +172,9 @@ end
 local function anim_sig(c)
     local loop = "?"
     pcall(function()
-        local a = Core.member(c, "Anim_Loop") or Core.member(c, "Loop")
+        -- Strict for the same reason as in `row_selected` above: variant names, absence
+        -- expected. A diagnostic that can abort destroys the evidence it exists to collect.
+        local a = Core.member(c, "Anim_Loop", true) or Core.member(c, "Loop", true)
         if Core.valid(a) then loop = tostring(c:IsAnimationPlaying(a)) else loop = "noanim" end
     end)
     return "loop=" .. loop

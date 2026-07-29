@@ -48,7 +48,7 @@ function Tut.reset() ann:reset() end
 
 function Tut.update()
     if not cached_name then return end
-    local tab = Core.read_text(host.TextBox_Category)
+    local tab = Core.read_text(Core.member(host, "TextBox_Category"))
     -- screen name on entry; tab (category) on tab change; the focused topic as it moves.
     ann:focus(I18n.startlist(12), tab, cached_name, nil, nil)
 end

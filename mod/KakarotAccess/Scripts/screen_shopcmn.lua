@@ -64,8 +64,7 @@ end
 local function selected_row()
     for _, row in ipairs(rows or {}) do
         if Core.valid(row) and Core.on_screen(row) and node_text(Core.member(row, "Txt_List")) then
-            local ok, sel = pcall(function() return Core.is_visible(row.Ins_Cursor_Fad) end)
-            if ok and sel then return row end
+            if Core.is_visible(Core.member(row, "Ins_Cursor_Fad")) then return row end
         end
     end
     return nil
@@ -78,10 +77,8 @@ function ShopCmn.is_active()
     if not rows or #rows == 0 then collect_rows() end
     local row = selected_row()
     if not row then state = nil return false end
-    local sold
-    pcall(function()
-        if Core.is_visible(row.Txt_Sold_Out) then sold = node_text(row.Txt_Sold_Out) end
-    end)
+    local sold_node = Core.member(row, "Txt_Sold_Out")
+    local sold = Core.is_visible(sold_node) and node_text(sold_node) or nil
     local qty = node_text(Core.member(row, "Txt_Num"))
     local have = node_text(Core.member(row, "Txt_Num_Have"))
     state = {
@@ -90,7 +87,7 @@ function ShopCmn.is_active()
         title = node_text(Core.member(host, "WL_Txt_Title")),
         name = node_text(Core.member(row, "Txt_List")),
         value = Core.phrase(
-            node_text(row.Txt_Num_Price),
+            node_text(Core.member(row, "Txt_Num_Price")),
             qty and string.format(I18n.t("shop_buy_fmt"), qty) or nil,
             have and string.format(I18n.t("shop_have_fmt"), have) or nil,
             sold),

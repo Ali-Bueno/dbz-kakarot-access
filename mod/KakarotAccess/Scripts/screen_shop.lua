@@ -24,7 +24,7 @@ function Shop.is_active()
     tick = tick + 1
     host = Core.cached_live("Shop_Top_C", tick)   -- cheap: cached ref, no per-tick scan
     if not Core.on_screen(host) then return false end
-    list = host.WidgetSkillList
+    list = Core.member(host, "WidgetSkillList")
     return A.list_select_index(list) ~= nil
 end
 

@@ -40,7 +40,7 @@ local function slot_text(s)
     pcall(function()
         cap = A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Caption")))
         name = A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Name")))
-            or A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Name_Foreign_Lang00")))
+            or A.markup_to_speech(Core.read_text(Core.member(s, "Txt_Name_Foreign_Lang00", true)))
     end)
     local t = Core.phrase(cap, name)
     return t ~= "" and t or nil
@@ -54,7 +54,7 @@ local function current_texts()
         if Core.on_screen(tp) then
             for _, m in ipairs(SLOTS) do
                 local t
-                pcall(function() t = slot_text(tp[m]) end)
+                pcall(function() t = slot_text(Core.member(tp, m)) end)
                 if t then out[#out + 1] = t end
             end
         end

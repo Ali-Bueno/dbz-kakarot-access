@@ -611,7 +611,12 @@ local function best_candidate(px, py, pz, want_pri)
                 for i = 1, n do
                     local icon = arr[i]
                     if Core.valid(icon) then
-                        local ta = icon.TargetActor
+                        -- Gated hop (was a raw `icon.TargetActor`): icon is a pooled minimap
+                        -- widget the engine can recycle, and a naked property __index on one
+                        -- is the same uncatchable-abort shape icon_in_use's comment warns
+                        -- about (CLAUDE.md §8) — Core.valid(icon) proves the handle is alive
+                        -- right now, not that the fetch itself is safe.
+                        local ta = Core.member(icon, "TargetActor")
                         if Core.valid(ta) then
                             local pri = quest_pri(ta)
                             if pri then consider(ta, pri) end
@@ -2464,8 +2469,12 @@ function Nav.list_targets()
         local icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
         for _, icon in pairs(icons) do
             if Core.valid(icon) and icon_in_use(icon) then
-                local ok, ta = pcall(function() return icon.TargetActor end)
-                if ok and Core.valid(ta) then
+                -- Gated hop (was `pcall(function() return icon.TargetActor end)`): the pcall
+                -- wrapper does NOT make a naked property fetch on a pooled widget safe (an
+                -- undeclared/stale-handle abort pierces pcall, CLAUDE.md §8) — Core.member is
+                -- the actual guard.
+                local ta = Core.member(icon, "TargetActor")
+                if Core.valid(ta) then
                     -- Classify from the navi WIDGET's EMapNaviIcon switcher (the game's
                     -- real main/sub signal); fall back to the target's EMapIcon type
                     -- (bShowMapIcon-agnostic), then the MAINQUEST default only if both
@@ -2484,7 +2493,9 @@ function Nav.list_targets()
             for i = 1, n do
                 local icon = arr[i]
                 if Core.valid(icon) then
-                    local ta = icon.TargetActor
+                    -- Gated hop (was a raw `icon.TargetActor`) — same pooled-widget hazard
+                    -- as best_candidate's mapicon fallback above.
+                    local ta = Core.member(icon, "TargetActor")
                     if Core.valid(ta) then
                         add_icon(ta, (icon_info(ta)), "mapicon")
                     end
@@ -2603,8 +2614,12 @@ function Nav.list_targets()
         -- error that killed this whole loop (seen live 2026-07-04 — the R3 menu went
         -- dead for the session; same lesson as CharacterName in npc_name above).
         local function visible_actor(a)
-            local hidden = false
-            pcall(function() hidden = a.bHidden end)
+            -- Gated hop (was `pcall(function() hidden = a.bHidden end)`): `a` comes straight
+            -- out of the FindAllOf over the actor classes just below (an on-demand scan -
+            -- NOT per tick), so it is fresh, but a raw fetch still bypasses the gate Core.member
+            -- provides for free — route it through the same helper as every other member
+            -- read in this scan instead of trusting the pcall wrapper alone.
+            local hidden = Core.member(a, "bHidden")
             return not (hidden == true or hidden == 1)
         end
         -- Collected filter: point_taken (module level). InteractState is declared on

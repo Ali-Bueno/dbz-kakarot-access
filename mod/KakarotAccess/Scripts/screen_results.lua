@@ -71,8 +71,9 @@ local function debug_dump_detail(d, key, label)
                 pcall(function() vis = tostring(Core.is_visible(img)) end)
                 pcall(function() full = img:GetFullName() end)
                 local params = ""
+                -- Same Brush.ResourceObject struct hop as texture_token, hardened the same way.
+                local ro = Core.member_path(img, "Brush", "ResourceObject")
                 pcall(function()
-                    local ro = img.Brush.ResourceObject
                     if Core.nonnull(ro) then                  -- never ro:IsValid(), see Core.nonnull
                         tex = ro:GetFullName()
                         -- The digit is presumably a material parameter on the MID
@@ -124,11 +125,13 @@ local RANKS = { S = true, A = true, B = true, C = true, D = true, Z = true, SS =
 
 local function texture_token(img)
     if not Core.valid(img) or not Core.is_visible(img) then return nil end
+    -- Hardened 2026-07-29: `img.Brush.ResourceObject` was a raw two-hop chain (Brush is a
+    -- StructProperty, ResourceObject a member of that struct) — the pcall wrapping it does
+    -- not catch an uncatchable abort (CLAUDE.md §8). Core.member_path gates the first hop and
+    -- struct-hops the second; the result still goes through Core.nonnull, never IsValid.
+    local ro = Core.member_path(img, "Brush", "ResourceObject")
     local res
-    pcall(function()
-        local ro = img.Brush.ResourceObject
-        if Core.nonnull(ro) then res = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
-    end)
+    if Core.nonnull(ro) then pcall(function() res = ro:GetFullName() end) end
     return res and res:match("([%w_]+)%.[%w_]+$") or nil
 end
 
@@ -194,9 +197,10 @@ local function lines()
                 end
             end
         end
-        local tot = host.UIQuestMainClearRank
+        -- Hardened 2026-07-29: both were raw UObject member fetches outside any gate.
+        local tot = Core.member(host, "UIQuestMainClearRank")
         if Core.valid(tot) and Core.on_screen(tot) then
-            local r = rank_letter(tot.Image_Rank)
+            local r = rank_letter(Core.member(tot, "Image_Rank"))
             if r then
                 out[#out + 1] = { key = "total", text = I18n.t("results_total") .. ", " .. r }
             end

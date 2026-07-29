@@ -69,11 +69,14 @@ local RING_DEBUG = false       -- one line per ring close with the sid (2026-07-
 -- The UAT_UIStartTopList item at 0-based `idx` of a reflected TArray member of `top`, or nil.
 local function list_item(arr_name, idx)
     if not idx or idx < 0 then return nil end
+    -- Hardened 2026-07-29: `top[arr_name]` was a raw TArray fetch with no existence/type gate
+    -- and no bounds check against the array's real length (CLAUDE.md §8 — a fixed C array or
+    -- an out-of-range index is the uncatchable-abort class). Core.array_of gates both and
+    -- gives us the real length to bound `idx` against before indexing.
+    local arr, n = Core.array_of(top, arr_name)
+    if not arr or idx >= n then return nil end
     local item
-    pcall(function()
-        local arr = top[arr_name]          -- UE4SS Lua TArray is 1-based
-        if arr then item = arr[idx + 1] end
-    end)
+    if not pcall(function() item = arr[idx + 1] end) then return nil end   -- 1-based
     if Core.valid(item) then return item end
     return nil
 end

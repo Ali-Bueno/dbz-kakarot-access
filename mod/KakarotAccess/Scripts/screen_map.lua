@@ -100,12 +100,13 @@ end
 local CURS_DEBUG = false   -- cursor+icon positions confirmed readable (dump 2026-07-09)
 local curs_last, curs_next = nil, 0
 local function render_xy(o)
-    local x, y
-    pcall(function()
-        local t = o.RenderTransform.Translation
-        x, y = t.X, t.Y
-    end)
-    return x, y
+    -- Hardened 2026-07-29: `o.RenderTransform.Translation` was a raw two-hop chain — the
+    -- inner fetches are not protected by the surrounding pcall against an uncatchable abort
+    -- (CLAUDE.md §8). RenderTransform is a UWidget struct property (gated UObject hop via
+    -- Core.member), Translation/X/Y are struct-value hops (Core.struct_member).
+    local t = Core.member_path(o, "RenderTransform", "Translation")
+    if type(t) ~= "userdata" then return nil, nil end
+    return Core.struct_member(t, "X"), Core.struct_member(t, "Y")
 end
 local function curs_debug()
     if not CURS_DEBUG or tick < curs_next then return end
@@ -127,18 +128,37 @@ local function curs_debug()
             local nm = clean(Core.read_text(Core.member(ic, "Txt_Name")))
             local rx, ry = render_xy(ic)
             -- Icons render at 0,0 → their screen position lives in the canvas Slot offsets.
+            -- Hardened 2026-07-29: Slot is a gated UObject hop (Core.member); LayoutData/
+            -- Offsets/Left/Top are struct-value hops (Core.struct_member) — the raw chain
+            -- used to escape the wrapping pcall on an uncatchable abort (CLAUDE.md §8).
             local sl = "?"
-            pcall(function()
-                local off = ic.Slot.LayoutData.Offsets
-                sl = string.format("%.1f,%.1f", off.Left, off.Top)
-            end)
+            -- NOTE (2026-07-29 review): the hop into the SLOT is Core.member, not member_path.
+            -- member_path's contract is "one UObject hop, then STRUCT hops only", and a slot is
+            -- a UObject - so LayoutData through struct_member would be an UNGATED member fetch
+            -- on a class that may not declare it (a non-canvas slot), i.e. the uncatchable abort.
+            local slot = Core.member(ic, "Slot")
+            local off = Core.struct_member(Core.member(slot, "LayoutData"), "Offsets")
+            if off then
+                local l, t2 = Core.struct_member(off, "Left"), Core.struct_member(off, "Top")
+                if type(l) == "number" and type(t2) == "number" then
+                    sl = string.format("%.1f,%.1f", l, t2)
+                end
+            end
             -- Absolute geometry as a second candidate (works even off a canvas panel).
+            -- `g` is a struct returned fresh from a UFUNCTION call (no gate needed for the
+            -- call itself), but AbsolutePosition/X/Y are still struct-value hops.
             local ab = "?"
-            pcall(function()
-                local g = ic:GetCachedGeometry()
-                local p = g.AbsolutePosition or g:GetAbsolutePosition()
-                ab = string.format("%.1f,%.1f", p.X, p.Y)
-            end)
+            local ok, g = pcall(function() return ic:GetCachedGeometry() end)
+            if ok and g then
+                local p = Core.struct_member(g, "AbsolutePosition")
+                if not p then pcall(function() p = g:GetAbsolutePosition() end) end
+                if p then
+                    local px, py = Core.struct_member(p, "X"), Core.struct_member(p, "Y")
+                    if type(px) == "number" and type(py) == "number" then
+                        ab = string.format("%.1f,%.1f", px, py)
+                    end
+                end
+            end
             lines[#lines + 1] = string.format("ICON %s render=%s,%s slot=%s abs=%s",
                 tostring(nm), tostring(rx), tostring(ry), sl, ab)
         end
@@ -536,15 +556,23 @@ end
 -- detail text (WL_MapDetailTxt.WL_Detail_Txt), which it fills for the focused icon. Silent
 -- when the cursor sits on no icon (FocusTarget nil), so sweeping open map area isn't spammy.
 local function area_poi(host)
-    local ft
-    pcall(function() ft = host.FocusTarget end)
-    if not (ft and Core.valid(ft)) then area_focus_key = nil; return end
+    -- Hardened 2026-07-29: both hops used to be raw (`host.FocusTarget`, `ft.Target`), each
+    -- wrapped only in its own pcall — which does not catch an uncatchable member-fetch abort
+    -- (CLAUDE.md §8). Both FocusTarget and Target are UObject members, so both go through
+    -- Core.member, which existence-gates them.
+    -- The explicit Core.valid on each RESULT stays (restored 2026-07-29 review): Core.member
+    -- checks its own result ONLY when the property set is available, and when it is not the
+    -- gate falls open and hands back whatever the raw fetch returned - for a NULL FocusTarget it
+    -- is an INVALID RemoteObject, which is not nil. Dropping the check meant (a) Nav.icon_noun
+    -- could be handed a dead handle, and (b) the documented "silent when the cursor sits on no
+    -- icon" behaviour inverted into announcing the stale detail text over empty map.
+    local ft = Core.member(host, "FocusTarget")
+    if not Core.valid(ft) then area_focus_key = nil; return end
     local key = Mem.addr(ft)
     if key and key == area_focus_key then return end   -- same focus -> already announced
     area_focus_key = key
-    local ta
-    pcall(function() ta = ft.Target end)
-    local noun = (ta and Core.valid(ta)) and Nav.icon_noun(ta) or nil
+    local ta = Core.member(ft, "Target")
+    local noun = Core.valid(ta) and Nav.icon_noun(ta) or nil
     -- the detail panel's text (the POI's own name/description), if the game is showing it.
     -- Both hops guarded: a chained `host.A.B` evaluates the inner fetch at the call
     -- site, outside every pcall (the uncatchable-AV class, CLAUDE.md §8).

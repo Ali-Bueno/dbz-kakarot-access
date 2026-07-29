@@ -57,9 +57,7 @@ local function row_selected(r)
 end
 
 local function row_label(r)
-    local t
-    pcall(function() t = clean(Core.read_text(r.Txt_List)) end)
-    return t
+    return clean(Core.read_text(Core.member(r, "Txt_List")))
 end
 
 -- Pick the on-screen Shop_Top_C that has visible ListBarCtn rows (the mode list is up).

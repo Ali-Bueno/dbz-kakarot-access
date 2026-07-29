@@ -494,6 +494,19 @@ spoken-key flip-flop suppression (survives `reset()`, cleared only on genuine cl
 for F1) in the Kakarot mod's `screen_cooking.lua`. Apply this check to EVERY new menu adapter whose
 host is pooled.
 
+**A reflection walk that TRUNCATES is indistinguishable from a complete one unless you check where
+it STOPPED — and a cached "the class has no X" derived from a truncated walk is a guard that fails
+CLOSED forever on shared substrate** (rule from the Kakarot skill-tree crash episode, 2026-07-29). A
+per-class property-name set built by walking `GetSuperStruct()` can stop early — the walk raises, hits
+a depth cap, or the enumeration itself raises partway — and a set that stopped at the Blueprint class
+without its native base looks exactly like a real one: same shape, same cache slot, same lifetime. A
+gate that trusts it refuses every inherited member forever, with one deduped log line and no error, on
+a member that reads fine before the truncated set gets cached. Mark the walk PARTIAL and let an absent
+name fail OPEN there, never closed. The natural-looking end condition, `GetSuperStruct() == nil`, is
+itself a trap: UE4SS answers an INVALID handle at the true root, not nil, so that test never fires and
+everything looks partial forever — use the ROOT CLASS NAME (`Object`) as the discriminator instead,
+matching every other super-walk in this codebase, which already terminates on `not IsValid`.
+
 ---
 
 ## 9. Speech, audio cues and state tracking

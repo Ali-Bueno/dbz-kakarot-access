@@ -89,8 +89,13 @@ local function texture_token(img)
     -- (the crash ledger's CLASS A — this reader has the widest radius in the mod: every
     -- keyhelp bar on every screen, and the ledger named it as the one to fix first if a
     -- 0x10 AV recurred. It did: the user's 2026-07-24 mid-combat crash).
+    -- Gated hop chain (was a raw `img.Brush.ResourceObject`): object -> struct -> struct,
+    -- exactly the shape Core.member_path exists for. ResourceObject can legitimately be
+    -- NULL (a device-indexed glyph) — Core.nonnull, NEVER ro:IsValid(), stays: IsValid on
+    -- that null handle derefs null+0x10 straight through pcall (the crash ledger's CLASS A,
+    -- see the function comment above).
     pcall(function()
-        local ro = img.Brush.ResourceObject
+        local ro = Core.member_path(img, "Brush", "ResourceObject")
         if Core.nonnull(ro) then res = ro:GetFullName() end
     end)
     return res and res:match("([%w_]+)%.[%w_]+$") or nil

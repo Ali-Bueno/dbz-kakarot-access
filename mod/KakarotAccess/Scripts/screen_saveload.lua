@@ -135,7 +135,9 @@ local function scan()
     local cbar, cpos, ccount = nil, nil, 0
     for i = 1, n do
         local bar = list[i]
-        if Core.valid(bar) and Core.is_visible(bar.Border_Cursor) then
+        -- Hardened 2026-07-29: `bar.Border_Cursor` was a raw, ungated UObject member fetch
+        -- (CLAUDE.md §8 — no pcall at all, let alone Core.member's existence gate).
+        if Core.valid(bar) and Core.is_visible(Core.member(bar, "Border_Cursor")) then
             cbar, cpos, ccount = bar, i, ccount + 1
         end
     end

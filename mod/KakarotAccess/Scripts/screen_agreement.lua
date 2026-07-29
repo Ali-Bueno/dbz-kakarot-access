@@ -53,11 +53,12 @@ end
 local function find_host()
     local gt = Core.cached_live("Gametitle_C", tick)
     if Core.valid(gt) then
-        local d
-        pcall(function()
-            local actor = gt.ActorTitle
-            if Core.valid(actor) then d = actor.AgreementDialog end
-        end)
+        -- Hardened 2026-07-29: `gt.ActorTitle` / `actor.AgreementDialog` were raw chained
+        -- UObject fetches, each protected only by the wrapping pcall — which does not catch
+        -- an uncatchable member-fetch abort (CLAUDE.md §8). Both are UObject hops, gated via
+        -- Core.member (existence gate + result-type validation).
+        local actor = Core.member(gt, "ActorTitle")
+        local d = Core.member(actor, "AgreementDialog")
         if Core.valid(d) then return d end
     end
     return Core.first_on_screen("AT_UIXcmnAgreement", tick)

@@ -79,17 +79,22 @@ local function subtitles_on()
     -- which is why both prior FindAllOf-based gates read 1 forever. The gi root is
     -- served by the screen directory (no scans); re-resolved every query so a
     -- save/load repoint is followed automatically. FAIL-OPEN as always.
+    -- Gated UObject hop (mgr -> savesys), then a gated hop + struct hop for
+    -- savesys.Option.EnableSubtitle (Option is a struct, FATSaveSystemOption — Core.member_path
+    -- covers exactly "one UObject hop, then struct hops"). The old code took both as naked
+    -- dot chains evaluated outside any pcall's protection (rule: fetching a member the class
+    -- doesn't declare is an uncatchable abort that pcall cannot catch).
     local savesys
     local mgr = Dir and Dir.peek("gi", "SaveManager")
     if Core.valid(mgr) then
-        pcall(function() savesys = mgr.SaveSystem end)
+        savesys = Core.member(mgr, "SaveSystem")
     end
     if not Core.valid(savesys) then
         sub_log("GameInstance.SaveManager.SaveSystem unreachable (fail-open)")
         return true
     end
-    local v
-    if not pcall(function() v = savesys.Option.EnableSubtitle end) then
+    local v = Core.member_path(savesys, "Option", "EnableSubtitle")
+    if v == nil then
         sub_log("EnableSubtitle unreadable (fail-open)")
         return true
     end
@@ -118,9 +123,13 @@ local function node_text(node)
     if t then return A.markup_to_speech(t) or t end
     local ok, s = pcall(function() return node:GetText():ToString() end)
     if ok and s and s ~= "" then return A.markup_to_speech(s) or s end
-    local rich = node.ExMainTxt
+    -- ExMainTxt may legitimately be absent (plain nodes don't carry the rich renderer), and
+    -- `.Text` is a UObject member fetch on `rich`, not a struct hop — both go through
+    -- Core.member; :ToString() stays a bare method call (no gate exists for methods).
+    local rich = Core.member(node, "ExMainTxt")
     if Core.valid(rich) then
-        local okr, sr = pcall(function() return rich.Text:ToString() end)
+        local textval = Core.member(rich, "Text")
+        local okr, sr = pcall(function() return textval:ToString() end)
         if okr and sr and sr ~= "" then return A.markup_to_speech(sr) end
     end
     return nil

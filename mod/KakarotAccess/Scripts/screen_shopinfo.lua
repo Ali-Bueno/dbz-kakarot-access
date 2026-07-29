@@ -39,8 +39,7 @@ local function selected_row()
         local row
         pcall(function() row = Core.member(host, "Xlist_Bar05_" .. string.format("%02d", i)) end)
         if Core.valid(row) and Core.on_screen(row) and node_text(Core.member(row, "Txt_List")) then
-            local ok, sel = pcall(function() return Core.is_visible(row.Ins_Cursor_Fad) end)
-            if ok and sel then return row end
+            if Core.is_visible(Core.member(row, "Ins_Cursor_Fad")) then return row end
         end
     end
     return nil
@@ -54,10 +53,8 @@ function ShopInfo.is_active()
     if not row then state = nil return false end
     local value = node_text(Core.member(row, "Txt_Num"))
     -- Sold-out marker only when its node is actually shown on this row.
-    local sold
-    pcall(function()
-        if Core.is_visible(row.Txt_Sold_Out) then sold = node_text(row.Txt_Sold_Out) end
-    end)
+    local sold_node = Core.member(row, "Txt_Sold_Out")
+    local sold = Core.is_visible(sold_node) and node_text(sold_node) or nil
     state = {
         title = node_text(Core.member(host, "Txt_Title")),
         name = node_text(Core.member(row, "Txt_List")),

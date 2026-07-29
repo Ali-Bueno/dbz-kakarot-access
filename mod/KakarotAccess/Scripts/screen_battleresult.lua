@@ -32,11 +32,12 @@ local RANKS = { S = true, A = true, B = true, C = true, D = true, Z = true, SS =
 
 local function texture_token(img)
     if not Core.valid(img) or not Core.is_visible(img) then return nil end
+    -- Hardened 2026-07-29: `img.Brush.ResourceObject` was a raw two-hop chain (same pattern
+    -- as screen_results/screen_map, CLAUDE.md §8). Core.member_path gates the first hop and
+    -- struct-hops the second; the result still goes through Core.nonnull, never IsValid.
+    local ro = Core.member_path(img, "Brush", "ResourceObject")
     local res
-    pcall(function()
-        local ro = img.Brush.ResourceObject
-        if Core.nonnull(ro) then res = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
-    end)
+    if Core.nonnull(ro) then pcall(function() res = ro:GetFullName() end) end
     return res and res:match("([%w_]+)%.[%w_]+$") or nil
 end
 

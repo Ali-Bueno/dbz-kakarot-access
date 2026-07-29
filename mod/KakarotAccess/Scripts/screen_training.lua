@@ -44,9 +44,7 @@ local EMPTY_SETTLE_TICKS = 4
 
 -- Read a text node hanging off the host by field name, guarded. nil if absent/empty.
 local function field_text(name)
-    local t
-    pcall(function() t = Core.read_text(host[name]) end)
-    return t
+    return Core.read_text(Core.member(host, name))
 end
 
 -- The list title ("Super Attack List"), read live from the game so it follows the

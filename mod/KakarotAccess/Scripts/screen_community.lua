@@ -89,9 +89,13 @@ end
 local function newest_playing(list)
     local hit, best_t
     for i, s in ipairs(list) do
-        if anim_playing(s, s.AnimLoop) then
+        -- AnimLoop fetched ONCE, before anim_playing() is called: passing `s.AnimLoop`
+        -- straight into the call would evaluate it at the call site, outside
+        -- anim_playing's own pcall (fact 4) — Core.member gates it here instead.
+        local anim = Core.member(s, "AnimLoop")
+        if anim and anim_playing(s, anim) then
             local t
-            pcall(function() t = s:GetAnimationCurrentTime(s.AnimLoop) end)
+            pcall(function() t = s:GetAnimationCurrentTime(anim) end)
             t = t or math.huge
             if not best_t or t < best_t then hit, best_t = i, t end
         end
@@ -107,15 +111,19 @@ end
 local function face_resource(emb)
     -- Guard ImageFace: `emb.ImageFace.Brush...` was a naked chain — an empty socket can
     -- have a null ImageFace child, and `.Brush` on it derefs null+0x10 through the pcall
-    -- (the 2026-07-24 crash class). (The ResourceObject read below stays: an emblem face is
-    -- always a real material, so it can't null-deref there — see the crash ledger.)
+    -- (the 2026-07-24 crash class). Brush/ResourceObject go through Core.member_path
+    -- (2026-07-29 contract): hop 1 is a UOBJECT member and gets the full existence gate,
+    -- hops 2..n are struct hops (IsValid-only, no GetAddress on the struct handle).
+    -- NOT two chained Core.struct_member calls: struct_member has NO existence gate by
+    -- design (see its header), so using it for the first hop leaves `imf.Brush` an
+    -- ungated fetch on a class we have not asked — the abort this rewrite exists to close.
     local imf = Core.member(emb, "ImageFace")
     if not Core.valid(imf) then return nil end
+    local ro = Core.member_path(imf, "Brush", "ResourceObject")
     local name
-    pcall(function()
-        local ro = imf.Brush.ResourceObject
-        if Core.nonnull(ro) then name = ro:GetFullName() end   -- never ro:IsValid(), see Core.nonnull
-    end)
+    if Core.nonnull(ro) then
+        pcall(function() name = ro:GetFullName() end)   -- never ro:IsValid(), see Core.nonnull
+    end
     return name
 end
 
@@ -153,15 +161,17 @@ local CHAR_TOKENS = {
 local function face_char(emb)
     local imf = Core.member(emb, "ImageFace")
     if not Core.valid(imf) then return nil end
-    local tok
-    local ro
-    pcall(function() ro = imf.Brush.ResourceObject end)
+    -- Brush (gated UObject hop) then ResourceObject (struct hop), same as face_resource.
+    local ro = Core.member_path(imf, "Brush", "ResourceObject")
     if not Core.nonnull(ro) then return nil end   -- array_of would ask IsValid: see Core.nonnull
     local tp, n = Core.array_of(ro, "TextureParameterValues")
     if not tp then return nil end
+    local tok
     pcall(function()
         for j = 1, n do
-            local tex = tp[j].ParameterValue
+            -- tp[j] is a struct element (FTextureParameterValue); ParameterValue is a
+            -- struct hop, not a UObject hop — Core.struct_member, never Core.member.
+            local tex = Core.struct_member(tp[j], "ParameterValue")
             if Core.valid(tex) then
                 tok = tex:GetFullName():match("/Charicon_%w+/%a-_(%a+)")
                 if tok then return end
@@ -179,8 +189,7 @@ end
 -- (GRID.cursorIndex) indexes the raw array.
 local function slots()
     local out, byai = {}, {}
-    local emblist
-    pcall(function() emblist = grid.EmbList end)
+    local emblist = Core.member(grid, "EmbList")
     local arr, n = Core.array_of(emblist, "EmbAry")
     if not arr then return out, byai end
     pcall(function()
@@ -198,16 +207,15 @@ end
 -- What a grid slot sounds like: character name (acquired), "not acquired" ("?"
 -- mask), labeled community level, the new marker, and the grid position.
 local function slot_label(s, idx, count)
-    local emb
-    pcall(function() emb = s.UIXCmnEmb end)
+    local emb = Core.member(s, "UIXCmnEmb")
     local face = Core.valid(emb) and face_resource(emb) or nil
     local acquired = face ~= nil and face:find("MaterialInstanceDynamic", 1, true) ~= nil
     local unacq = face ~= nil and not acquired
     local new = false
-    if Core.valid(emb) then new = Core.is_visible(emb.ImageNew) end
-    pcall(function() new = new or Core.is_visible(s.Icon_New) end)
+    if Core.valid(emb) then new = Core.is_visible(Core.member(emb, "ImageNew")) end
+    new = new or Core.is_visible(Core.member(s, "Icon_New"))
     local name = acquired and face_char(emb) or nil
-    local lv = acquired and read(s.Txt_Commu) or nil
+    local lv = acquired and read(Core.member(s, "Txt_Commu")) or nil
     return Core.phrase(
         name,
         unacq and I18n.t("not_acquired") or nil,
@@ -228,6 +236,17 @@ end
 -- visibility-filtered or the indices would misalign on partially-unlocked boards.
 local function board_panels(frame, key)
     -- Cached list must still be alive (a pooled board REBUILDS its panels per visit).
+    -- VALIDITY ONLY, deliberately (2026-07-29 review). An on_screen() term was added here
+    -- on the strength of the 2026-07-25 Options rule; that rule is about widgets that are
+    -- merely COLLAPSED and therefore stay IsValid forever, and it does not apply to these
+    -- panels — this board destroys and rebuilds them per visit, so validity IS the
+    -- staleness signal. Adding on_screen costs twice: board_update() runs this every tick,
+    -- so a socket 1 that is legitimately not rendered (locked/empty leader socket, the pan
+    -- and placing animations) turns a once-per-visit array walk into a per-tick rebuild —
+    -- the clustered-scan stutter ui_core warns about — and, worse, a rebuild that reads
+    -- transiently empty is NOT cached (see below), so it returns an empty list where the
+    -- cache used to answer: board_hovered() then finds no socket and the cursor goes
+    -- silent for those ticks. A silence the old test could not produce.
     if panel_cache and panel_cache.key == key
        and panel_cache.list[1] and Core.valid(panel_cache.list[1]) then
         return panel_cache
@@ -266,8 +285,7 @@ end
 -- The game's socket hit-test, replicated exactly (first hit wins, LAST socket first).
 -- Returns the 1-based WL_PanelTbl index of the socket under the cursor, or nil.
 local function board_hovered(frame, pc)
-    local cw
-    pcall(function() cw = frame.WL_PanelCursor end)
+    local cw = Core.member(frame, "WL_PanelCursor")
     if not Core.valid(cw) then return nil end
     local cx = Mem.float(cw, BOARD.cursorX)
     local cy = Mem.float(cw, BOARD.cursorY)
@@ -299,21 +317,21 @@ end
 
 -- What the hovered socket sounds like: emblem name + level + leader, or empty.
 local function socket_label(p, idx, count)
+    local embr = Core.member(p, "WL_Emblem")
     local name
-    local embr
-    pcall(function() embr = p.WL_Emblem end)
     if Core.valid(embr) and Core.is_visible(embr) then
-        pcall(function() name = face_char(embr.UIXCmnEmb) end)
+        name = face_char(Core.member(embr, "UIXCmnEmb"))
     end
     local where = string.format(I18n.t("board_socket"), idx, count)
     if not name then
         return Core.phrase(I18n.t("empty_socket"), where)
     end
-    local lv = read(p.WL_Lv)
-    local leader = false
-    pcall(function()
-        leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
-    end)
+    local lv = read(Core.member(p, "WL_Lv"))
+    -- Two socket-badge stylings exist depending on socket kind, so this is a genuine
+    -- multi-candidate probe: STRICT gate, per contract (a name expected absent here
+    -- must never be fetched raw).
+    local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader", true))
+        or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader", true))
     return Core.phrase(name,
         lv and string.format(I18n.t("lvl"), lv) or nil,
         leader and I18n.t("leader") or nil,
@@ -323,14 +341,13 @@ end
 -- The right-hand pane: board title (used as the announcer tab) and the summary
 -- (overall level, to-next-rank, rank, active skills) spoken when the board changes.
 local function board_detail()
-    local d
-    pcall(function() d = board.WL_CommuBrdDetail end)
+    local d = Core.member(board, "WL_CommuBrdDetail")
     return Core.valid(d) and d or nil
 end
 
 local function board_title()
     local d = board_detail()
-    return d and read(d.WL_Txt_Titl00) or nil
+    return d and read(Core.member(d, "WL_Txt_Titl00")) or nil
 end
 
 -- Community Skills list (user request 2026-07-04): the thresholds panel ("Support
@@ -367,15 +384,23 @@ end
 -- One skill row: prefers the ACTIVE variant's text (unlocked skills render through
 -- WL_Txt_Skill_Act/WL_Txt_Num_Act; locked ones through WL_Txt_Skill/WL_Txt_Num).
 local function skill_row(p)
-    local act = false
-    pcall(function() act = Core.is_visible(p.WL_Pnl_Skill_Act) end)
+    local act = Core.is_visible(Core.member(p, "WL_Pnl_Skill_Act"))
+    -- NORMAL gate, not strict (2026-07-29 review). A strict pass was applied here as a
+    -- "multi-candidate probe"; it is not one. Both text pairs are WidgetTree children of
+    -- the SAME skill-part class — the line above proves it, since it decides the variant by
+    -- reading WL_Pnl_Skill_Act off this very object — and the game toggles their
+    -- VISIBILITY, it does not swap the class. So no candidate is expected-absent, the
+    -- fail-open contract applies, and strict could only ever refuse a declared name while
+    -- the per-tick property-set budget was spent (permanently, if the class ever
+    -- introspects to nothing) — and `if not name then return nil end` below drops the
+    -- whole row, so that refusal reads as a missing skill in the list.
     local name, num
     if act then
-        name = read(p.WL_Txt_Skill_Act) or read(p.WL_Txt_Skill)
-        num = read(p.WL_Txt_Num_Act) or read(p.WL_Txt_Num)
+        name = read(Core.member(p, "WL_Txt_Skill_Act")) or read(Core.member(p, "WL_Txt_Skill"))
+        num = read(Core.member(p, "WL_Txt_Num_Act")) or read(Core.member(p, "WL_Txt_Num"))
     else
-        name = read(p.WL_Txt_Skill) or read(p.WL_Txt_Skill_Act)
-        num = read(p.WL_Txt_Num) or read(p.WL_Txt_Num_Act)
+        name = read(Core.member(p, "WL_Txt_Skill")) or read(Core.member(p, "WL_Txt_Skill_Act"))
+        num = read(Core.member(p, "WL_Txt_Num")) or read(Core.member(p, "WL_Txt_Num_Act"))
     end
     if not name then return nil end
     return Core.phrase(name, num)
@@ -386,15 +411,19 @@ local function skills_text()
     if not d then return nil end
     ensure_skill_props(d)
     local parts = {}
-    local hdr
-    pcall(function() hdr = read(d.WL_Txt_Skill_Header00) or read(d.WL_Txt_Skill_Header01) end)
+    -- Two header widgets for two LAYOUTS of the one detail class (board_summary below
+    -- fetches eight more of its members through the normal gate) — same class, both names
+    -- declared, so this is a text-presence fallback and NOT a multi-candidate class probe:
+    -- normal gate, fail-open. See skill_row for the full reasoning.
+    local hdr = read(Core.member(d, "WL_Txt_Skill_Header00"))
+        or read(Core.member(d, "WL_Txt_Skill_Header01"))
     if hdr then parts[#parts + 1] = hdr end
     for i = 0, SKILL_PARTS_N - 1 do
         local p
         if i == 0 then
-            pcall(function() p = d.WL_SkillParts end)
+            p = Core.member(d, "WL_SkillParts")
         else
-            pcall(function() p = Core.member(d, "CommuSkillPart" .. i) end)
+            p = Core.member(d, "CommuSkillPart" .. i)
         end
         if Core.valid(p) and Core.is_visible(p) then
             local row = skill_row(p)
@@ -410,7 +439,7 @@ local function board_summary()
     if not d then return nil end
     local parts = {}
     local function pair(a, b)
-        local t = Core.phrase(read(d[a]), read(d[b]))
+        local t = Core.phrase(read(Core.member(d, a)), read(Core.member(d, b)))
         if t ~= "" then parts[#parts + 1] = t end
     end
     pair("WL_Txt_Level00", "WL_Txt_Level_Num00")   -- overall level caption + value
@@ -435,10 +464,10 @@ end
 local function reward_parts()
     local parts = {}
     for i = 0, 2 do
-        local bar
-        pcall(function() bar = Core.member(det, string.format("Reward_Bar%02d", i)) end)
+        local bar = Core.member(det, string.format("Reward_Bar%02d", i))
         if Core.valid(bar) and Core.is_visible(bar) then
-            local p = Core.phrase(read(bar.Txt_Reward), read(bar.Txt_Num), read(bar.Txt_Max00))
+            local p = Core.phrase(read(Core.member(bar, "Txt_Reward")),
+                read(Core.member(bar, "Txt_Num")), read(Core.member(bar, "Txt_Max00")))
             if p ~= "" then parts[#parts + 1] = p end
         end
     end
@@ -453,8 +482,7 @@ local DETAIL_MEMBERS = {
 local function detail_text()
     local parts = {}
     for _, m in ipairs(DETAIL_MEMBERS) do
-        local t
-        pcall(function() t = read(det[m]) end)
+        local t = read(Core.member(det, m))
         if t then parts[#parts + 1] = t end
     end
     for _, p in ipairs(reward_parts()) do parts[#parts + 1] = p end
@@ -681,8 +709,7 @@ function Commu.is_active()
         board = Core.first_on_screen("Start_Commu_Brd_C", tick)
         if not board then board_rej = "not-found" end
         if board then
-            local frame
-            pcall(function() frame = board.WL_BrdFrame end)
+            local frame = Core.member(board, "WL_BrdFrame")
             -- Liveness is the MODE MACHINE, not pane_live. pane_live wants strict
             -- ESlateVisibility Visible(0), but the STORY-TUTORIAL board renders under a
             -- non-Visible flag while the tutorial owns input — Start_Commu_Brd_C_0 was
@@ -847,8 +874,7 @@ local function grid_update()
     -- The AnimLoop heuristic stays only as fallback (it trails the input and its
     -- leave-anim made a row+anim hybrid alternate between adjacent slots).
     local idx
-    local el
-    pcall(function() el = grid.EmbList end)
+    local el = Core.member(grid, "EmbList")
     if Core.valid(el) then
         local raw = Mem.i32(el, GRID.cursorIndex)
         if raw and raw >= 0 then idx = (byai or {})[raw] end
@@ -866,18 +892,16 @@ end
 local function placed_emblems(pc)
     local parts = {}
     for i, p in ipairs(pc.list) do
-        local embr
-        pcall(function() embr = p.WL_Emblem end)
+        local embr = Core.member(p, "WL_Emblem")
         local name
         if Core.valid(embr) and Core.is_visible(embr) then
-            pcall(function() name = face_char(embr.UIXCmnEmb) end)
+            name = face_char(Core.member(embr, "UIXCmnEmb"))
         end
         if name then
-            local lv = read(p.WL_Lv)
-            local leader = false
-            pcall(function()
-                leader = Core.is_visible(p.WL_Pnl_Pedestal_Leader) or Core.is_visible(p.WL_Ins_Icon_Leader)
-            end)
+            local lv = read(Core.member(p, "WL_Lv"))
+            -- Multi-candidate leader badge (see socket_label) — STRICT gate.
+            local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader", true))
+                or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader", true))
             -- socket number first, so it correlates with the live cursor's "socket N"
             parts[#parts + 1] = Core.phrase(string.format("%d", i),
                 name,
@@ -1034,15 +1058,14 @@ end
 -- runs while the board is active — the board reads its own subtitles widget
 -- (host.LinkBonusSubtitles, UATUISubtitles: TextName + TextSelif, both reflected).
 local function board_subtitles()
-    local sub
-    pcall(function() sub = board.LinkBonusSubtitles end)
+    local sub = Core.member(board, "LinkBonusSubtitles")
     if not Core.valid(sub) or not Core.on_screen(sub) then
         last_sub = nil
         return
     end
-    local line = read(sub.TextSelif)
+    local line = read(Core.member(sub, "TextSelif"))
     if not line then return end
-    local msg = Core.phrase(read(sub.TextName), line)
+    local msg = Core.phrase(read(Core.member(sub, "TextName")), line)
     if msg ~= last_sub then
         last_sub = msg
         Speech.say(msg, false)
@@ -1082,8 +1105,7 @@ local function dump_state(frame, hovered, pc)
 end
 
 local function board_update()
-    local frame
-    pcall(function() frame = board.WL_BrdFrame end)
+    local frame = Core.member(board, "WL_BrdFrame")
     if not Core.valid(frame) then return end
     if DEBUG then dump_cursor_hunt(frame) end
     local title = board_title()

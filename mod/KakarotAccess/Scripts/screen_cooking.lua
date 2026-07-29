@@ -112,13 +112,9 @@ end
 -- A text member of the CookMenuList controller (a plain UObject, so member access is
 -- pcall-guarded), on-screen gated, raw (uncleaned). nil if unreadable.
 local function shoplist_text(member)
-    if not Core.valid(shoplist) then return nil end
-    local t
-    pcall(function()
-        local node = shoplist[member]
-        if Core.on_screen(node) then t = Core.read_text(node) end
-    end)
-    return t
+    local node = Core.member(shoplist, member)
+    if Core.on_screen(node) then return Core.read_text(node) end
+    return nil
 end
 
 -- The selected dish's name from the detail pane — follows the cursor even while the
@@ -141,14 +137,12 @@ end
 
 -- Text of whichever cooking overlay is up (complete banner / result window), or nil.
 local function overlay_text()
-    local comp
-    pcall(function() comp = host.WL_CookingComp end)
+    local comp = Core.member(host, "WL_CookingComp")
     if Core.valid(comp) and Core.on_screen(comp) then
         local t = clean(Core.read_text(Core.member(comp, "WL_Text")))
         if t then return t end
     end
-    local res
-    pcall(function() res = host.WL_CookingResult end)
+    local res = Core.member(host, "WL_CookingResult")
     if Core.valid(res) and Core.on_screen(res) then
         local parts = {}
         local boxes, n = Core.array_of(res, "TextBoxCtn")
@@ -241,13 +235,12 @@ function Cooking.is_active()
     -- its Shop_Top rows are visible — screen_shoplist (registered above) reads them;
     -- the dish pane behind it is backdrop. Also the moment to forget the spoken key,
     -- so coming back INTO the dish list announces fresh.
-    local top
-    pcall(function() top = host.WL_CookingTop end)
+    local top = Core.member(host, "WL_CookingTop")
     if Core.valid(top) and #A.shoptop_rows(top) > 0 then
         spoken_key = nil
         return false
     end
-    pcall(function() shoplist = host.CookMenuList end)
+    shoplist = Core.member(host, "CookMenuList")
     list = Core.member(shoplist, "WL_Shop_Cmn_List")
     if A.list_select_index(list) == nil then return false end
     -- Live-detail gate: a genuinely open menu always shows the selected dish in the

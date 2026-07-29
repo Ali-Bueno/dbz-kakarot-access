@@ -63,8 +63,12 @@ local SLOT_PROP = { [0] = "Start_Party_Bar00", [1] = "Start_Party_Spo00", [2] = 
 
 local function cursor_index()
     if not Core.valid(host) then return nil end
-    local idx
-    pcall(function() idx = host.partySelectData.cursorIndex end)
+    -- Hardened 2026-07-29: `host.partySelectData.cursorIndex` was a raw chain. partySelectData
+    -- is a STRUCT (see file header — the rest of its 0xB0 is two TMaps), so the second hop
+    -- must go through Core.struct_member (IsValid-only), never Core.member (which would call
+    -- GetAddress on a struct handle and pierce pcall). Core.member_path does exactly that:
+    -- one gated UObject hop then a struct hop.
+    local idx = Core.member_path(host, "partySelectData", "cursorIndex")
     if type(idx) ~= "number" then idx = Mem.i32(host, OFF.startParty.cursorIndex) end
     if type(idx) == "number" and idx >= 0 then return idx end
     return nil

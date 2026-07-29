@@ -303,10 +303,9 @@ end
 -- The phase-1 action button TOKEN ("X"): the live glyph first, then the ActionBtn00
 -- config struct's pad ids. Bare tokens keep the speech minimal (user request).
 local function fishing_button()
-    local tok = A.platbtn_token(fish.Xcmn_Btn_Plat_00)
+    local tok = A.platbtn_token(Core.member(fish, "Xcmn_Btn_Plat_00"))
     if tok then return tok end
-    local ab
-    pcall(function() ab = fish.ActionBtn00 end)
+    local ab = Core.member(fish, "ActionBtn00")
     local ids, ni = Core.array_of(ab, "KeyIdsForPad")
     if ids then pcall(function()
         for i = 1, ni do
@@ -373,7 +372,7 @@ end
 function Fishing.update()
     -- Mash QTE — the most time-critical prompt.
     if mash then
-        local btn = A.platbtn_name(mash.WL_Btn)
+        local btn = A.platbtn_name(Core.member(mash, "WL_Btn"))
         say_once("mash", string.format(I18n.t("fish_mash"), btn or I18n.t("fish_button")), true)
     else
         said.mash = nil
@@ -381,8 +380,8 @@ function Fishing.update()
 
     -- Minigame popup banners (results, phase changes).
     if pop then
-        local title = Core.read_text(pop.TextTitle)
-        local sub = Core.read_text(pop.TextSub)
+        local title = Core.read_text(Core.member(pop, "TextTitle"))
+        local sub = Core.read_text(Core.member(pop, "TextSub"))
         say_once("pop", Core.phrase(title and A.markup_to_speech(title) or title,
                                     sub and A.markup_to_speech(sub) or sub), true)
     else
@@ -412,7 +411,7 @@ function Fishing.update()
         local core = ring_core()
         if phase == 2 or core ~= nil then
             local tok2
-            if core then pcall(function() tok2 = A.platbtn_token(core.Xcmn_Btn_Plat) end) end
+            if core then tok2 = A.platbtn_token(Core.member(core, "Xcmn_Btn_Plat")) end
             if tok2 then
                 -- The letter, alone, the instant it's known; re-spoken only if the
                 -- game swaps it mid-reel (say_once diff-gates on the text).
@@ -452,9 +451,15 @@ function Fishing.update()
             timing_cue()
         end
         for _, prop in ipairs({ "UIMgameTips", "UIMgameTips01" }) do
-            local ok, tips = pcall(function() return fish[prop] end)
-            if ok and Core.on_screen(tips) then
-                local t = Core.read_text(tips.TextBox_Tips)
+            -- STRICT (2026-07-29): two candidate names of which a given minigame core declares
+            -- ONE, so most of these lookups are expected to miss. A fail-open gate would hand a
+            -- name we have positive reason to believe is absent straight to a raw fetch — the
+            -- uncatchable abort — on every tick the property set is unavailable (the budget is
+            -- one class per tick, shared). Failing closed costs a few ticks of silence and
+            -- self-heals the moment the set is built.
+            local tips = Core.member(fish, prop, true)
+            if Core.on_screen(tips) then
+                local t = Core.read_text(Core.member(tips, "TextBox_Tips"))
                 if t then
                     local spoken = A.markup_to_speech(t) or t
                     -- A tips change = a PHASE change -> re-announce the button too.

@@ -51,36 +51,56 @@ local function dbg(s)
     end)
 end
 
--- Reflected text read off the host by property name (nil if missing/empty). Guarded.
+-- Reflected text read off the host by property name (nil if missing/empty). Routed through
+-- Core.member (existence gate on Start_Skillcustom_C + Core.valid re-check on both the owner
+-- AND the result) instead of a raw `host[name]` pcall: the raw form does not catch a fetch of
+-- a member the class doesn't declare (fact 1 — the abort pierces pcall), and it never
+-- re-validated `host`, which is a file-local cached once per tick by is_active and can be
+-- stale by the time update() runs (2026-07-29 contract).
 local function field(name)
-    local node
-    if not pcall(function() node = host[name] end) or node == nil then return nil end
-    return Core.read_text(node)
+    return Core.read_text(Core.member(host, name))
 end
 
--- Text of a reflected child property on any widget (nil if missing/empty). Guarded.
-local function node_text(obj, prop)
-    local node
-    if not pcall(function() node = obj[prop] end) or node == nil then return nil end
-    return Core.read_text(node)
-end
-
--- Visibility of a reflected child property, guarded (false if missing/invalid).
+-- Visibility of a reflected child property, guarded via Core.member (existence gate +
+-- Core.valid on both the owner and the result) instead of a raw `obj[prop]` pcall — the
+-- raw form's pcall does NOT catch a fetch of a member the plate's class doesn't declare.
 local function node_visible(obj, prop)
-    local vis = false
-    pcall(function() vis = Core.is_visible(obj[prop]) end)
-    return vis
+    return Core.is_visible(Core.member(obj, prop))
 end
 
+-- SkillNameTxt / SkillNameRegistrationTxt / SuperPassiveNameTxt are ALTERNATIVE names across
+-- the different plate widget subclasses this container holds (main skill / support skill /
+-- structural) — a genuine multi-candidate probe, most candidates expected ABSENT on any given
+-- plate. So each candidate goes through Core.member's STRICT gate, which SKIPS an unconfirmed
+-- name instead of fetching it: a name truly missing from this plate's class can never reach the
+-- uncatchable "member the class doesn't declare" abort.
+--
+-- NOT Core.first_text, deliberately (2026-07-29 review). That helper additionally requires each
+-- candidate node to pass Core.on_screen — an ancestor walk this read has never done. The plate
+-- carousel spans two groups and the container also holds structural plates, so a name node with
+-- a collapsed ancestor would start reading nil, and update() bails on `raw == nil`: the whole
+-- slot navigation would go SILENT with nothing in the log. The gate this read needed was the
+-- existence one; the liveness one is a behaviour change nobody asked for (and 3 ancestor walks
+-- per plate per tick on top).
+local PLATE_NAMES = { "SkillNameTxt", "SkillNameRegistrationTxt", "SuperPassiveNameTxt" }
 local function plate_name(p)
-    return node_text(p, "SkillNameTxt")
-        or node_text(p, "SkillNameRegistrationTxt")
-        or node_text(p, "SuperPassiveNameTxt")
+    if not Core.valid(p) then return nil end
+    for _, n in ipairs(PLATE_NAMES) do
+        local node = Core.member(p, n, true)
+        if node ~= nil then
+            local t = Core.read_text(node)
+            if t and t ~= "" then return t end
+        end
+    end
+    return nil
 end
 
+-- Single expected member (present on every plate subtype per the module doc comment; the
+-- "support" group only lacks a GLYPH, not the property). Core.member re-validates `p` and the
+-- result instead of the raw `p.ButtonIconImage` pcall.
 local function plate_button(p)
-    local glyph
-    if not pcall(function() glyph = p.ButtonIconImage end) or glyph == nil then return nil end
+    local glyph = Core.member(p, "ButtonIconImage")
+    if glyph == nil then return nil end
     return A.platbtn_name(glyph)
 end
 
@@ -166,8 +186,10 @@ end
 function Skill.update()
     local pane = A.markup_to_speech(field("SkillNameTxt"))
 
-    local list
-    pcall(function() list = host.SkillListMenu end)
+    -- SkillListMenu is a documented member of this class (module doc comment: "SkillListMenu:
+    -- GetSelectValue() is DEAD on this screen"). Core.member re-validates `host` (a stale
+    -- file-local cache is otherwise the risk here) instead of the raw `host.SkillListMenu` pcall.
+    local list = Core.member(host, "SkillListMenu")
     local idx = A.list_select_index(list)
     local all = plates()
     local sel, slot, border_count = selected_plate(all)
