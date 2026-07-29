@@ -2,6 +2,74 @@
 
 ---
 
+## v0.1.4 - July 29, 2026
+
+**Crashes only.** The last version said it should not crash, and for some people it still did. So
+this one is nothing but the hunt for why: every file in the mod was re-read against the list of
+ways this game can kill itself, and each suspect was then argued against by someone whose job was
+to prove it harmless. Seven survived that and are fixed here. Nothing else was touched - no new
+screens, no new features.
+
+The honest caveat: these were found by reading the code, not by reproducing your crash. If one
+still gets through, the log and the flight recorder will say more than before - see *For bug
+reports* at the bottom.
+
+### Stability
+
+- **The radar kept holding on to things the game had already destroyed - but only if a menu was
+  open at the wrong moment.** When the world goes away, the radar is supposed to let go of
+  everything it was tracking: enemies, map icons, your current target. It did - unless a menu, a
+  loading screen or a dialogue was already on screen at the instant the world disappeared. Then
+  that letting-go step was skipped entirely, and the radar carried dead references through a whole
+  battle or cutscene and used them the moment you came back. This is the shape a crash takes when
+  it seems to have no trigger: it needed a menu and a fight to overlap, so it happened to some
+  people constantly and to others never. Fishing, loading screens and answering an NPC's yes/no
+  question straight into a fight were the three easiest ways to hit it.
+- **Two keyboard shortcuts were doing real work at the wrong moment.** Shift+F3 (route guidance)
+  and Ctrl+Shift+R (reload the mod) both ran instantly on the key press instead of waiting for the
+  game's own turn. Shift+F3 talks to the game's navigation system while the radar is reading it,
+  and Ctrl+Shift+R rebuilds the entire mod - about sixty files - while every other part of it is
+  still running. Both could quietly corrupt the mod's state and bring the game down minutes later,
+  somewhere with no apparent connection to the key you pressed. Both now wait their turn.
+- **Opening a shop asked the game for something that might not be there.** The wallet is stored
+  under a different name on each kind of shop, so the mod tried each name in turn - and asking for
+  a name that does not exist on that screen is one of the ways this game closes without warning.
+  It now checks before asking instead of asking and hoping.
+- **A list reader was checking whether an item still existed only after it had already used it.**
+  Every other reader in the mod checks first; this one had the two steps the wrong way round. The
+  list it walks is shared with the side-story reward sheet, so a reward popup followed by any
+  confirmation window was enough to reach it.
+
+### Fixed
+
+- **Losing your controller no longer leaves the keyboard dead too.** If the pad disconnected -
+  a wireless controller falling asleep, a flat battery - the mod never noticed. It kept replaying
+  the last thing the pad had said, so it believed a controller was still there, and if the radar
+  picker happened to be open it went on blocking the keyboard from the game for the rest of the
+  session. There was no way out from inside the game. The mod now notices the pad is gone and
+  releases everything.
+- **Explore mode no longer scans during loading screens and cutscenes.** Its sweep of the area is
+  by far the most expensive thing the mod does, and it was running regardless of what was on
+  screen. It now waits. (The sweep itself is still heavy while you are actually exploring - that
+  is a separate piece of work.)
+
+### Performance
+
+- **The button-prompt bar is cheaper to read.** It is checked a couple of times a second in
+  practically every menu, and it was asking the game for the full identity of every prompt bar it
+  had ever seen before checking whether any of them was even on screen. It now checks first.
+- **The story results screen stops re-reading ranks it has already announced.** It was resolving
+  every rank letter and every digit image on every check, for as long as the screen stayed up,
+  and then discarding the ones it had already spoken.
+
+### For people who build the mod
+
+- **A release can no longer ship with the debug console switched on.** Packaging copied a settings
+  file straight from whoever was building it, and the only thing keeping the console out of a
+  release was a comment asking a person to remember. It is now set by the packaging script itself.
+
+---
+
 ## v0.1.3 - July 28, 2026
 
 **This version should not crash.** That was the point of the release: earlier versions protected

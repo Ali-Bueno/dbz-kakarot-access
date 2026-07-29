@@ -8,7 +8,8 @@
  * lua_State; our statically-linked Lua manipulates that state. No UE4SS source build,
  * no UEPseudo, no Rust, no external process.
  *
- * Deploy prism_bridge.dll + prism.dll + tolk.dll into the mod's Scripts/ folder.
+ * Deploy prism_bridge.dll + prism.dll into the mod's Scripts/ folder (NOT tolk.dll: prism.dll
+ * has NVDA/JAWS/SAPI built in and does not import it).
  *
  * Lua usage:
  *   local prism = require("prism_bridge")
@@ -178,7 +179,7 @@ __declspec(dllexport) int luaopen_prism_bridge(lua_State *L) {
     PrismConfig cfg;
     PrismError err;
 
-    /* Make our own directory the DLL search dir so prism.dll's own deps (tolk.dll) resolve.
+    /* Make our own directory the DLL search dir so prism.dll itself resolves from beside us.
      * SetDllDirectory is PROCESS-GLOBAL and also drops the current directory from the search
      * order, so it is RESTORED (NULL = default order) as soon as prism.dll is loaded: leaving
      * it set would silently change every later LoadLibrary the game itself or another UE4SS

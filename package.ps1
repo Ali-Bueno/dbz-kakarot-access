@@ -65,7 +65,9 @@ if (-not (Test-Path $ScriptsSrc)) { throw "Mod scripts not found at $ScriptsSrc"
 
 # The native runtime DLLs are built by src\*\build.ps1 and gitignored; they must
 # exist locally before packaging.
-$RequiredDlls = 'prism.dll', 'prism_bridge.dll', 'tolk.dll', 'mem_bridge.dll', 'audio_bridge.dll', 'input_bridge.dll'
+# No tolk.dll: NVDA/JAWS/SAPI are built into prism.dll and its Tolk backend is optional —
+# `dumpbin /DEPENDENTS prism.dll` shows it does not import tolk.dll at all (verified 2026-07-29).
+$RequiredDlls = 'prism.dll', 'prism_bridge.dll', 'mem_bridge.dll', 'audio_bridge.dll', 'input_bridge.dll'
 $missing = $RequiredDlls | Where-Object { -not (Test-Path (Join-Path $ScriptsSrc $_)) }
 if ($missing) {
     throw "Missing built DLLs in Scripts: $($missing -join ', '). Run the src\*\build.ps1 scripts first."
@@ -96,6 +98,51 @@ foreach ($f in 'dwmapi.dll', 'UE4SS.dll', 'UE4SS-settings.ini') {
     $src = Join-Path $Win64 $f
     if (-not (Test-Path $src)) { throw "UE4SS file missing in the install: $f" }
     Copy-Item $src (Join-Path $StageWin64 $f)
+}
+
+# 1b) Force the release DEBUG profile on the staged ini.
+#     The ini is copied from whatever the packaging machine happens to have, so until now
+#     the release profile was correct only BY OBSERVATION - the source ini carries a comment
+#     asking a human to remember to turn the consoles back off before packaging. One person
+#     packaging from a machine mid-debug-session would have shipped the UE4SS debug console
+#     to every player. These three keys default to 1 when ABSENT, so a missing key is not
+#     "off" and has to be written in rather than left alone.
+#     Keys/defaults: reference\UE4ss study\docs\ue4ss-settings-reference.md (Debug section).
+$IniPath = Join-Path $StageWin64 'UE4SS-settings.ini'
+$DebugOff = 'ConsoleEnabled', 'GuiConsoleEnabled', 'GuiConsoleVisible'
+$seen = @{}
+$section = ''
+$debugAt = -1
+$forced = @()
+$lines = [System.Collections.Generic.List[string]]::new()
+foreach ($line in (Get-Content $IniPath)) {
+    if ($line -match '^\s*\[(.+?)\]\s*$') {
+        $section = $Matches[1]
+        if ($section -eq 'Debug') { $debugAt = $lines.Count }
+    } elseif ($section -eq 'Debug' -and $line -match '^\s*([A-Za-z_]\w*)\s*=\s*(.*?)\s*$') {
+        $key, $val = $Matches[1], $Matches[2]
+        if ($DebugOff -contains $key) {
+            $seen[$key] = $true
+            if ($val -ne '0') { $forced += "$key ($val -> 0)"; $line = "$key = 0" }
+        }
+    }
+    $lines.Add($line)
+}
+# A key the ini never declared still defaults to ON, so the missing ones must be written
+# in - and written INSIDE [Debug], not appended at EOF where a later section would claim them.
+$missing = @($DebugOff | Where-Object { -not $seen.ContainsKey($_) })
+if ($missing.Count) {
+    if ($debugAt -lt 0) { $lines.Add('[Debug]'); $debugAt = $lines.Count - 1 }
+    foreach ($k in $missing) {
+        $forced += "$k (absent -> 0)"
+        $lines.Insert($debugAt + 1, "$k = 0")
+    }
+}
+if ($forced.Count) {
+    Set-Content -Path $IniPath -Value $lines -Encoding utf8
+    Write-Warning "UE4SS-settings.ini: forced the release debug profile - $($forced -join ', ')"
+} else {
+    Write-Host "UE4SS-settings.ini: debug consoles already off."
 }
 
 # 2) UE4SS built-in mods (everything under Mods\ except our mod, the dev-only
@@ -133,7 +180,8 @@ Copy-Item $ScriptsSrc $StageScripts -Recurse
 # the debug keybinds, which are compiled out below).
 $DevJunk = 'dumps', 'dump.txt', 'probe.txt', 'dev_probe.txt', 'config.txt',
            'crash_trail.bin',
-           'discover.lua', 'dev_memdiff.lua', 'dev_log.lua'
+           'discover.lua', 'dev_memdiff.lua', 'dev_log.lua',
+           'tolk.dll'   # prism.dll does not import it (see $RequiredDlls); drop any stale copy
 foreach ($j in $DevJunk) {
     $p = Join-Path $StageScripts $j
     if (Test-Path $p) { Remove-Item $p -Recurse -Force }

@@ -4,7 +4,72 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-07-29 — **a crash report named the wrong screen, and chasing it down the
+**Last updated:** 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
+confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
+the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read
+against the crash ledger's mechanism catalogue, grouped by hot-path risk, every candidate given an
+independent adversarial refuter. Full writeup in the
+[crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md) — **including the 7 that DIED,
+so nobody re-opens them** (notably: `pad_poll.lua`'s `steppers[name]=nil` is NOT the bug and needs
+no lock; `Nav.toggle` on plain F3 is safe because it touches no engine object; `screen_community`'s
+`det.Txt_Name` is a real reflected property; `ui_core.lua:1430`'s `custom_props` trap has a dead-code
+consumer). THE BIG ONE: **`nav_tracker`'s world-actor release never ran if a MENU was on screen when
+the world went away.** All three gates share one `gated_prev` latch, but the release lived only in
+the world gate's edge — so a muting adapter (fishing HUD lingering ~3 s, loading pane ~10 s, an NPC
+yes/no answered straight into a fight) latched it first and the loop carried `enemy_cache`,
+`navi_icons`, `target.actor` and `chain_wait.actor` through the whole battle. A battle is NOT a
+`Transition`, so `Transition.on_begin` never covered it, and re-validating cannot save you — a
+recycled address passes both `Mem.alive` and `IsValid`. That is a REGRESSION of a fix written for a
+confirmed user crash, and its need-a-menu-AND-a-fight-to-overlap shape is exactly why the crash
+looked triggerless. Fixed via `Nav.release_world_refs()` called from both edges (on the module table,
+not a `local` — this file is at Lua's 200-local ceiling). Also fixed: **two keybinds ran engine work
+on UE4SS's own thread** — Shift+F3 (`Nav.toggle_route` → `FindFirstOf` + `UnregisterNavigationInvoker`
++ mutation of the shared memo tables) and **Ctrl+Shift+R, which is NOT dev-gated and the README
+advertises it**, where `require("app")` reparses ~60 modules on the keybind thread against the same
+`global_State`; the 2026-07-27 sweep missed both because they are delegated through `app.lua`.
+Plus `screen_choicelist` calling `GetFullName()` before its guard (sole outlier in the mod),
+`A.shop_money` probing multi-candidate names non-strict (its own comment asserted the false safety
+property), `explore_rescan` now bailing on `Core.scan_quiet()`, and in the native bridge
+**`g_haveLast` was a one-way latch: a pad disconnect froze the last frame forever, so pad-loss
+recovery never ran and an open radar picker kept the keyboard blocked for the session with no way
+out from inside the game** (`input_bridge.dll` rebuilt — needs a full RESTART, not Ctrl+Shift+R).
+KNOWN RESIDUAL, deliberately not fixed here: `explore_rescan` still fires 17 raw `FindAllOf`
+(~1.2 s of game thread) every 4 s while exploring; the cheaper source changes what explore mode can
+find, so it wants a Ctrl+F5 measurement and a decision first. Do NOT budget-gate `list_targets` —
+it is shared with the R3 picker and this loop refills only the property budget.
+Previous entry: 2026-07-29 (b) — **an external UE4SS performance audit reviewed claim by claim:
+four of its five code proposals REJECTED, and the one finding worth having was in the section it
+marked as unverified.** Full writeup, with the reasons, in
+[the audit review note](reference/dbz-kakarot/notes/dbz-kakarot-ue4ss-perf-audit-2026-07-28.md) — read
+that before re-opening any of it. Its Part 0 premise (every Lua property access does a fresh
+`FindProperty`, never memoised) is TRUE at v3.0.1 but its citation was **fabricated**
+(`LuaUObject.hpp:817-833` is `push_integer`; the quoted "hot code paths" comment exists nowhere in
+RE-UE4SS) — the real funnel is `prepare_to_handle`, `:644-681`. And the number that decides everything:
+one property access ≈ **a microsecond** against the **~65 ms** `FindAllOf` this mod already measures, so
+every "hoist the chain / cache the sub-widget" proposal was trading a real staleness risk for an
+unmeasurable gain. All four rejected proposals (`nav_tracker` navi-icon switcher, `quest_objective` rows,
+`screen_map` area_poi, `ui_directory` cross-tick memo) were killed on the SAME ground: each adds a
+cross-tick cache on pooled widgets, the failure class that has silenced this mod four times, and two of
+them were on modules with **no `reset()` to hook**. `screen_map`'s item additionally described code that
+`114b980` had already fixed. APPLIED instead — three zero-new-state changes plus a packaging fix:
+(1) `keyhelp.lua:63-73` tests visibility BEFORE `GetFullName()`, so the ~2 Hz auto-reader (armed in
+nearly every menu) pays for the path string once instead of once per pooled instance; (2)
+`screen_results.lua` skips rank/digit texture resolution for lines already in `spoken` — reusing the
+existing set, no new lifetime, and `name` is still read because the first detail row is prefixed with it;
+(3) `screen_map.lua:424` `cached_all` → `peek_all` (found by adversarial review, NOT by the audit):
+`ft_build` is reachable from the 20 ms pad loop and was calling a scanning helper there, the exact rule
+`ft_host`'s own comment forbids — harmless in practice (the class is never `due` at that point) but one
+backoff expiry from a 65 ms scan on the input loop; (4) **`package.ps1` now forces the release debug
+profile by CONSTRUCTION** — it copied `UE4SS-settings.ini` verbatim from the packaging machine, and the
+only thing keeping the debug console out of releases was a comment asking a human to remember. The three
+console keys default to 1 when absent, so a missing key is written in, inside `[Debug]`. Six-case test
+passed. Docs corrected too: our `ue4ss-api-reference.md` copy had the `FindObject` flag order
+**reversed** (it is `RequiredFlags, BannedFlags` — code, `Types.lua` and the official docs all agree; the
+audit's claim that the official docs are wrong is false), `--disable-ue4ss` is documented as
+non-existent at v3.0.1, and the busy-guard **clear-on-ENTRY** rule and its reasoning are now in
+`accessibility-patterns.md` (both the repo copy and the playbook source). SOURCE-ONLY, UNVERIFIED IN
+GAME; the Lua changes need a reload, `package.ps1` only affects the next package.
+Previous entry: 2026-07-29 (a) — **a crash report named the wrong screen, and chasing it down the
 log found a NEW substrate bug: partial property-set caching.** User reported a crash "on the party
 screen" (UE4SS.log 00:58:56→01:25:12, ends with no shutdown line, no traceback — a hard process
 death). It was NOT the party screen: `screen_party` was entered and left cleanly twice (01:23:58,
@@ -263,7 +328,7 @@ see *Next step*. Previous entry: 2026-07-24 (end-user crash + stale-read batch, 
 
 ## Identity
 - **Engine / framework:** UE4 (AT project) + UE4SS v3.0.1 — Lua scripts plus C bridge modules (`prism_bridge`, `audio_bridge`, `input_bridge`, `mem_bridge`).
-- **Screen-reader transport:** PRISM (`prism.dll` + `prism_bridge.dll` in `Scripts/`, `tolk.dll` fallback backend).
+- **Screen-reader transport:** PRISM (`prism.dll` + `prism_bridge.dll` in `Scripts/`). No `tolk.dll` — NVDA/JAWS/SAPI are built into `prism.dll`, which does not import it (dumpbin-verified 2026-07-29).
 - **Build command:** per-bridge `src/<bridge>/build.ps1` (rebuild only the bridge you touched). Lua is not compiled; validate with **two** checks, not one: `libs/lua54/luac.exe -p <file>` for syntax, **and** a globals lint — `luac.exe -l -p <file> | grep -oE '_ENV "[A-Za-z_][A-Za-z0-9_]*"' | sort -u` — where anything that is not a Lua builtin or a UE4SS global is a bug. `luac -p` does NOT catch a local used above its own declaration: that compiles to a global read, is nil at runtime, and on 2026-07-25 one such line would have shipped a mod that was silent from boot (it also exposed two pre-existing ones, see the crash ledger).
 - **Game install path:** `D:\games\steam\steamapps\common\DRAGON BALL Z KAKAROT`. Exe + UE4SS at `…\AT\Binaries\Win64\`. RE dumps live there: **`CXXHeaderDump\`** (per-class `.hpp`, the authority on layouts/members — `AT.hpp` is the big one) and **`UE4SS_ObjectDump.txt`** (what Lua can actually reflect). Grep these instead of re-deriving. **Regenerating them (2026-07-21):** Ctrl+H = headers, Ctrl+J = object dump, and **both `LoadAllAssetsBefore*` MUST stay 0** — force-loading reaches the stripped debug blueprint `AutoDebugMainUI_C` and kills the game with `LowLevelFatalError … Could not find SuperStruct` before writing anything. Native classes (`AT.hpp`) are complete from the title screen regardless; only lazily-loaded BP `_C` classes need you to have visited their screen, and they accumulate over a session (one Ctrl+H at the end). **Third source, offline:** `D:\code\tools\repak\pak_index.txt` — all 348,382 pak asset paths, grep-able without running the game (see [ui-and-text-architecture.md](reference/dbz-kakarot/ui-and-text-architecture.md)).
 - **Mod install path:** junction `…\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\Mods\KakarotAccess\Scripts` → repo `mod/KakarotAccess/Scripts`; enabled in `mods.txt` (`KakarotAccess : 1`).

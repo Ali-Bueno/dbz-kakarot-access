@@ -5,7 +5,8 @@
 -- loads prism.dll. We just require it and call its functions. The rest of the mod
 -- only ever calls Speech.say(...). (Pattern validated by AccessForge/SparkingZeroAccess.)
 --
--- prism_bridge.dll + prism.dll + tolk.dll must sit in this Scripts/ folder.
+-- prism_bridge.dll + prism.dll must sit in this Scripts/ folder. NOT tolk.dll: prism.dll has
+-- NVDA/JAWS/SAPI built in and does not import it (verified with dumpbin, 2026-07-29).
 
 local Speech = {}
 

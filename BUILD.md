@@ -30,7 +30,7 @@ dragon ball kakarot access/            ← this repo
 │   ├── main.lua                       ← entry: F8 speech test, F9 read position, Ctrl+F8 silence
 │   ├── speech.lua                     ← speech sink over the prism_bridge module
 │   ├── prism_bridge.dll               ← built by build.ps1
-│   ├── prism.dll, tolk.dll            ← PRISM runtime (copied by build.ps1)
+│   ├── prism.dll                      ← PRISM runtime (copied by build.ps1; no tolk.dll needed)
 ├── libs/lua54/                        ← vendored Lua 5.4.4 source (UE4SS's exact version) + lua54.lib
 ├── libs/prism/                        ← PRISM v0.16.7 prebuilt (bin/include/lib)
 └── reference/dbz-kakarot/             ← static recon (UI/text architecture)
@@ -57,7 +57,8 @@ pwsh -File src\audio_bridge\build.ps1     # navigation radar cue player
 `build.ps1` is self-contained:
 1. Compiles the vendored Lua 5.4.4 (`libs/lua54/src`) into `libs/lua54/lua54.lib` (only if missing).
 2. Compiles + links `prism_bridge.dll` against it.
-3. Deploys `prism_bridge.dll`, `prism.dll`, `tolk.dll` into `mod/KakarotAccess/Scripts/`
+3. Deploys `prism_bridge.dll` and `prism.dll` into `mod/KakarotAccess/Scripts/` (no `tolk.dll` —
+   NVDA/JAWS/SAPI are inside `prism.dll`, which does not import it)
    (which is junctioned into the game, so they land in the game automatically).
 
 ## Test (with a screen reader running — NVDA/JAWS, or SAPI)

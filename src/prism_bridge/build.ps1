@@ -44,6 +44,9 @@ if (-not (Test-Path "$tmp\prism_bridge.dll")) { throw "prism_bridge.dll build fa
 # 3) Deploy module + PRISM runtime into the mod's Scripts/ folder.
 Copy-Item "$tmp\prism_bridge.dll" "$scripts\prism_bridge.dll" -Force
 Copy-Item "$prismBin\prism.dll" "$scripts\prism.dll" -Force
-Copy-Item "$prismBin\tolk.dll" "$scripts\tolk.dll" -Force
+# tolk.dll is deliberately NOT deployed (2026-07-29, user directive): NVDA/JAWS/SAPI are built
+# INTO prism.dll, and its Tolk backend is optional — verified with dumpbin /DEPENDENTS, prism.dll
+# does not import tolk.dll at all. Shipping it added half a megabyte that nothing loads.
+if (Test-Path "$scripts\tolk.dll") { Remove-Item "$scripts\tolk.dll" -Force }   # drop stale copies
 Write-Host "Deployed to $scripts :"
 Get-ChildItem $scripts | Select-Object Name, Length | Format-Table -AutoSize
