@@ -79,7 +79,11 @@ UE4SS resolves which `UE4SS.dll` to load in this priority order (highest first):
 
 Other CLI / environment options:
 - `--disable-ue4ss` — disables UE4SS without uninstalling it. Only works with a **proxy-DLL** install
-  (not manual injection).
+  (not manual injection). **Version check (2026-07-29): this flag does NOT exist on v3.0.1** — zero
+  occurrences in the whole v3.0.1 tree. It is generated into the proxy stub on **main** only
+  (`UE4SS/proxy_generator/main.cpp:273`). On 3.0.x it is silently ignored, so it is not the clean A/B
+  baseline for "is this slowdown the mod or the framework?" that it looks like — rename/move the proxy
+  DLL instead.
 - Env var `UE4SS_MODS_PATHS` — extra mod directories, separated by `;`. Processed in **reverse order**:
   the **first** path listed gets the **highest** priority.
   - Ini equivalent: `[Overrides]` section, `+ModsFolderPaths=` / `-ModsFolderPaths=` entries — those are

@@ -378,6 +378,16 @@ thread (loading, a movie) those pile into a backlog that runs late in bursts →
 **Only queue the next step once the previous finished** (a `busy` flag). Keep per-tick work cheap; compute
 state once and reuse within the tick.
 
+**Clear the flag on ENTRY to the game-thread callback, not on exit** (rule added 2026-07-29 after an audit
+flagged the entry-clear as a bug; it is deliberate, and the reasoning generalizes to every UE4SS mod).
+Clearing on exit looks stricter — it guarantees zero re-entrancy — but on these engines some errors are
+**C++ exceptions `pcall` cannot catch**: they kill the callback mid-flight, and a `busy` left true then
+silences the loop for the **rest of the session**, with nothing in the log to say why (seen live on
+2026-07-04). Clearing on entry keeps the whole anti-pile-up purpose — the game thread runs the callback
+atomically, so at most **one** extra step can queue while one is running — and bounds the worst case to a
+single extra step instead of a permanently mute reader. Reference implementation: `Core.loop`,
+`ui_core.lua:1776-1795` in the DBZ Kakarot mod.
+
 ### Debounce transitions
 - **Screen-switch debounce:** require a screen to be the top active adapter for N consecutive polls before
   announcing, so a 1-tick flash (e.g. the title menu behind a boot dialog) stays quiet. Allow a per-screen

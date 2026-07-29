@@ -171,38 +171,54 @@ local function lines()
             local bar = bars[i]
             if Core.valid(bar) and Core.on_screen(bar) then
                 local name = Core.read_text(Core.member(bar, "TextBox_Item"))
-                local r = rank_letter(Core.member(bar, "Image_Rank"))
-                if name and r then
-                    out[#out + 1] = { key = "bar" .. i, text = name .. ", " .. r }
+                -- Skip the lines already spoken (2026-07-29). `Results.update` drops them
+                -- anyway, so every rank/digit texture resolved for them is thrown away —
+                -- and that work is the expensive part: rank_letter and image_number each
+                -- hop to a brush ResourceObject and GetFullName it, PER IMAGE, on every
+                -- 100 ms poll, for as long as the results screen stays up. This is a pure
+                -- short-circuit on the EXISTING `spoken` set, not a new cache: no extra
+                -- lifetime to invalidate, and it clears with `spoken` when the screen closes.
+                -- `name` is still read unconditionally — the first detail row is prefixed
+                -- with it below, even once the bar's own line has been spoken.
+                local barkey = "bar" .. i
+                if not spoken[barkey] then
+                    local r = rank_letter(Core.member(bar, "Image_Rank"))
+                    if name and r then
+                        out[#out + 1] = { key = barkey, text = name .. ", " .. r }
+                    end
                 end
                 -- Expanded details (after "View details"): blueprint children; the
                 -- first row is prefixed with its battle so groups stay apart.
                 for j = 0, DETAIL_COUNT - 1 do
-                    local d
-                    pcall(function()
-                        d = Core.member(bar, "Quest_Main_Clear_Detail" .. string.format("%02d", j))
-                    end)
-                    if Core.valid(d) and Core.on_screen(d) then
-                        local dn = Core.read_text(Core.member(d, "TextBox_Detail"))
-                        local dr = rank_letter(Core.member(d, "Image_Rank"))
-                        if dn and dr then
-                            local key = string.format("d%d.%d", i, j)
-                            if DEBUG then debug_dump_detail(d, key, dn) end
-                            local text = Core.phrase(dn,
-                                image_number(d, "Image_PercentageList"), dr)
-                            if j == 0 and name then text = name .. ": " .. text end
-                            out[#out + 1] = { key = key, text = text }
+                    local key = string.format("d%d.%d", i, j)
+                    if not spoken[key] then
+                        local d
+                        pcall(function()
+                            d = Core.member(bar, "Quest_Main_Clear_Detail" .. string.format("%02d", j))
+                        end)
+                        if Core.valid(d) and Core.on_screen(d) then
+                            local dn = Core.read_text(Core.member(d, "TextBox_Detail"))
+                            local dr = rank_letter(Core.member(d, "Image_Rank"))
+                            if dn and dr then
+                                if DEBUG then debug_dump_detail(d, key, dn) end
+                                local text = Core.phrase(dn,
+                                    image_number(d, "Image_PercentageList"), dr)
+                                if j == 0 and name then text = name .. ": " .. text end
+                                out[#out + 1] = { key = key, text = text }
+                            end
                         end
                     end
                 end
             end
         end
         -- Hardened 2026-07-29: both were raw UObject member fetches outside any gate.
-        local tot = Core.member(host, "UIQuestMainClearRank")
-        if Core.valid(tot) and Core.on_screen(tot) then
-            local r = rank_letter(Core.member(tot, "Image_Rank"))
-            if r then
-                out[#out + 1] = { key = "total", text = I18n.t("results_total") .. ", " .. r }
+        if not spoken["total"] then
+            local tot = Core.member(host, "UIQuestMainClearRank")
+            if Core.valid(tot) and Core.on_screen(tot) then
+                local r = rank_letter(Core.member(tot, "Image_Rank"))
+                if r then
+                    out[#out + 1] = { key = "total", text = I18n.t("results_total") .. ", " .. r }
+                end
             end
         end
     end)

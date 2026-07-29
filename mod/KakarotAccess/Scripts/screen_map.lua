@@ -420,8 +420,13 @@ end
 -- (undiscovered destinations are not rendered), so the list stays faithful to the gameplay.
 local function ft_build(host)
     -- address -> name for every live world-map icon (the names the game shows).
+    -- peek_all, not cached_all: ft_build is reachable from the 20 ms pad loop
+    -- (ft_step -> ft_guidance -> here), where a scanning helper is forbidden for the reason
+    -- spelled out in ft_host above. The pool is guaranteed populated by then — the registry
+    -- side scans this class in `world_icons_on_screen`, and that gate has to pass before
+    -- `state.world` is set and ft_guidance becomes reachable at all.
     local byaddr = {}
-    for _, ic in ipairs(Core.cached_all("Map_World_Icon_C", tick)) do
+    for _, ic in ipairs(Core.peek_all("Map_World_Icon_C")) do
         if Core.valid(ic) then
             local a = Mem.addr(ic)
             local nm = clean(Core.read_text(Core.member(ic, "Txt_Name")))

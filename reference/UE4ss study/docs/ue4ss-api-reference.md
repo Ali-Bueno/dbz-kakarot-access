@@ -22,12 +22,15 @@ input, hooks, and the console. Companion docs:
 ## 1. Object discovery & iteration
 
 ```
-FindObject(className: string|FName|nil, objectName: string|FName|nil, excludeFlags: EObjectFlags, requireFlags: EObjectFlags) -> UObject
+FindObject(className: string|FName|nil, objectName: string|FName|nil, requiredFlags: EObjectFlags, bannedFlags: EObjectFlags) -> UObject
 FindObject(class: UClass, outer: UObject, objectPath: string, exactMatch: bool) -> UObject
 ```
 Two overloads:
 - **Overload 1** — by **short class name** and/or **short object name** (at least one of the two must be
-  given). `excludeFlags`/`requireFlags` are `EObjectFlags`, OR-able with `|`. This is a **name lookup**,
+  given). `requiredFlags`/`bannedFlags` are `EObjectFlags`, OR-able with `|` — in **that** order
+  (verified 2026-07-29 against RE-UE4SS v3.0.1: `LuaMod.cpp:2703` declares the 3rd arg `required_flags`
+  and `:2720` the 4th `banned_flags`; the shipped `Mods/shared/Types.lua:516-519` and the official
+  `docs/lua-api.md:297,305` both agree). This is a **name lookup**,
   not a linear scan — cheaper than `ForEachUObject`/`FindAllOf`.
 - **Overload 2** — mirrors UE's native `FindObject`, relative to an `outer` (or all packages if `nil`),
   by path; `exactMatch` controls whether subclasses are accepted.
@@ -37,7 +40,7 @@ FindObject("FirstPersonCharacter_C", "FirstPersonCharacter_C_0", EObjectFlags.RF
 ```
 
 ```
-FindObjects(count: integer, className, objectName, excludeFlags, requiredFlags, exactMatch: bool) -> table<UObject>
+FindObjects(count: integer, className, objectName, requiredFlags, bannedFlags, exactMatch: bool) -> table<UObject>
 ```
 `count = 0` or `nil` → **all** matches (expensive). Includes subclasses by default; includes CDOs unless
 excluded via flags. Prefer this over `FindAllOf` when you only need up to N results.

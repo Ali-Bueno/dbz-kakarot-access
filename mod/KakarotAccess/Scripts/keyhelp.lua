@@ -60,12 +60,29 @@ end
 -- UObject in the game and stalls the game thread (it lagged the item/palette menus to a
 -- standstill when this ran per-poll, 2026-07-14). The on-demand F2 read passes none: a
 -- single scan on a keypress is free, and it must never miss the bar.
+--
+-- Predicate ORDER matters (2026-07-29): `GetFullName()` builds the whole outer path as a
+-- string, per instance, per call — and pooled bars accumulate through a session. On the
+-- auto-reader path (`visible_only`, polled ~2 Hz from keyhelp_watch in nearly every menu)
+-- the hidden fallback is unreachable by definition, so only a VISIBLE instance can ever be
+-- returned: test the cheap slate-visibility read first and pay for the name once, on the
+-- one candidate that can win, instead of once per instance. The conjunction is unchanged,
+-- so the bar chosen is the same one. The `visible_only == false` path still needs every
+-- candidate's name, because it has to pick a fallback among the hidden ones.
+local function is_transient(k)
+    return k:GetFullName():find("/Engine/Transient", 1, true) ~= nil
+end
+
 function Keyhelp.bar(visible_only, tick)
     local fallback
     for _, k in pairs(Core.cached_all("Xcmn_Keyhelp_C", tick)) do
-        if Core.valid(k) and k:GetFullName():find("/Engine/Transient", 1, true) then
-            fallback = fallback or k
-            if Core.is_visible(k) then return k end
+        if Core.valid(k) then
+            if visible_only then
+                if Core.is_visible(k) and is_transient(k) then return k end
+            elseif is_transient(k) then
+                fallback = fallback or k
+                if Core.is_visible(k) then return k end
+            end
         end
     end
     if visible_only then return nil end
