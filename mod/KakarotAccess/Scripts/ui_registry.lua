@@ -127,6 +127,10 @@ local function pad_boost()
     if active ~= nil and not active.scan_quiet
         and (fresh & BOOST_BTNS) ~= 0 and tick_n >= boost_cool then
         boost_cool = tick_n + BOOST_COOLDOWN
+        -- Marked separately from `ui.tick`: this is the only part of the prologue that touches
+        -- the object array (it re-scans every missing pool), so it is the part that can die.
+        -- A trail ending in `ui.boost` instead of `ui.tick` names the scan, not the gate.
+        Mem.mark("ui.boost")
         Core.boost_missing()
     end
 end
@@ -176,6 +180,17 @@ local function sweep()
 end
 
 local function step()
+    -- BLACK-BOX MARK FOR THE REGISTRY PROLOGUE (2026-07-29 (e)). Everything from here down to
+    -- the first `probe()` used to be UNINSTRUMENTED, and that blind spot cost a whole round of
+    -- analysis: a reporter's trail ended in `nav.explore`, which reads as "the radar killed it"
+    -- — but the active adapter was `screen_gameover`, which mutes the nav loop, so BOTH `step()`
+    -- and `explore_tick` had returned at their gates without touching a single engine object.
+    -- The real death window was this prologue (the transition check, then `pad_boost` →
+    -- `Core.boost_missing`, which re-scans missing pools), invisible because the next mark only
+    -- gets written once the adapter sweep starts. Exactly the situation that made `nav.explore`
+    -- its own mark in 2026-07-26 (c): when two candidates share an unmarked window, the fix is a
+    -- mark, not a theory. One memcpy per tick against the ~36 the sweep already writes.
+    Mem.mark("ui.tick")
     -- Transition gate FIRST (pure Lua): during a map switch the adapters' cached
     -- widgets are dying, and even an is_active() probe can be an uncatchable abort.
     -- Drop the active adapter so the post-load screen announces fresh.

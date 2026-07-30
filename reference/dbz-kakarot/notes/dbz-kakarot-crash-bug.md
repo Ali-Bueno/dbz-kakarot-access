@@ -1,5 +1,55 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-29 (e) — THE REPORTER'S TRAIL ARRIVED AND IT EXONERATED THE PRIME SUSPECT. A trail
+> ending in `nav.explore` does NOT mean the radar killed the process — it means the registry
+> PROLOGUE was uninstrumented.** The West City reporter's `crash_trail.bin`, decoded offline with
+> `tools/read-crash-trail.ps1` (its first real use), reads:
+> `ui.is_active screen_gameover → ui.update screen_gameover → guide.update → nav.step →
+> nav.explore`, repeating, **1,250,353 marks**, dying on `nav.explore`.
+>
+> **Three readings, in the order they must be taken.**
+> 1. **The cadence is perfectly regular — 94-109 ms per cycle, not one gap.** So there was NO
+>    `explore_rescan` burst: the game thread was healthy to the last instant. Whatever this is, it
+>    is **not** the 17-scan sweep and not the (d) hang. Two different bugs, one trail apiece.
+> 2. **`screen_gameover` was the committed adapter, updating every tick — the player had DIED**, and
+>    a game over is the game destroying the player pawn and tearing the world down.
+> 3. **And that is exactly what clears the radar.** `screen_gameover` does not set
+>    `nav_mute = false`, and `ui_muted()` is `a.nav_mute ~= false`, so it MUTES the nav loop.
+>    `step()` therefore returned at its UI gate and `explore_tick` at `not Nav.field_ready()`
+>    (= `not Transition.active() and not ui_muted() and world_alive()` — the SAME three gates, a
+>    thing worth checking before blaming explore mode, because the first guess was that
+>    `explore_tick` skipped them). **Neither function touched a single engine object.** The bodies
+>    the (d) entry and the whole adversarial pass were reasoning about did not run.
+>
+> **SO THE MARK IS A BLIND SPOT, NOT A CULPRIT.** `nav.explore` is simply the LAST mark before an
+> uninstrumented stretch: the nav callback returns, and nothing writes another mark until the
+> registry's adapter sweep starts. That window contains the registry prologue — the transition
+> check and `pad_boost()` → **`Core.boost_missing()`, which re-scans every missing pool** — i.e. the
+> one thing in there that touches the object array, running while the world is being torn down.
+> Fixed the instrument, not the theory: `Mem.mark("ui.tick")` at the top of the registry step and
+> `Mem.mark("ui.boost")` immediately before `Core.boost_missing()`. A trail ending in `ui.boost`
+> names the scan; one ending in `ui.tick` names the gate; one still ending in `nav.explore` means
+> the death is in UE4SS's own queue draining and none of our Lua.
+>
+> **THE RULE, and this ledger has now earned it twice (2026-07-26 (c) split `nav.step` from
+> `nav.explore` for the same reason): WHEN TWO CANDIDATES SHARE AN UNMARKED WINDOW, THE DELIVERABLE
+> IS A MARK, NOT A HYPOTHESIS.** A breadcrumb trail is only as sharp as its coarsest gap, and the
+> gap is invisible precisely because nothing wrote to it — so it reads as certainty about whichever
+> subsystem happens to hold the last mark. Before believing a trail, ask what ELSE runs between its
+> final mark and the next one that would have been written. Corollary: a mark's cost is one memcpy;
+> there is no performance argument for leaving a hot prologue uninstrumented.
+>
+> **WHAT THIS DOES TO THE (d) RANKING.** The manual-`target.actor` candidate is not refuted as CODE —
+> the unbounded-lifetime argument stands on its own — but it is **not what this crash was**, because
+> the radar was muted. Do not "fix" West City by acting on it; get the next trail first. The
+> `screen_gameover`-owns-the-screen context is new information nobody had, and it points the next
+> round at what the mod does DURING a death/respawn teardown, not at free roam.
+>
+> **STILL OPEN:** the reporter's `UE4SS.log` (would show the `screen -> screen_gameover` commit, any
+> `partial property set:` / `member gate:` lines, and whether anything faulted), and confirmation
+> that the crash followed a death/game over rather than the game over being a stale claim by an
+> adapter that has a live debug probe in it.
+
 > **2026-07-29 (d) — THE BLACK BOX WAS DECODED OFFLINE FOR THE FIRST TIME, AND IT MEASURED THE
 > EXPLORE SWEEP AT 438 ms IN ONE TICK. The double-R3 "freeze" was an UNBOUNDED hang, not the known
 > stutter: the rescan committed its own "I ran" state AFTER the work, so any fault inside the sweep

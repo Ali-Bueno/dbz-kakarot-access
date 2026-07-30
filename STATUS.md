@@ -39,8 +39,19 @@ touching a handle the last sweep failed to find. Deliberately NOT applied, with 
 pointer (`resume_pick.key` is an ADDRESS — a freed actor can never re-match, and a hand-picked beacon
 going permanently silent is worse than the crash) and displacement-dropping
 `enemy_cache`/`navi_icons` (`navi_icons` is shared substrate for all auto-tracking). Lint clean over
-74 files. **SOURCE-ONLY, UNVERIFIED IN GAME.** Next: verify in game, then cut **v0.1.5** (the hang is
-live in v0.1.4), and ask the reporter for their `crash_trail.bin` — one line in it decides West City.
+74 files. **SOURCE-ONLY, UNVERIFIED IN GAME.**
+**THE REPORTER'S TRAIL THEN ARRIVED AND EXONERATED THE PRIME SUSPECT** (2026-07-29 (e)): it ends in
+`nav.explore` too, but the committed adapter was `screen_gameover` (**the player had DIED**), and
+`screen_gameover` MUTES the nav loop — so `step()` and `explore_tick` both returned at their gates
+having touched no engine object, and the cadence was a flat 94-109 ms with no stall, so no sweep
+either. `nav.explore` is a **BLIND SPOT, not a culprit**: nothing marks the registry PROLOGUE (the
+transition check, then `pad_boost` -> `Core.boost_missing`, which re-scans every missing pool while
+the world tears down). Added `Mem.mark("ui.tick")` + `Mem.mark("ui.boost")` so the next trail is
+decisive. **RULE, earned twice now: when two candidates share an unmarked window the deliverable is a
+MARK, not a hypothesis.** So West City is still open, the manual-`target.actor` candidate is NOT what
+this crash was, and the next round should look at what the mod does during a death/respawn teardown.
+Next: verify in game, cut **v0.1.5** (the (d) hang is live in v0.1.4), and ask the reporter for their
+`UE4SS.log` plus the next `crash_trail.bin`.
 Previous entry: 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
 confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
 the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read
