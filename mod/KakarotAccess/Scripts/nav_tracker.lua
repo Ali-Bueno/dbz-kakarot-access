@@ -1679,7 +1679,17 @@ local function step()
         elseif sweeping then chain_over() else drop_target() end
         return
     end
-    if sweeping then
+    -- A MISSED SCAN IS THE ONE MOMENT NOT TO TOUCH THE HANDLE. `target_missing > 0` means the
+    -- last scan swept the world and did NOT find this actor, which is the strongest evidence
+    -- available that it is being (or has been) freed — and `Core.valid` cannot tell us, because
+    -- `Mem.alive` only rejects unmapped garbage and a recycled address passes every check
+    -- (ledger 2026-07-26 (c): the pre-check logged ZERO rejections all session). So for the
+    -- ≤ LOST_SCANS window before the target is dropped we coast on the last position we
+    -- successfully read instead of dereferencing a handle we have reason to distrust. The
+    -- beacon keeps speaking from cached coordinates for a few seconds rather than going quiet,
+    -- and 1647 still drops the target when the misses reach LOST_SCANS.
+    local coasting = target_missing > 0 and target.lx ~= nil
+    if sweeping and not coasting then
         local hidden, st = false, nil
         -- target.actor is a handle picked minutes ago; the actor can be freed under it.
         pcall(function() hidden = Core.member(target.actor, "bHidden") end)
@@ -1691,7 +1701,16 @@ local function step()
             return
         end
     end
-    local tx, ty, tz = actor_pos(target.actor)
+    local tx, ty, tz
+    if coasting then
+        tx, ty, tz = target.lx, target.ly, target.lz
+    else
+        tx, ty, tz = actor_pos(target.actor)
+        -- Remember every position we DID read: this is what makes coasting possible, and it is
+        -- plain numbers, never a handle — the metadata survives a world change, the pointer
+        -- never does (ledger 2026-07-27, rule 3).
+        if tx then target.lx, target.ly, target.lz = tx, ty, tz end
+    end
     if not tx then
         if sweeping then chain_over() else drop_target() end
         return
@@ -1842,9 +1861,12 @@ local function step()
     -- player is on whenever that zone changes — "behind" = safe approach, "in front"
     -- = it can see you. K2_GetActorRotation is the reflected sibling of the
     -- K2_GetActorLocation call the whole tracker already relies on.
-    if target.grp == "enemies" or target.grp == "hunt" then
+    if (target.grp == "enemies" or target.grp == "hunt") and not coasting then
         local rot
-        -- Method call on the long-lived target handle: re-check the actor first.
+        -- Method call on the long-lived target handle: re-check the actor first. Skipped while
+        -- coasting for the same reason as the position read above — an enemy that a scan just
+        -- stopped finding is an enemy that combat probably destroyed, and this is a UFunction
+        -- call on it, which no pcall can make safe.
         pcall(function()
             if Core.valid(target.actor) then rot = target.actor:K2_GetActorRotation() end
         end)
@@ -1933,6 +1955,22 @@ local function explore_rescan(px, py, pz, ms)
     -- rather than the full 17-class sweep; that changes what explore mode can find, so it wants
     -- a measurement (Ctrl+F5 nav avg/max with explore on) and a deliberate decision first.
     if Core.scan_quiet() then return end
+    -- COMMIT THE ATTEMPT BEFORE DOING THE WORK. These three used to be written at the END,
+    -- which made a fault inside the sweep unbounded: `explore_tick`'s gate treats
+    -- `explore_sx == nil` as "rescan unconditionally" (there is no distance or time floor to
+    -- fall back on), so a catchable Lua error anywhere in `Nav.list_targets` — swallowed by the
+    -- `pcall(explore_tick)` in `Nav.start` — left the state untouched and the whole ~1.2 s
+    -- 17-scan sweep restarted on EVERY 100 ms nav tick, for the rest of the session. That is a
+    -- saturated game thread with no frames and no input: the player's only way out is killing
+    -- the process. Committing first turns that into one stale cycle and a retry in
+    -- EXPLORE_RESCAN_MS. `explore_pois` deliberately stays at its PREVIOUS value on a fault, so
+    -- the cues keep serving the last good list instead of going silent.
+    -- This is the playbook's "commit the edge before any early return" rule (learned on the map
+    -- d-pad handler, 2026-07-28) — the same shape, reached through a fault path instead of a
+    -- bail-out.
+    explore_sx, explore_sy, explore_sz = px, py, pz
+    explore_scan_ms = ms
+    local t0 = os.clock()
     local pois = {}
     for _, cat in ipairs(Nav.list_targets()) do
         for _, it in ipairs(cat.items or {}) do
@@ -1944,8 +1982,22 @@ local function explore_rescan(px, py, pz, ms)
         end
     end
     explore_pois = pois
-    explore_sx, explore_sy, explore_sz = px, py, pz
-    explore_scan_ms = ms
+    -- Cost telemetry. The 17-scan burst was INVISIBLE in the log for its whole life: it takes no
+    -- scan slot and never routes through `Core.timed_findall`, so `__KakarotScanStats` cannot see
+    -- it either, and the only reason we know it is ~0.4-1.2 s is a crash-trail gap measured after
+    -- the fact (2026-07-29: 438 ms between the `nav.explore` mark and the next mark). Logged ONCE
+    -- per session, on the worst sweep so far over the threshold, so a player's log carries the
+    -- number without ever logging per tick.
+    -- Threshold is TICK_MS, not a picked number: a sweep longer than one whole nav tick has by
+    -- definition eaten the tick it ran in plus at least one more, which is the thing worth
+    -- reporting. (No new file-scope local: this file sits at Lua's 200-local ceiling, which is
+    -- also why `Nav.explore_sweep_max` lives on the module table.)
+    local dt = (os.clock() - t0) * 1000
+    if dt > TICK_MS and dt > (Nav.explore_sweep_max or 0) then
+        Nav.explore_sweep_max = dt
+        print(string.format("[KakarotAccess] explore sweep blocked the game thread %.0f ms (%d POIs)\n",
+            dt, #pois))
+    end
 end
 
 local function explore_tick()

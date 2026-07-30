@@ -1,5 +1,97 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-29 (d) — THE BLACK BOX WAS DECODED OFFLINE FOR THE FIRST TIME, AND IT MEASURED THE
+> EXPLORE SWEEP AT 438 ms IN ONE TICK. The double-R3 "freeze" was an UNBOUNDED hang, not the known
+> stutter: the rescan committed its own "I ran" state AFTER the work, so any fault inside the sweep
+> restarted a ~1.2 s 17-scan burst every 100 ms forever.** Two user reports on released v0.1.3:
+> (S1) a crash "just from being in WEST CITY", ordinary free roam; (S2) "activating explore mode with
+> double-R3 hung the game" — **no crash message, had to kill the process**, which is the detail that
+> classified it.
+>
+> **METHOD BREAKTHROUGH, and it is the most reusable thing in this entry: `crash_trail.bin` can be
+> read WITHOUT relaunching the game.** Until now the only reader was `main.lua`'s boot print
+> (2026-07-26 (b)), so getting a trail out of a reporting player meant talking them through a restart,
+> and a second crash overwrote the evidence first. The format is fixed and self-describing
+> (`src/mem_bridge/mem_bridge.c:245-255`: 32-byte header, 128-byte slots at offset 32, ring indexed
+> `(seq-1) % slots`, `seq == 0` = never written), so it decodes from the file alone. Now
+> **`tools/read-crash-trail.ps1`**. The ask to a reporter changed from "reboot and send your next log"
+> to "send this 16 KB file". Use it before theorising — same lesson as READ THE HOST LOG FIRST, one
+> layer down.
+>
+> **WHAT THE TRAIL SAID.** Local session, ring full, last op **`nav.explore`**, and the gaps are the
+> point: `nav.explore` at −0.516 s → next mark 438 ms later. The mark is written BEFORE the call, so
+> those 438 ms were spent *inside* `explore_rescan`, which runs in `ExecuteInGameThread` — i.e. **the
+> first direct measurement of the burst this ledger had only ever estimated at ~68 ms × 17.** That
+> number is what the 2026-07-29 (c) entry said it was waiting for before redesigning the sweep;
+> it no longer needs asking for.
+>
+> **ROOT CAUSE OF S2.** `explore_tick`'s gate is `if explore_sx == nil or (moved far enough AND 4 s
+> elapsed)`, and `explore_rescan` wrote `explore_sx` / `explore_scan_ms` at its END. `explore_sx == nil`
+> therefore means BOTH "never scanned" and "scan unconditionally", with no floor to fall back on — so
+> a fault anywhere in `Nav.list_targets` (a catchable Lua error swallowed by `pcall(explore_tick)`, or
+> a pcall-piercing abort that unwinds the callback) left the state untouched and the **entire ~1.2 s
+> 17-scan sweep re-ran on every 100 ms nav tick for the rest of the session**. Saturated game thread,
+> no frames, no input, no way out but Task Manager — exactly what the user described, and exactly why
+> there is **no UE4 crash dump for it**: a hang never reaches the crash reporter.
+>
+> **THE RULE, and it generalises past input handling: COMMIT THE ATTEMPT BEFORE DOING THE WORK.** The
+> 2026-07-28 map-d-pad entry below states this for input edges ("commit input edges BEFORE any early
+> return"); the same shape kills you when the thing you commit is *"I already did this expensive
+> job"*. Any periodic job whose should-I-run gate is the same state the job writes **on success** will
+> spin at full loop frequency the first time it fails. Corollary worth its own line: **a sentinel that
+> means both "never done" and "do it NOW" has no fallback** — pair the nil case with the same floor
+> the normal case uses, or commit first so the floor always exists. Fixed by committing
+> `explore_sx`/`explore_scan_ms` at the TOP; `explore_pois` deliberately still commits at the end, so
+> a faulting sweep serves the last good list instead of going silent.
+>
+> **THE BURST IS NOW VISIBLE.** It was invisible for its whole life — it takes no scan slot and never
+> routes through `Core.timed_findall`, so `__KakarotScanStats` could not see it either, and the only
+> reason we know the number is a trail gap measured after the fact. `explore_rescan` now logs the
+> worst sweep once per session, thresholded at `TICK_MS` (derived, not picked: a sweep longer than one
+> whole nav tick has by definition eaten the tick it ran in plus another).
+>
+> **S1 (WEST CITY) IS NOT CLOSED, and the honest reasons matter.** A 17-agent adversarial pass (11
+> candidates, 4 survived, 7 refuted) put the manual R3-picked `target.actor` first: in free roam NO
+> gate edge ever fires, so `Nav.release_world_refs` never runs, and `target_missing` is incremented
+> only for NON-manual targets (`elseif target and not target.manual`) — so an auto target is bounded
+> to ≤ `LOST_SCANS`×`SCAN_EVERY` ≈ 4.5 s of exposure while a **manual** pointer is aged by nothing at
+> all and is dereferenced at 10 Hz for as long as the player walks. Two reasons not to declare it:
+> the precondition (did the reporter hand-pick a target?) is **unverified**, and the local trail says
+> `nav.explore`, not `nav.step` — so whatever killed the local session, it was not that path. Applied
+> the one fix that needs no precondition: while `target_missing > 0` the tracker **coasts on the last
+> position it successfully read** instead of touching a handle the last world sweep failed to find
+> (plain numbers on `target.lx/ly/lz`, never a handle — metadata survives a world change, pointers do
+> not). Deliberately NOT applied: dropping the manual pointer by displacement (`resume_pick.key` is an
+> ADDRESS, so a genuinely freed actor can never re-match and `RESUME_TRIES` burns out — a
+> hand-picked beacon going permanently silent is worse for a blind player than the crash it prevents;
+> needs a `grp`+`label` fallback match first), and displacement-dropping `enemy_cache`/`navi_icons`
+> (`navi_icons` is shared substrate for ALL auto-tracking — emptying it makes `best_candidate` lose
+> the marker, `target_missing` climbs, and flying across a city would silence your objective).
+>
+> **AND A CORRECTION TO WHAT v0.1.3 CONTAINS, because it reframes both reports:** v0.1.3 (tagged
+> 07-28) does **not** include `9a7a869` (world-actor release from both gate edges) or `114b980`
+> (partial property-set fails open). Players are running a build missing the two largest crash fixes
+> already in the tree. Note also that neither would have fixed S1 as diagnosed: 9a7a869 acts on gate
+> EDGES and free roam has none, and 114b980 fixes a SILENCE class, not a crash class.
+>
+> **THE SEVEN THAT DIED (do not re-open):** the double-tap/rescue trio (`do_open`'s sweep on the 20 ms
+> pad dispatch burning both gesture windows; a frozen `g_last` making the toggle misfire; the
+> `DOUBLE_RESCUE_TICKS` path double-sweeping); `chain_to_next`'s `list_targets` call; the
+> `quest_objective`/`guide_watch` non-strict multi-candidate fetches (killed by dump evidence plus
+> three shipped releases); and `screen_status`'s `cached_all` on the pad loop. The absent-class scan
+> tax survived only as a HALVED micro-stutter (~8 classes ≈ 115 ms/s) and explains neither symptom —
+> `ABSENT_BACKOFF` is byte-identical in v0.1.1/v0.1.2/v0.1.3, so it cannot be part of a v0.1.3
+> regression and must not travel in the same batch.
+>
+> **STILL OPEN.** (a) Whether the LOCAL session crashed at all: there is no 07-29 dump and a clean
+> quit leaves an identically full ring and an identically truncated log — the trail proves the session
+> ended during a `nav.explore` tick, not that something killed it. (b) The reporter's West City trail,
+> which discriminates `nav.step` (handle-lifetime family) from `nav.explore` (same bug as the hang).
+> (c) The ~1.2 s burst itself: with the hang bounded it is back to being a stutter, and the redesign
+> (slice the 17 classes across ticks, flattening each to plain POIs immediately and swapping the list
+> atomically — NOT `take_scan_slot`, which starves the shared picker) is a deliberate decision still
+> to be taken.
+
 > **2026-07-29 (b) — MULTI-AGENT CRASH SWEEP: ALL 74 LUA FILES + ALL 4 NATIVE BRIDGES AGAINST THE
 > LEDGER'S OWN MECHANISM CATALOGUE, 7 OF 14 CANDIDATES CONFIRMED AND FIXED.** Not driven by a user
 > report: a systematic re-read of every Lua file and every native bridge against the crash mechanisms

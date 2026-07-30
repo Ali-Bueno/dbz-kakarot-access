@@ -4,7 +4,41 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
+**Last updated:** 2026-07-29 (d) — **the double-R3 "freeze" was an UNBOUNDED HANG, now fixed, and the
+crash black box can be read OFFLINE.** Two user reports on released v0.1.3: a crash just walking
+around **West City**, and explore mode (double-R3) **hanging the game with no crash message, needing
+the process killed**. New capability first, because it is the reusable part:
+**`tools/read-crash-trail.ps1`** decodes `crash_trail.bin` without relaunching the game (format is
+fixed at `src/mem_bridge/mem_bridge.c:245-255`), so a reporter sends a 16 KB file instead of being
+talked through a restart. It immediately measured what this ledger had only estimated: last op
+`nav.explore`, and a **438 ms gap between that mark and the next** — the mark is written before the
+call, so that is `explore_rescan` blocking the game thread in ONE tick. ROOT CAUSE of the hang:
+`explore_rescan` wrote `explore_sx`/`explore_scan_ms` at its END, while `explore_tick`'s gate treats
+`explore_sx == nil` as "rescan unconditionally" — so any fault inside `Nav.list_targets` re-ran the
+whole ~1.2 s 17-scan sweep **every 100 ms for the rest of the session** (saturated game thread, no
+frames, no input, no dump — a hang never reaches the crash reporter). Fixed by committing the attempt
+BEFORE the work; `explore_pois` still commits last so a faulting sweep serves the last good list
+instead of going silent. **THE RULE (generalises the 07-28 "commit input edges before any early
+return" past input): any periodic job whose should-I-run gate is the state the job writes ON SUCCESS
+will spin at full loop frequency the first time it fails — and a sentinel meaning both "never done"
+and "do it NOW" has no fallback.** The burst also logs itself now (worst sweep once per session,
+thresholded at `TICK_MS`, derived not picked); it was invisible for its whole life because it takes no
+scan slot and never routes through `timed_findall`, so `__KakarotScanStats` could not see it either.
+West City is **NOT closed**: a 17-agent adversarial pass (11 candidates, 4 survived, 7 refuted) ranks
+the hand-picked `target.actor` first — free roam fires no gate edge so `release_world_refs` never
+runs, and `target_missing` is only incremented for NON-manual targets, so an auto target is bounded to
+~4.5 s while a manual pointer is aged by nothing and dereferenced at 10 Hz indefinitely — but the
+precondition (did the reporter pick a target?) is unverified and the local trail says `nav.explore`,
+not `nav.step`. Applied the fix that needs no precondition: while `target_missing > 0` the tracker
+**coasts on the last position it read** (`target.lx/ly/lz`, plain numbers, never a handle) instead of
+touching a handle the last sweep failed to find. Deliberately NOT applied, with reasons in the
+[crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md): displacement-dropping the manual
+pointer (`resume_pick.key` is an ADDRESS — a freed actor can never re-match, and a hand-picked beacon
+going permanently silent is worse than the crash) and displacement-dropping
+`enemy_cache`/`navi_icons` (`navi_icons` is shared substrate for all auto-tracking). Lint clean over
+74 files. **SOURCE-ONLY, UNVERIFIED IN GAME.** Next: cut a release — v0.1.3 is missing `9a7a869` and
+`114b980` on top of this — and ask the reporter for their `crash_trail.bin`.
+Previous entry: 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
 confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
 the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read
 against the crash ledger's mechanism catalogue, grouped by hot-path risk, every candidate given an
