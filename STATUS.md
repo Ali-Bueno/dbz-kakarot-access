@@ -72,9 +72,27 @@ marks in the whole file** — the dominant blind lane. **CORRECTION to my own tr
 `GetTickCount64` granularity is ~15.6 ms, so trail deltas are quantized; bucket 311679703 holds TWO
 registry ticks and TWO nav ticks, i.e. a queue drain after ~100 ms of serialization, and the fatal
 `battle.step` ran 156 ms after the previous on a 250 ms loop — LATE. Death followed a stall.
-Next: verify in game, cut **v0.1.5** (the (d) hang is live in v0.1.4). West City is STILL unexplained;
-the cheap next diagnostic is raising `MARK_SLOTS` from 64 (~172 ms of history, and one sweeping tick
-burns 44 slots) to 256 (~700 ms, 32 KB) — needs a `mem_bridge.dll` rebuild and a full restart.
+**DONE THE SAME DAY (2026-07-30), both needing a FULL RESTART:**
+(1) **`MARK_SLOTS` 64 → 256** — the black box goes from ~0.21 s of history to ~0.85 s (the mod writes
+~300 marks/s; both reporter trails measured 172 ms end to end, too short to show the tick BEFORE the
+fatal one, which is exactly the tick you want when death follows a stall). `mem_bridge.dll` rebuilt.
+Two things fell out of it: **`MARK_BYTES` was never actually derived** despite its own comment saying
+so — a hardcoded 16384 with an assert checking only "large enough", the same latent class as the
+original 8192-vs-8224 bug, and this change would have tripped it (32 + 256*128 = 32800); it is now the
+expression itself. And **recovery now accepts a SMALLER ring and reads it with its own slot count**,
+because the strict `hdr.slots == MARK_SLOTS` check would have discarded the pending trail on the very
+boot a player upgrades. Reader verified against a synthesized 256-slot file (300 written, 256
+recovered, oldest 44 overwritten, wrap arithmetic correct).
+(2) **The mod now names its build in the first line of the log**, read from the `version.txt`
+`package.ps1` already stages — not a hardcoded constant, which would drift from the tag. A player's log
+did not say which release produced it, and that is not hypothetical: a whole round of this
+investigation was framed against v0.1.3 because the only version evidence was a stale local `git tag`.
+An unpackaged tree prints `dev (unpackaged, no version.txt)`.
+NOTE the game install's `Mods\KakarotAccess\Scripts` is a **junction to the repo**, so builds and Lua
+edits are live there with no deploy step.
+Next: verify in game, cut **v0.1.5** (the (d) hang is live in v0.1.4). **West City is STILL
+unexplained** — the next trail should name it now that `pad.tick`/`core.world` closed the blind lanes
+and the ring covers several full loop cycles either side of the death.
 Previous entry: 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
 confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
 the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read
