@@ -50,8 +50,31 @@ the world tears down). Added `Mem.mark("ui.tick")` + `Mem.mark("ui.boost")` so t
 decisive. **RULE, earned twice now: when two candidates share an unmarked window the deliverable is a
 MARK, not a hypothesis.** So West City is still open, the manual-`target.actor` candidate is NOT what
 this crash was, and the next round should look at what the mod does during a death/respawn teardown.
-Next: verify in game, cut **v0.1.5** (the (d) hang is live in v0.1.4), and ask the reporter for their
-`UE4SS.log` plus the next `crash_trail.bin`.
+**THEN A 14-CANDIDATE PASS ON THE SECOND TRAIL (2026-07-29 (f)) KILLED 9, INCLUDING THE UNIFYING
+THEORY AND THE WHOLE BATTLE_MONITOR LEAD.** Second reporter trail: last mark `battle.step`, free roam,
+no adapter, player collecting pod parts with the R3 picker. 5 survived of 14 — and **4 of the 5 are
+INSTRUMENTATION findings, not crash mechanisms.** Refuted (do not re-open): `ui_directory.roots` and
+`all_cache` serving freed handles (my shared-substrate theory, filed with instructions to attack it),
+all three `battle_monitor` candidates, the teardown-edge gate, `screen_gameover`'s debug probe, and
+`chain_wait.actor` — which looked tailor-made for the pod-parts context and still died.
+**THE ONE REAL DEFECT (process-death) is this ledger's own rule applied to 4 of 6 callers:**
+`valid_memo`/`os_memo` are cleared only by `Core.poll_world` and `Core.begin_scan_tick`, so
+`pad_poll`'s **50 Hz** dispatch and every keybind handler read validity verdicts computed up to
+~100 ms earlier in another loop — **skipping `Mem.alive`, the only guard outside the VM** — while
+`radar_menu`/`config_menu` really do dereference on every R3 edge. Fixed with `Core.drop_memos()`
+called once per pad dispatch (NOT `begin_scan_tick`: that would refill the scan budget 5x faster than
+the wall-clock ceiling). Honest limit: refuters rate it "explains NEITHER trail" — hardening, not the
+proven cause. **STRUCTURAL FINDING: the black box attributes at LOOP-ENTRY granularity** — every loop
+marks its entry then runs an unmarked body, and `begin_scan_tick`/`poll_world` run BEFORE their loop's
+mark. Yesterday's `ui.boost` mark was on inert code (`boost_missing` is 3 lines of Lua arithmetic);
+removed, replaced by `core.world` at the epoch read and **`pad.tick` in `pad_poll`, which had zero
+marks in the whole file** — the dominant blind lane. **CORRECTION to my own trail reading:**
+`GetTickCount64` granularity is ~15.6 ms, so trail deltas are quantized; bucket 311679703 holds TWO
+registry ticks and TWO nav ticks, i.e. a queue drain after ~100 ms of serialization, and the fatal
+`battle.step` ran 156 ms after the previous on a 250 ms loop — LATE. Death followed a stall.
+Next: verify in game, cut **v0.1.5** (the (d) hang is live in v0.1.4). West City is STILL unexplained;
+the cheap next diagnostic is raising `MARK_SLOTS` from 64 (~172 ms of history, and one sweeping tick
+burns 44 slots) to 256 (~700 ms, 32 KB) — needs a `mem_bridge.dll` rebuild and a full restart.
 Previous entry: 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
 confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
 the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read

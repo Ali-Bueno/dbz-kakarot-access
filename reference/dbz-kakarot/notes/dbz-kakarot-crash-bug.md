@@ -1,5 +1,86 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-29 (f) — A 14-CANDIDATE PASS KILLED 9, KILLED THE UNIFYING THEORY, AND KILLED THE
+> BATTLE_MONITOR LEAD. What survived is ONE real defect and the discovery that THE BLACK BOX
+> ATTRIBUTES AT LOOP-ENTRY GRANULARITY — every poll loop writes one mark and then runs an entirely
+> unmarked body.** Driven by the second reporter trail (last mark `battle.step`, free roam, no
+> adapter active, player collecting pod parts with the R3 picker). Three lenses, 14 candidates, an
+> independent adversarial refuter each: **5 survived, 9 died.**
+>
+> **THE UNIFYING THEORY WAS WRONG, and it was mine.** The lead hypothesis — that the two trails end
+> in different subsystems because shared substrate (`all_cache` / `ui_directory.roots`) serves freed
+> handles, so whichever loop touches it next dies — was filed with an explicit instruction to attack
+> it. Both candidates built on it (`ui_directory.roots` flushed only on Transition; `all_cache`
+> serving a partially-freed pool for 30 s) were **REFUTED**. So were all three `battle_monitor`
+> candidates, including the one that looked strongest on inspection (`step()` gates on
+> `Transition.active()` ONLY — no UI gate, no world gate, unlike `nav_tracker.step()`). Recorded so
+> nobody re-opens them: a random-subsystem crash fingerprint does NOT by itself imply shared
+> substrate.
+>
+> **THE ONE REAL DEFECT (severity: process-death) — AND IT IS THIS LEDGER'S OWN RULE APPLIED TO 4 OF
+> 6 CALLERS.** `Core.valid`/`Core.on_screen` verdicts are memoized in `valid_memo`/`os_memo`, cleared
+> in exactly two places (`Core.poll_world`, `Core.begin_scan_tick`) reached from four loops (registry,
+> nav, battle_monitor, quest_objective). **`pad_poll`'s 50 Hz game-thread dispatch clears NEITHER, and
+> neither does any keybind handler.** `begin_scan_tick`'s own comment states the invariant — *"a
+> validity verdict that outlives its tick is exactly the dangling-handle bug these guards exist to
+> prevent"* — and the mod's fastest loop violates it. Those contexts do reach dereferences:
+> `radar_menu` and `config_menu` call `Nav.field_ready()` → `world_alive()` on every R3 edge and every
+> 20 ms while their overlay is open, and `do_open` runs the whole target sweep. So a `Core.valid`
+> there could be answered from a verdict another loop computed up to ~100 ms earlier, **skipping
+> `Mem.alive` — the only guard that runs outside the scripting VM** — on exactly the handles streaming
+> is most likely to have freed. The 2026-07-26 entry below wrote the rule (*"A PER-TICK CACHE IS ONLY
+> PER-TICK FOR THE LOOPS THAT CLEAR IT — enumerate the callers before you add one"*) and did the
+> enumeration for the four slow loops only. **Fixed:** `Core.drop_memos()` (the invariant now lives in
+> one place, used by both original sites) called once per `pad_poll` dispatch. Deliberately NOT
+> `begin_scan_tick` there — that would refill the scan budget 5× faster than the wall-clock ceiling
+> allows, which is the "a scan slot is not a rate limit" bug. The cost is correct by construction: a
+> stepper that early-outs never reads the memo, so clearing costs two table allocations; the full
+> `Mem.alive`+`IsValid` cost is paid only when a stepper IS doing engine work, which is exactly when a
+> fresh verdict is wanted. **Honest limit: the refuters rated this "explains NEITHER trail"** — in the
+> states both trails caught, the steppers early-out. It is evidence-motivated hardening, not the
+> proven cause.
+>
+> **THE STRUCTURAL FINDING, worth more than any single candidate: EVERY POLL LOOP MARKS ITS ENTRY AND
+> THEN RUNS BLIND.** `Core.begin_scan_tick()` is called from `Core.loop` BEFORE `pcall(step)`, so it
+> precedes ui_registry's own `ui.tick`; `Core.poll_world` likewise precedes `nav.step`. Both do real
+> work — `begin_scan_tick` runs `service_watches()` → `cached_all` → `FindAllOf`, and `poll_world`
+> does `Core.valid(roots.gi)` → `gi:GetWorld()` → `Core.valid(w)`. So a trail blames whichever loop
+> last wrote a mark, not the code that ran after it. **And yesterday's (e) fix was on the wrong side
+> of the danger:** `ui.boost` marked `Core.boost_missing`, which is three lines of pure Lua arithmetic
+> (verified at `ui_core.lua:1038-1042`) — inert code, costing ring capacity and pointing the next
+> investigation at the wrong place. Corrected: `ui.boost` removed with the reason in-comment,
+> `core.world` added at the epoch read (the prologue's one genuine dereference, and NOT at
+> `begin_scan_tick`, which has six call sites the 64-slot ring cannot afford), and **`pad.tick` added
+> to `pad_poll` — a 50 Hz engine-touching loop that had zero marks in the whole file**, i.e. the
+> dominant blind lane, five times more frequent than anything instrumented.
+>
+> **AND A CORRECTION TO HOW I READ TRAIL 2, because it inverts the reading.** I described it as a flat
+> regular cadence with no stall. It is not. `GetTickCount64` granularity is ~15.6 ms
+> (`mem_bridge.c:253,293`) so every delta in a trail is quantized — reading 93/63 ms as precision is
+> reading the clock's resolution as data. Bucket 311679703 contains the tail of one sweep, a nav tick,
+> `battle.step`, `quest.step`, **a COMPLETE second 44-adapter sweep**, and a second nav tick: two
+> 100 ms registry ticks and two 100 ms nav ticks inside ONE 15.6 ms bucket. That is a **queue drain
+> after ~100 ms of game-thread serialization**, and the fatal `battle.step` is the first battle tick
+> after it — 156 ms after the previous one on a 250 ms loop, i.e. it ran LATE. So death followed a
+> stall, matching the 2026-07-24 "huge lag spike, then crash" report. What the trail CANNOT say is
+> whether the stall was engine-side (GC/streaming) or ours (one ~65 ms `timed_findall` serializes
+> everything behind it) — `__KakarotStepStats`/`__KakarotBattleStats` would answer it and are
+> runtime-only, absent from a player's log.
+>
+> **NEXT DIAGNOSTIC STEP, and it is cheap: RAISE `MARK_SLOTS`.** 64 slots is ~172 ms of history and a
+> single sweeping tick burns 44 of them, so the ring cannot show the tick BEFORE the fatal one. 256
+> slots is 32 KB and ~700 ms. Requires rebuilding `mem_bridge.dll` and a full restart, so it is a
+> deliberate decision, not a drive-by.
+>
+> **THE SEVEN... nine THAT DIED (do not re-open):** `battle_monitor` widget-only UFunctions on the
+> HUD pointer; `first_on_screen` falling back to a full `FindAllOf` when the hud root is stale;
+> per-level `hud`/`bm` roots released only by a Transition; `ui_directory.roots` as the
+> highest-fan-out stale pointer; `Directory.world_epoch` dereferencing the UWorld it just fetched;
+> `all_cache` serving a partially-freed pool for 30 s; the transition gate never arming on the
+> TEARDOWN edge; `screen_gameover`'s shipped debug probe making five raw member calls per instance per
+> tick; and `chain_wait.actor` dereferenced at 10 Hz with no aging (the collectible-sweep candidate,
+> which looked tailor-made for "he was collecting pod parts" and still died).
+
 > **2026-07-29 (e) — THE REPORTER'S TRAIL ARRIVED AND IT EXONERATED THE PRIME SUSPECT. A trail
 > ending in `nav.explore` does NOT mean the radar killed the process — it means the registry
 > PROLOGUE was uninstrumented.** The West City reporter's `crash_trail.bin`, decoded offline with

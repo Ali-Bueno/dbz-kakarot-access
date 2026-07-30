@@ -127,10 +127,14 @@ local function pad_boost()
     if active ~= nil and not active.scan_quiet
         and (fresh & BOOST_BTNS) ~= 0 and tick_n >= boost_cool then
         boost_cool = tick_n + BOOST_COOLDOWN
-        -- Marked separately from `ui.tick`: this is the only part of the prologue that touches
-        -- the object array (it re-scans every missing pool), so it is the part that can die.
-        -- A trail ending in `ui.boost` instead of `ui.tick` names the scan, not the gate.
-        Mem.mark("ui.boost")
+        -- NOT marked, and the reason is worth keeping: a mark was added here on 2026-07-29 (e) on
+        -- the theory that this was the prologue's dangerous part. It is not — `Core.boost_missing`
+        -- is three lines of pure Lua arithmetic (ui_core.lua:1038-1042) that only widen a time
+        -- window; the FindAllOf it eventually permits happens inside `Core.cached_all`, called from
+        -- adapter probes, every one of which `probe()` already marks. Marking inert code costs ring
+        -- capacity (64 slots, ~172 ms of history) and, worse, points the next investigation at the
+        -- wrong place. The prologue's one real dereference is the world-epoch read, marked
+        -- `core.world` in `Core.poll_world`.
         Core.boost_missing()
     end
 end

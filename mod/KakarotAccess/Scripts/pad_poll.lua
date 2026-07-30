@@ -11,6 +11,9 @@
 -- generation so the stale loop retires itself, and `busy` is cleared on ENTRY so an
 -- uncatchable C++ abort in a stepper can never silence the pad for the session.
 
+local Core = require("ui_core")   -- Core.drop_memos only (see the dispatch below)
+local Mem = require("mem")        -- crash black box only (Mem.mark)
+
 local Poll = {}
 
 local TICK_MS = 20
@@ -60,6 +63,28 @@ function Poll.start()
             busy = true
             ExecuteInGameThread(function()
                 busy = false
+                -- ONE breadcrumb for the whole dispatch, and the memo drop this loop never did.
+                --
+                -- The mark: this was the mod's biggest instrumentation blind spot — a 50 Hz
+                -- game-thread loop, five times more frequent than any marked loop, whose steppers
+                -- reach real dereferences (radar_menu's R3 picker and config_menu both call
+                -- Nav.field_ready() -> world_alive() on every edge and every tick while open, and
+                -- do_open runs the whole target sweep). A death in here was attributed to whichever
+                -- slow loop had written the last mark. ONE mark per dispatch, not one per stepper:
+                -- the ring is 64 slots (~172 ms), so four marks per 20 ms would consume it.
+                --
+                -- The memo drop: `Core.valid`/`Core.on_screen` verdicts are memoized in tables that
+                -- ONLY `Core.poll_world` and `Core.begin_scan_tick` clear — neither of which this
+                -- loop calls, deliberately (calling begin_scan_tick here would refill the scan
+                -- budget 5x faster than the wall-clock ceiling allows, which is the 2026-07-26
+                -- "a scan slot is not a rate limit" bug). So without this, a stepper's `Core.valid`
+                -- could be answered from a verdict computed up to ~100 ms earlier in another loop,
+                -- skipping `Mem.alive` — the only guard that runs outside the scripting VM — on
+                -- exactly the handles streaming is most likely to have freed. Dropping the memos
+                -- costs two empty tables and is strictly fail-safe: the worst case is that a
+                -- stepper re-computes a verdict it could have reused.
+                Mem.mark("pad.tick")
+                Core.drop_memos()
                 for name, s in pairs(steppers) do
                     local ok, err = pcall(s.fn)
                     if not ok then

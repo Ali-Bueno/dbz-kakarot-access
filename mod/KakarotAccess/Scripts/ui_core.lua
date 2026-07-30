@@ -871,12 +871,37 @@ function Core.poll_world()
     -- "valid" is not a cheap answer, it is the dangling-handle bug with extra steps.
     -- Cost of clearing twice per registry tick: two empty tables. The sweep runs after this call,
     -- so it still gets the full benefit of the memo.
-    os_memo = {}
-    valid_memo = {}
+    Core.drop_memos()
     local d = dir_mod()
     if not d then return end
+    -- BLACK-BOX MARK (2026-07-29 (f)). This epoch read is the shared prologue's ONE genuine engine
+    -- dereference — `world_epoch` does `Core.valid(roots.gi)`, `gi:GetWorld()`, then `Core.valid(w)`
+    -- — and it was invisible: `Core.poll_world` runs from Core.loop BEFORE `pcall(step)`, so it
+    -- precedes ui_registry's own `ui.tick`, and nav_tracker calls it before writing `nav.step`.
+    -- A trail therefore blamed whichever loop had last written a mark. Marked here rather than at
+    -- the top of `Core.begin_scan_tick` on purpose: that has SIX call sites and the ring is only
+    -- 64 slots (~172 ms of history), so marking it would cost more history than it buys.
+    Mem.mark("core.world")
     local ok, e = pcall(d.world_epoch)
     if ok then Transition.note_epoch(e) end
+end
+
+-- Drop the per-CALL correctness memos. Split out of the two loops that already did it inline
+-- (Core.poll_world and Core.begin_scan_tick) because a THIRD context needs it and the invariant
+-- must live in one place: `begin_scan_tick`'s own comment says a validity verdict that outlives
+-- its tick IS the dangling-handle bug, and that only holds for the loops that actually clear.
+--
+-- The 2026-07-26 rule reads "A PER-TICK CACHE IS ONLY PER-TICK FOR THE LOOPS THAT CLEAR IT —
+-- enumerate the callers before you add one." That enumeration was done for the four 100-300 ms
+-- loops (registry, nav via poll_world, battle_monitor, quest_objective) and MISSED the two
+-- contexts that clear neither: `pad_poll`'s 50 Hz game-thread dispatch and the keybind handlers.
+-- Both reach real dereferences — radar_menu and config_menu call Nav.field_ready() → world_alive()
+-- on every R3 edge and every 20 ms while their overlay is open — so `Core.valid` there could be
+-- answered from a verdict another loop computed up to ~100 ms earlier, which SKIPS `Mem.alive`,
+-- the only guard that runs outside the scripting VM. Two empty tables; cheaper than one IsValid.
+function Core.drop_memos()
+    os_memo = {}
+    valid_memo = {}
 end
 
 function Core.begin_scan_tick()
@@ -892,8 +917,7 @@ function Core.begin_scan_tick()
     -- still be dropped every time, or a caller could read a verdict computed for a previous
     -- tick — and a validity verdict that outlives its tick is exactly the dangling-handle bug
     -- these guards exist to prevent.
-    os_memo = {}
-    valid_memo = {}
+    Core.drop_memos()
     -- Stamp the game thread's id once (this runs inside ExecuteInGameThread, so it IS the game
     -- thread). Kept now that the mod registers NO construction notify at all (2026-07-25): it is
     -- the reference any future callback must check itself against, so we can never again ASSUME
