@@ -17,7 +17,30 @@ local Settings = require("settings")
 local Build = require("build_flags")
 
 local MOD = "KakarotAccess"
-print("[" .. MOD .. "] Lua loading...\n")
+
+-- Our own directory, derived from this file's own path. Used for version.txt and for the crash
+-- black box below, so the two can never disagree about where the mod lives.
+local MOD_DIR = (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]")) or "."
+
+-- NAME THE BUILD IN THE FIRST LINE OF THE LOG (2026-07-29 (e)). A player's UE4SS.log did not say
+-- which release produced it, so classifying a crash report meant guessing — and guessing wrong is
+-- not hypothetical: an entire round of this investigation was framed against v0.1.3 when the
+-- reporter was on v0.1.4, because the only version evidence available was a local git tag that
+-- happened to be stale. NOT a hardcoded constant (which would drift from the tag the moment someone
+-- forgot to bump it): `package.ps1` already writes `version.txt` into the staged mod as the single
+-- source of truth for what was shipped, so we read that. An unpackaged working tree has no
+-- version.txt and says so, which is itself the useful answer — it means "this is not a release".
+print("[" .. MOD .. "] Lua loading, build " .. (function()
+    local ok, v = pcall(function()
+        local f = io.open(MOD_DIR .. "\\version.txt", "r")
+        if not f then return nil end
+        local s = f:read("*a")
+        f:close()
+        return s and s:gsub("%s+$", "")
+    end)
+    if ok and v and v ~= "" then return v end
+    return "dev (unpackaged, no version.txt)"
+end)() .. "\n")
 
 Speech.init()
 -- Native memory reader (mem_bridge.dll) for the non-reflected menu selection indices.
@@ -29,9 +52,7 @@ Mem.init()
 -- these lines are the last things the mod did, and they are the evidence no crash dump and no
 -- Lua traceback could give us. Printed into UE4SS.log so a player's log carries it too.
 pcall(function()
-    local src = debug.getinfo(1, "S").source:sub(2)
-    local dir = src:match("^(.*)[/\\]") or "."
-    local trail = Mem.mark_open(dir .. "\\crash_trail.bin")
+    local trail = Mem.mark_open(MOD_DIR .. "\\crash_trail.bin")
     if not trail then
         print("[" .. MOD .. "] crash trail unavailable (mem_bridge too old or file locked)\n")
     elseif #trail == 0 then
