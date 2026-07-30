@@ -5,9 +5,12 @@
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
 **Last updated:** 2026-07-29 (d) — **the double-R3 "freeze" was an UNBOUNDED HANG, now fixed, and the
-crash black box can be read OFFLINE.** Two user reports on released v0.1.3: a crash just walking
+crash black box can be read OFFLINE.** Two user reports: a crash just walking
 around **West City**, and explore mode (double-R3) **hanging the game with no crash message, needing
-the process killed**. New capability first, because it is the reusable part:
+the process killed**. Current release is **v0.1.4** (`cb4a30f`, 07-29 15:23Z) and it already contains
+`9a7a869` + `114b980`; the trail session below ran at 16:10Z, i.e. **on v0.1.4 code**, so the hang is
+live for every player and needs a v0.1.5. (Check `gh release list` / `git ls-remote --tags`, not the
+local tag list — a stale local `git tag` produced a wrong reading of this episode first time round.) New capability first, because it is the reusable part:
 **`tools/read-crash-trail.ps1`** decodes `crash_trail.bin` without relaunching the game (format is
 fixed at `src/mem_bridge/mem_bridge.c:245-255`), so a reporter sends a 16 KB file instead of being
 talked through a restart. It immediately measured what this ledger had only estimated: last op
@@ -36,8 +39,8 @@ touching a handle the last sweep failed to find. Deliberately NOT applied, with 
 pointer (`resume_pick.key` is an ADDRESS — a freed actor can never re-match, and a hand-picked beacon
 going permanently silent is worse than the crash) and displacement-dropping
 `enemy_cache`/`navi_icons` (`navi_icons` is shared substrate for all auto-tracking). Lint clean over
-74 files. **SOURCE-ONLY, UNVERIFIED IN GAME.** Next: cut a release — v0.1.3 is missing `9a7a869` and
-`114b980` on top of this — and ask the reporter for their `crash_trail.bin`.
+74 files. **SOURCE-ONLY, UNVERIFIED IN GAME.** Next: verify in game, then cut **v0.1.5** (the hang is
+live in v0.1.4), and ask the reporter for their `crash_trail.bin` — one line in it decides West City.
 Previous entry: 2026-07-29 (c) — **full-codebase crash sweep, second pass: 14 candidates, 7
 confirmed, 7 killed by refutation — all 7 fixed, SOURCE-ONLY and UNVERIFIED IN GAME.** Prompted by
 the user still hitting random crashes on v0.1.3. All 74 Lua files + the 4 native bridges re-read

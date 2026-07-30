@@ -3,7 +3,7 @@
 > **2026-07-29 (d) — THE BLACK BOX WAS DECODED OFFLINE FOR THE FIRST TIME, AND IT MEASURED THE
 > EXPLORE SWEEP AT 438 ms IN ONE TICK. The double-R3 "freeze" was an UNBOUNDED hang, not the known
 > stutter: the rescan committed its own "I ran" state AFTER the work, so any fault inside the sweep
-> restarted a ~1.2 s 17-scan burst every 100 ms forever.** Two user reports on released v0.1.3:
+> restarted a ~1.2 s 17-scan burst every 100 ms forever.** Two user reports:
 > (S1) a crash "just from being in WEST CITY", ordinary free roam; (S2) "activating explore mode with
 > double-R3 hung the game" — **no crash message, had to kill the process**, which is the detail that
 > classified it.
@@ -68,11 +68,20 @@
 > (`navi_icons` is shared substrate for ALL auto-tracking — emptying it makes `best_candidate` lose
 > the marker, `target_missing` climbs, and flying across a city would silence your objective).
 >
-> **AND A CORRECTION TO WHAT v0.1.3 CONTAINS, because it reframes both reports:** v0.1.3 (tagged
-> 07-28) does **not** include `9a7a869` (world-actor release from both gate edges) or `114b980`
-> (partial property-set fails open). Players are running a build missing the two largest crash fixes
-> already in the tree. Note also that neither would have fixed S1 as diagnosed: 9a7a869 acts on gate
-> EDGES and free roam has none, and 114b980 fixes a SILENCE class, not a crash class.
+> **VERSION FACTS, checked against the REMOTE and not the local tag list — a local `git tag` was
+> four commits stale and produced a wrong reading of this whole episode first time round.**
+> **v0.1.4** is the current release (tag `cb4a30f`, published 2026-07-29 15:23Z) and it DOES contain
+> `9a7a869`, `114b980`, `a785abb`, `5d1963f`, `cb4a30f`. So "players are missing the two big crash
+> fixes" is FALSE — they have them. Two consequences that matter more than the correction itself:
+> (a) **the local trail session ran at 16:10Z, i.e. on v0.1.4 code**, so the 438 ms sweep and the
+> `nav.explore` death were measured on the SHIPPED build, not on something already superseded — the
+> `Core.scan_quiet()` guard that landed in v0.1.4 does not prevent either, because the hang lives in
+> the ORDER of the state commits, not in the guard; and (b) the hang is therefore live for every
+> player right now and needs a v0.1.5. Note neither of those two fixes would have addressed S1 as
+> diagnosed anyway: `9a7a869` acts on gate EDGES and free roam has none, and `114b980` fixes a
+> SILENCE class, not a crash class — the adversarial pass read the current tree (which includes both)
+> and reached that conclusion independently of the version question. **Check `git ls-remote --tags` /
+> `gh release list`, never the local tag list, before reasoning about what players are running.**
 >
 > **THE SEVEN THAT DIED (do not re-open):** the double-tap/rescue trio (`do_open`'s sweep on the 20 ms
 > pad dispatch burning both gesture windows; a frozen `g_last` making the toggle misfire; the
