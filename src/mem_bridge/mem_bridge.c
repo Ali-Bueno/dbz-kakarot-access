@@ -239,7 +239,16 @@ static int l_thread_id(lua_State *L) {
  */
 #define MARK_MAGIC    0x314B414Bu    /* "KAK1" */
 #define MARK_VERSION  1u
-#define MARK_SLOTS    64u            /* ~180 ms of trail at the busiest marking rate */
+/* Raised 64 -> 256 on 2026-07-30, from a measurement rather than a feeling. The mod writes ~300
+ * marks/s in steady free roam (a sweeping registry tick alone burns ~44 on `ui.is_active`, plus
+ * ui.tick/ui.update/guide/nav.step/nav.explore/battle/quest, ~40 `core.world` from poll_world's two
+ * call paths, and 50 `pad.tick`). At 64 slots that is ~0.21 s of history — and the real reporter
+ * trails confirmed it exactly: 172 ms end to end. That is too short to show the tick BEFORE the
+ * fatal one, which is the tick you actually want when a crash follows a stall. 256 slots gives
+ * ~0.85 s for 32 KB of memory-mapped file, i.e. several full loop cycles either side of the death.
+ * NOTE the boot print dumps the whole ring into UE4SS.log, so a player's log now carries up to 256
+ * trail lines instead of 64. That is the point of it, but it is why this is not raised further. */
+#define MARK_SLOTS    256u
 #define MARK_TEXT     112u
 
 typedef struct {
@@ -260,7 +269,13 @@ typedef struct {
  * boot, on every launch. Caught only because the black box was tested standalone (kill the
  * writer with TerminateProcess, recover from a second process) instead of being shipped on the
  * strength of compiling. Hence the size is DERIVED and a compile-time assert enforces it. */
-#define MARK_BYTES    16384u
+/* DERIVED, not a round number that happens to be big enough. The comment above has always said the
+ * size is derived; it was not — it was a hardcoded 16384 with an assert checking it was merely
+ * large ENOUGH, which is the same class of latent bug as the original 8192 (it would have silently
+ * tolerated a slot-count change right up until it did not). Raising MARK_SLOTS to 256 would have
+ * overflowed it: 32 + 256*128 = 32800 > 16384. Now the expression IS the definition, so the two can
+ * never disagree, and the assert below stays as a guard against anyone re-hardcoding it. */
+#define MARK_BYTES    ((uint32_t)(sizeof(MarkHeader) + MARK_SLOTS * sizeof(MarkSlot)))
 typedef char mark_size_check[(sizeof(MarkHeader) + MARK_SLOTS * sizeof(MarkSlot) <= MARK_BYTES) ? 1 : -1];
 
 static HANDLE     g_mark_file = NULL;
@@ -346,13 +361,20 @@ static int l_mark_open(lua_State *L) {
     haveHdr = safe_copy(&hdr, h, sizeof(hdr));
     lua_newtable(L);
     int n = 0;
+    /* Accept a SMALLER ring than we now build, and read it with ITS OWN slot count. The layout of a
+     * slot never changed, only how many there are, so a trail written by the 64-slot build stays
+     * perfectly readable — and refusing it would throw away the one piece of evidence this whole
+     * component exists to preserve, at exactly the moment a player upgrades. (Slots past the old
+     * file's end read as zeroes: CreateFileMapping extends the file to the new size, and a zero
+     * `seq` is already skipped below as "never written".) A LARGER ring than ours is refused: the
+     * indexing would be wrong and a wrong trail is worse than none. */
     if (haveHdr && hdr.magic == MARK_MAGIC && hdr.version == MARK_VERSION &&
-        hdr.slots == MARK_SLOTS && hdr.text_size == MARK_TEXT) {
+        hdr.slots > 0 && hdr.slots <= MARK_SLOTS && hdr.text_size == MARK_TEXT) {
         uint64_t total = hdr.seq;
-        uint64_t first = (total > MARK_SLOTS) ? (total - MARK_SLOTS) : 0;
+        uint64_t first = (total > hdr.slots) ? (total - hdr.slots) : 0;
         for (uint64_t i = first; i < total; i++) {
             MarkSlot sl;
-            if (!safe_copy(&sl, &s[i % MARK_SLOTS], sizeof(sl))) break;
+            if (!safe_copy(&sl, &s[i % hdr.slots], sizeof(sl))) break;
             if (sl.seq == 0) continue;
             sl.text[MARK_TEXT - 1] = '\0';
             lua_pushfstring(L, "%d\t%s", (int)(sl.tick_ms & 0x7fffffff), sl.text);
