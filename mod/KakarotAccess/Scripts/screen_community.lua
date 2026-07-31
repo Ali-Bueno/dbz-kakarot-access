@@ -49,6 +49,12 @@ local Commu = {}
 -- story-tutorial replay — dump_state is the ground truth (mode/sub/hovered/cache).
 -- Turn OFF once the tutorial pass is verified.
 local DEBUG = false
+-- The CLAIM trace alone (see the block near the end of is_active). Split out of DEBUG on
+-- 2026-07-31 because DEBUG also turns on dump_cursor_hunt/dump_state, which WRITE FILES —
+-- far too heavy to ask a player to run. This one is a single deduped line per claim-state
+-- change, and it is the whole diagnosis for "the community board went silent": board_rej
+-- already distinguishes not-found / frame-invalid / frame-offscreen / no-mode / ghost-mode.
+local CLAIM_DEBUG = true
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -686,15 +692,30 @@ local function maintain_wait()
     end
 end
 
--- Board mode-machine values under which the BOARD genuinely owns input (Ghidra
--- FUN_1414c7de0): 7 free-cursor browse, 9 detail, 12/13/14/17 tutorial-popup waits,
--- 16 link-bonus demo. 10 = the grid handoff (handled separately). Anything else
--- (5 observed on close; a freshly created hidden pane) is a PARKED board — without
--- this gate the ghost board shadowed the menu-opened EMBLEMAS DE ALMA grid: it read
--- the board summary on entry and the grid reader never ran (user + screenshot 98 +
--- Ctrl+F5, 2026-07-15 night).
-local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true, [13] = true,
-                           [14] = true, [16] = true, [17] = true }
+-- Board mode-machine values under which the BOARD genuinely owns the SCREEN (Ghidra
+-- FUN_1414c7de0 plus the step dispatcher FUN_1414d6380): 7 free-cursor browse, 9 detail,
+-- 12/13/14/17 tutorial-popup waits, 16 link-bonus demo. 10 = the grid handoff (handled
+-- separately). Anything else is a PARKED board — without this gate the ghost board
+-- shadowed the menu-opened EMBLEMAS DE ALMA grid: it read the board summary on entry and
+-- the grid reader never ran (user + screenshot 98 + Ctrl+F5, 2026-07-15 night).
+--
+-- 2 ADDED 2026-07-31, from a user report the claim trace caught live: the board was on
+-- screen and the mod refused it as `ghost-mode=2` until a button press moved it to 7.
+-- Ghidra says 2 is the LAST STAGE OF EVERY OPENING — frame built, root set visible
+-- (step 8 in FUN_1414d6380), waiting on the community manager's two-pane rendezvous
+-- (FUN_141504c30 -> FUN_1414fc090) which then binds the input handlers (FUN_1414c8a40)
+-- and writes 7. So the board owns the screen at 2; only the CURSOR is not bound yet, and
+-- board_update already gates just the hover read on mode 7 while the header, title and
+-- entry summary do not depend on it — so this claims with something to say rather than
+-- holding the tick in silence. No route back to the 2026-07-15 ghost: a parked board sits
+-- at 0 or 5, and 2 is only ever written during an active open.
+--
+-- NOT adding 3 (the tutorial-flow twin) on this evidence: the same analysis describes it
+-- as the counterpart of 1, which is the frame still CONSTRUCTING and deliberately absent
+-- here, and it has never once been observed. This set comes from the game's own state
+-- machine; a wrong entry re-opens a bug that cost a session.
+local BOARD_LIVE_MODES = { [2] = true, [7] = true, [9] = true, [12] = true,
+                           [13] = true, [14] = true, [16] = true, [17] = true }
 
 function Commu.is_active()
     tick = tick + 1
@@ -826,8 +847,8 @@ function Commu.is_active()
     end
     -- TEMP trace (2026-07-16 tutorial regression): one log line per CLAIM-state
     -- change — which sub-mode owns the tick and the board's native mode. Names the
-    -- shadower if the board isn't the one reading. Turn OFF with DEBUG.
-    if DEBUG then
+    -- shadower if the board isn't the one reading. Turn OFF with CLAIM_DEBUG.
+    if CLAIM_DEBUG then
         local sig = string.format("claim=%s det=%s board=%s grid=%s mode_v=%s rej=%s",
             tostring(m), tostring(det ~= nil), tostring(board ~= nil),
             tostring(grid ~= nil),

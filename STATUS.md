@@ -4,6 +4,208 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
+**Last updated:** 2026-07-31 (b) — **THE PICKER'S PAD LEAK, AND THE COMMUNITY BOARD TRACED TO THE
+AUDIT ITSELF.** Two user reports. Everything below is SOURCE-ONLY and UNVERIFIED IN GAME, but it is
+Lua-only: the bridges are already built and deployed (all four DLLs newer than their sources), so a
+plain restart is enough.
+
+**1. The radar/config pad leak** (user: *"al presionar L1 para cambiar de categoría empieza a sentir
+el ki y al pulsar X para confirmar un objetivo empieza a saltar… ocurre a veces, no siempre"*).
+The pad block is a 1 s LEASE that only `poll()` renews, and renewal deliberately cannot resurrect an
+expired one — yet both pad menus asserted it exactly ONCE, in `do_open`. Any gap over a second in the
+20 ms dispatch (a streaming level, a long speech call) killed the lease with the menu still open, and
+from then on every button reached the game. Both menus now RE-ASSERT every tick; `Input.block(true)`
+writes the deadline unconditionally (`input_bridge.c:474`), so re-asserting genuinely re-arms.
+`blocked` is set alongside it, or a keyboard-opened picker leaves the Transition teardown unable to
+release. **The morning's own anti-lockout fix was a SECOND cause**: a flat 2 s drain deadline forced
+the release regardless of pad state, so a button still held at the deadline was handed straight to
+the game — the anti-lockout *caused* the jump. Replaced by a stuck-detector whose deadline restarts
+on every CHANGE of the button bitmask (a stuck button reports a constant mask; a pad in use never
+does), triggers excluded because they jitter. `REL_TH` 25 → 30 to match XInput's own threshold.
+
+**2. The community board went silent — and the cause was the audit's own resolver fix.** `bb1c85e`
+repaired `is_userwidget`'s boot-miss latch, and that turned ON, for the first time in the mod's
+entire shipped history, the `IsInViewport() == false` rejection at the tail of `Core.on_screen`
+(`ui_core.lua:639`, root-only) — the predicate `screen_community` reaches ALL THREE of its hosts
+through. It shipped with no log at all, which is why the screen went quiet with nothing to grep.
+**`Core.VIEWPORT_GATE` now defaults FALSE** — that is the behaviour of every release the player has
+ever run — and the rejection LOGS in both modes, so a session's play is the evidence for turning it
+back on. `screen_community`'s claim trace (`board_rej` already distinguishes
+`not-found`/`frame-invalid`/`frame-offscreen`/`no-mode`/`ghost-mode=N`) was split out of `DEBUG`
+into `CLAIM_DEBUG`, because `DEBUG` also enables two dumps that WRITE FILES. **THE RULE: fixing a
+resolver can silently ENABLE a gate that had never once run. A dead branch coming back to life is a
+behaviour change, not a bug fix — ship it with a log and a switch, or it is indistinguishable from a
+new bug in whatever it gates.**
+
+**3. Ki-sense (LB) classification, source-verified** — from a tutorial the user quoted. The colour is
+`UKiSearchComponent.HighlightObjectType` (`AT.hpp:41709`), enum `EHighlightObjectType`
+(`AT_enums.hpp:6118`): `None, Animal, RareAnimal, Tree, Pier, MiningPoint, LevelLimit, Enemy,
+TrainingPoint, Memories`. Yellow = Animal+Tree, red = RareAnimal, purple = MiningPoint, plus five the
+tutorial never mentions. **Coverage is already complete**: `AAccessPointBase → AAccessPointItemBase →
+{ChestAccessPoint, MineralMiningPointNormal→{Rare, WideUseBreakablePoint},
+PlacementObjectInfo→{Recyclable}, TreasureAccessPoint→InsectAccessPoint}`, and `FindAllOf` includes
+derived classes, so `list_targets`' `AccessPointItemBase` scan already sweeps all of it. TWO OPEN
+OPPORTUNITIES, deliberately NOT applied (not the reported bugs): `PlacementObjectInfo` is a strict
+SUBSET of that same scan, so one of the seventeen object-array walks is redundant (~68 ms of a
+~1.2 s burst); and reading `HighlightObjectType` on the four families that declare it would replace
+generic nouns with "rare mineral" / "breakable box" / "training point" — the same information the
+colour gives a sighted player.
+
+**4. "RESULTADOS DE LA HISTORIA" (story results after a major fight) — the census settled WHAT, the
+gates are now instrumented for WHY.** The user captured an F7 census WITH the screen up
+(`dumps/dump_1785513949_001.txt:435-458`), which named the whole structure outright:
+`Quest_Main_Clear_C_4` → `Clear_Bar_Dummy00/01` (one per battle, `Txt_List` = "Gohan contra Oficial
+del Ejército de Freezer" / "Vegeta contra Cui") → `Quest_Main_Clear_Detail00/01/02` (`Txt_List` =
+"Tiempo de finalización" / "Combo máximo" / "Daño recibido"), each with a rank letter, plus a TOTAL
+rank. That is `screen_results`' own host and layout — so the adapter targets the right screen.
+- **PROVEN defect, fixed:** it read the battle title from `TextBox_Item` and each criterion from
+  `TextBox_Detail`, but the text hangs off the Blueprint node **`Txt_List`**. Both now go through
+  `Core.first_text` — the shared STRICT multi-candidate helper whose own comment names this exact
+  `TextBox_*`/`Txt_List` alternation. (Reaching for it rather than a private probe is the standing
+  "put the fix in the substrate" rule.)
+- **ROOT CAUSE — `pane_live`, for the THIRD time.** `screen -> screen_results` appears in no log,
+  ever, which puts the fault in `is_active`'s gates rather than in `lines()`. Of the three that can
+  refuse there, the culprit is the liveness gate: `pane_live` demands ESlateVisibility `Visible(0)`,
+  and a result sheet in this game renders HitTestInvisible/SelfHitTestInvisible (confirmed on its
+  sibling `Gameover_C` at `screen_gameover.lua:47-50`), so it rejected the host on EVERY tick.
+  Now `Core.pane_rendered`. The fingerprint is quoted verbatim in `screen_questreward.lua:29-37`,
+  which hit this on 2026-07-28 — *"that is why this adapter NEVER RAN … `screen -> screen_questreward`
+  never appears, not once, while the user's F7 census taken WITH the sheet on screen shows its title
+  and all four reward rows rendered"* — and `screen_fishresult` hit it on 2026-07-17. This file's
+  gate dates from 2026-07-24 and neither correction ever swept it.
+- **The sweep that should have happened twice, done now:** every remaining `pane_live` call site was
+  checked. All are genuinely INTERACTIVE pooled panes (`screen_cooking`, `screen_options`,
+  `screen_dialogue`, `screen_agreement`, community's detail sheet), each documented as deliberate.
+  `screen_results` was the last sheet left on the wrong gate. **RULE: `ui_core.lua:1669` already
+  said "learned twice, which is why it now lives here" — but moving the HELPER into the substrate
+  does not migrate the CALLERS. A substrate fix is not finished until the call sites are swept, and
+  the sweep is the cheap half.**
+- `is_active` also logs which gate refuses (`results gate: host-not-on-screen | pane-not-rendered |
+  free-roam`), one line per CHANGE of reason — so if the remaining silence is one of the other two
+  (note `first_on_screen` → `on_screen` → the viewport gate, item 2 above), the next log names it
+  instead of costing another round.
+- **The dump tool's fuse was never armed.** `discover.lua`'s `brush_of` fuse quotes its own episode —
+  *"two caught brush_of errors, then 0xe06d7363"* — and then triggered at `>= 3`, i.e. it permitted
+  the exact third probe that was fatal. Today's log carries those same two caught errors again.
+  Threshold is now 2. **RULE: a fuse whose threshold sits above the failure it cites has never once
+  fired in anger; check the arithmetic against the incident, not against the intent.**
+
+**5. The "222" digit bug — SOLVED, and it needed no Ghidra.** Open since 2026-07-15; STATUS said the
+values were *"presumably in the unreflected tail 0x3C0..0x418… pin the native value via F4/Ghidra"*.
+**That line is superseded.** The moment the screen read for the first time, `screen_results`' own
+`DEBUG` dump wrote `dumps/dump_results.txt` — the capture the ledger had been waiting two weeks for,
+which was unobtainable only because the screen never activated. The digit is **not in any name**: all
+digit images share ONE atlas material (`Ins_Num_Result02`, parent `Mat_Switch`, `columns=5 rows=2` =
+ten cells) and the game selects the glyph with the scalar parameter **`Num`**, as a fraction of the
+cell count. Decoder: `digit = round(Num * columns * rows)`, geometry read off the material so nothing
+is hardcoded; order comes from the widget name (`_00` is most significant — the TArray runs the other
+way, so reading it by index would say "04" for 40).
+- **Verified twice against the user's own screenshot**: Gohan's max combo `_01`=0.4 `_02`=0.0 → **40**;
+  Vegeta's `_01`=0.7 `_02`=0.6 → **76**. And both WRONG strings are reproduced digit-for-digit from the
+  same dump — the old parse took the last digit of the shared atlas name `Ins_Num_Result02` → "2"×3 =
+  **"222"**, and on the combo row took the MID's trailing widget index → **"21"**. Reproducing the
+  bug's exact output is what makes this evidence rather than a story.
+- An image still on the shared MaterialInstanceConstant is the UNDRIVEN template (baked `Num=0`,
+  `Alpha=0` — a transparent placeholder), so it is skipped, and a row with none decodes to nil: the
+  line reads label + rank with **no** number rather than "000".
+- **RULE: a screen that cannot be reached cannot be diagnosed. The two-week-old "needs Ghidra" note
+  was not a hard problem, it was a blocked one — the tool to answer it had been sitting in the file
+  the whole time, behind a gate that never opened. Before pricing a deep RE task, check whether the
+  cheap instrument simply never got to run.**
+- **THE RANK — also solved, same session, and the cause is a NAME COLLISION.** The extended dump
+  answered it in one capture: the rank image's material is a MID over `Ins_Rate_S` (criterion rows) /
+  `Ins_Rate_M` (battle bar), carrying the same scalar `Num`. `rank_letter` was taking the trailing
+  uppercase letters of the ASSET NAME — and `Ins_Rate_S` ends in `_S`, which is the icon's **SIZE**
+  (small; the bar's `_M` is medium), not a rank. The size suffix simply collided with a valid rank
+  letter, so every row of every battle read "S"; and on the bar it parsed "M", which is not a rank,
+  so **the per-battle rank line was never spoken at all** — a second symptom nobody had connected to
+  the first. Now decoded from `Num` like the digits.
+- **The scale is S, A, B — three levels, no Z** (the user expected Z from the wider series).
+  Source-verified four independent ways: `CrowdResultRank` (`AT_enums.hpp:414`) and `RankAnimType`
+  (`:11648`) are both S=0/A=1/B=2; `UAT_UIQuestMainClearBar` and `UAT_UIQuestMainClearRank` declare
+  exactly three animations each (`Anim_StartRankS/A/B`); and `FRankConditions` (`AT.hpp:9691`) is
+  **0x6 bytes = three uint8 pairs**, so there is physically no room for a fourth tier. The capture
+  agrees: `Num`=0.0 → S everywhere, `Num`=1/3 → A on the one row the screenshot shows an "A".
+  `texture_token` and the `RANKS` letter set were deleted — nothing else used them.
+- **RULE: when a parse reads an identifier the code did not author, spell out what each part of that
+  identifier MEANS before trusting it.** `_S` was a size and `Num` was the value; the old reader had
+  them exactly backwards, and both bugs looked like "the value is unavailable" rather than "we are
+  reading the wrong field". A suffix that happens to be a member of your value set is not evidence.
+- **VERIFIED IN GAME 2026-07-31** (user readout): *"Gohan contra Oficial del Ejército de Freezer, S.
+  Vegeta contra Cui, S. Total, S. … Combo máximo, 40, A. … Combo máximo, 76, S."* Both digit values
+  and both ranks match the screenshot exactly, the varying rank (A) comes through, and the three
+  per-battle/total rank lines — which had never been spoken once — now appear. Digits and rank both
+  closed.
+- **Time / damage rows carry NO number, and that is correct.** In BOTH dump passes their digit images
+  still point at the shared template at Alpha=0, i.e. they draw nothing, and the screenshot
+  description shows only a rank icon on those rows. Two independent signals; the reader now says
+  label + rank and no figure. Residual doubt, not chased: `UAT_UIQuestMainClearDetail.Canvas_Number`
+  @0x398 is not walked by the dump, so a time rendered as "1:23" by other glyphs inside it would be
+  invisible to us. One screenshot settles it if it ever matters.
+- **Open, cosmetic:** the spoken ORDER is the reveal order, not the screen order — the three rank
+  lines land first (they become readable first), then every detail row. Each detail is prefixed with
+  its battle, so nothing is ambiguous, but the playbook's "follow the game's on-screen order" rule is
+  not strictly met. Left alone deliberately: fixing it means holding lines back through the reveal
+  animation, which trades a real property (say it as soon as it is true) for a cosmetic one.
+- **NOTE FOR THE NEXT SESSION: the user is BLIND — never ask them to confirm what is on screen.**
+  Ask for a SCREENSHOT (they can capture without seeing) and have it described, which is exactly how
+  the 40/76 values were pinned. This was asked the wrong way twice in one session.
+
+**6. Community board, mode 2 is treated as a ghost** (user: *"me empezó a leer solo después de que
+pulsé sobre un slot vacío"*). The claim trace caught it live: `rej=ghost-mode=2`, then the press moved
+it to `mode_v=7` and it claimed instantly. `BOARD_LIVE_MODES` is `{7,9,12,13,14,16,17}`, derived from
+the game's own mode machine (`FUN_1414c7de0`), and **2 appears nowhere** — not in the set, not in the
+comment that lists what the other values mean. A parked ghost is not interactable, and the user was
+interacting with it, so 2 looks like a real browse state. NOT added blind: the set is Ghidra-derived
+and a wrong entry re-opens the ghost-board shadowing that cost a session on 2026-07-15. **Re-read in
+Ghidra, and 2 is now IN the set.** The step dispatcher `FUN_1414d6380` writes 2 at step 8 — frame
+built, root set Visible — and the board then waits on the community manager's two-pane rendezvous
+(`FUN_141504c30` → `FUN_1414fc090`), which binds the input handlers (`FUN_1414c8a40`, called ONLY on
+the transition into 7) and writes 7. So 2 means *the board owns the screen but the cursor is not
+bound yet* — exactly the shape of 12/13/14/17, which were already in the set. Verified it claims with
+something to say: `board_update` gates only the hover read on `mode == 7`, while the header, title and
+entry summary do not (`screen_community.lua:1181-1191`, `:1202-1213`), so this cannot recreate the
+"holds the tick in silence" failure. No route back to the ghost bug: a parked board sits at 0 or 5,
+and 2 is only ever written during an active open. **5 confirmed as the out animation**
+(`FUN_1414ca430` sets 5, plays it, collapses the frame, then 0) — stays out. **3 deliberately NOT
+added**: the same analysis calls it the twin of 1 (frame still constructing, deliberately absent) yet
+marks it live, and it has never been observed — an unresolved contradiction is not evidence.
+**Ghidra artifacts from this pass — KEPT IN PLACE, not copied into the repo** (user's call,
+2026-07-31), at
+`C:\Users\ali-b\AppData\Local\Temp\claude\D--code-unreal-dragon-ball-kakarot-access\1a3bd350-0c6c-4a6c-b98a-bf3c3283136c\scratchpad\`:
+27 decompiled bodies under `dec\f_<addr>.c` (the ones that matter: `f_1414d6380.c` the step
+dispatcher, `f_1414c8a40.c` the input binder, `f_1414ca430.c` the close routine, `f_141504c30.c` and
+`f_1414fc090.c` the two-pane rendezvous), the scans `commu_mode_scan.txt` / `commu_anim_scan.txt` /
+`callers.txt`, and the headless scripts `commu_mode.java`, `commu_anim.java`, `callers.java`,
+`dec_tmp.java`.
+> **This pointer WILL rot.** That directory is under `%LOCALAPPDATA%\Temp` and keyed to one
+> assistant session id — Windows cleans Temp, and nothing recreates the folder. The findings
+> themselves are safe because they are written out above; treat the path as a bonus, and if the
+> decompiled bodies are ever wanted again, either copy them into `code/decompiled/` (where
+> `commu_tick_callers.c` already lives) before that happens, or just re-run the headless pass, which
+> is minutes now that the analysis is cached.
+
+**7. Reading ORDER on the results sheet** (user request). It spoke in REVEAL order — the three rank
+lines first, then every detail row — because each line was said the instant it became readable.
+`lines()` already builds in screen order, so the fix is to HOLD the sheet until it stops growing and
+release it in one go: settle `SETTLE_S` = 0.6 s of no new lines, ceiling `HOLD_MAX_S` = 5 s, both in
+wall time. Deliberately NOT a per-line "wait for the previous one" rule: `DETAIL_COUNT` is 6 while
+this screen uses 3, so that rule must tell "row does not exist" from "row is not ready", and getting
+it wrong stalls the reader forever — worse than the cosmetic defect. Fails open twice (settle, then
+ceiling), so the worst case is the old reveal order, never silence. **UNVERIFIED IN GAME** — the only
+thing in v0.1.5 that is.
+
+**Released v0.1.5** (2026-07-31) — braille, the crash audit, the map d-pad, and this session's
+results/board/radar fixes.
+
+**Next step:** confirm the results sheet reads in screen order (the one untested change). Then, if
+anything is still off: `results gate:` in the log names a refusing gate, `commu claim=` names a board
+mode — watch for `ghost-mode=` values other than 5, since 2 has now been reclassified as live.
+Still open, both deliberately deferred: `UAT_UIQuestMainClearDetail.Canvas_Number` @0x398 is never
+walked, so a completion time drawn there by other glyphs would be invisible to us (one screenshot
+settles it); and the two radar opportunities from the ki-sense work — the redundant
+`PlacementObjectInfo` scan, and `HighlightObjectType` for precise nouns.
+
 **Last updated:** 2026-07-31 — **BRAILLE DISPLAYS, THE MAP D-PAD, AND A 23-ITEM CRASH AUDIT (22
 applied, 1 refused).** Three user requests plus a fresh crash report; everything below is
 SOURCE-ONLY, UNVERIFIED IN GAME, and needs a full RESTART (every bridge but `mem_bridge` was

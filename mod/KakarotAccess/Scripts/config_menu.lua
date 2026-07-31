@@ -28,14 +28,19 @@ local PadPoll = require("pad_poll")
 
 local Menu = {}
 
-local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
--- Deadline for the close-drain (crash audit RANK 4, 2026-07-31 — same defect as radar_menu's).
--- REL_TH is below XInput's own XINPUT_GAMEPAD_TRIGGER_THRESHOLD of 30, so a worn trigger resting
--- at 26-29 reads as released everywhere except here: `draining` never clears, the pad stays hidden
--- from the game, and the player cannot play. Two seconds is far longer than releasing a button
--- takes, so it never truncates a real drain — it only bounds a stuck one.
-local DRAIN_MAX_S = 2.0
+-- Trigger raw (0..255) below which it counts as released (drain). RAISED FROM 25 to XInput's own
+-- XINPUT_GAMEPAD_TRIGGER_THRESHOLD (30) on 2026-07-31 — the mismatch WAS the lock-out bug: a worn
+-- trigger resting at 26-29 reads as released to XInput and to the game but never to this line, so
+-- the drain could not complete and the pad stayed hidden from the game for good.
+local REL_TH = 30
+-- Stuck-pad rescue for the close-drain — anti-lockout only, and identical in shape to radar_menu's
+-- (read the long note there for the reasoning). A flat deadline was tried first the same day and
+-- REGRESSED: forcing the release while a button was still held handed that button to the game.
+-- The discriminator is CHANGE, not time — a stuck button reports a constant bitmask, a pad in use
+-- keeps changing — so the deadline restarts on every change of the digital button state.
+local DRAIN_STUCK_S = 3.0
 local drain_until = nil
+local drain_btn = nil     -- digital button state the stuck-detector last observed
 local VOL_STEP = 10       -- cue-volume step per left/right press (percent)
 local MODES = { "auto", "on", "off" }   -- cycle order of a tri-state setting (settings.lua "mode")
 
@@ -149,7 +154,7 @@ local function do_close()
     open = false
     Speech.say(I18n.t("cfg_closed"), true)
     draining = true   -- keep blocked until the pad is neutral (see step)
-    drain_until = os.clock() + DRAIN_MAX_S
+    drain_btn, drain_until = nil, os.clock() + DRAIN_STUCK_S
 end
 
 local function force_release()
@@ -174,10 +179,15 @@ local function step()
     local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
 
     if draining then
-        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
-            or (drain_until and os.clock() >= drain_until) then
+        local neutral = snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
+        -- Restart the rescue deadline on every change of the button state: while the player is
+        -- doing anything at all, the release stays courteous and cannot steal a real press.
+        if snap.buttons ~= drain_btn then
+            drain_btn, drain_until = snap.buttons, os.clock() + DRAIN_STUCK_S
+        end
+        if neutral or (drain_until and os.clock() >= drain_until) then
             Input.block(false); blocked = false; draining = false
-            drain_until = nil
+            drain_until, drain_btn = nil, nil
             if _G.__KakarotPadModal == "config" then _G.__KakarotPadModal = nil end
         end
         prev_btn = snap.buttons
@@ -192,6 +202,15 @@ local function step()
         prev_btn = snap.buttons
         return
     end
+
+    -- RE-ASSERT the pad block every tick while open — identical defect and fix to radar_menu's
+    -- (read the long note there). The block is a 1 s LEASE renewed only as a side effect of
+    -- polling, renewal cannot resurrect an expired lease, and this menu asserted it once in
+    -- do_open; a dispatch gap longer than a second therefore left the menu open with the pad
+    -- live to the game. One interlocked write per tick removes the whole failure class.
+    -- (unconditional: the `draining` branch above returns, so this line is only ever
+    -- reached with the menu open and the pad ours.)
+    Input.block(true)
 
     -- Open: a battle/cutscene/menu started -> bail out (drain-unblock).
     if not Nav.field_ready() then

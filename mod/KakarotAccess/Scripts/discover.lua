@@ -442,7 +442,13 @@ function Discover.run()
         -- failures, stop probing brushes for the rest of this dump run.
         local brush_fails = 0
         local function brush_of(o)
-            if brush_fails >= 3 then return "-" end
+            -- THRESHOLD 2, not 3 (2026-07-31). The episode this fuse was written for is quoted
+            -- right above: "two caught brush_of errors, then 0xe06d7363" — so the fatal probe is
+            -- the THIRD one, and `>= 3` let it through every time. The fuse has never once
+            -- prevented the crash it was added for. Today's log carries the same two caught
+            -- errors again (UE4SS.log, F7 census on the story-results screen), i.e. we have been
+            -- one probe away from losing the dump on every capture since.
+            if brush_fails >= 2 then return "-" end
             local res
             local ok = pcall(function()
                 local ro = o.Brush.ResourceObject

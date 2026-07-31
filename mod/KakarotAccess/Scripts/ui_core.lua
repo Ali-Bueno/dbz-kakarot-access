@@ -586,6 +586,24 @@ local MAX_ANCESTORS = 24
 -- UClass UserWidget (cached): IsInViewport below may only be called on UserWidgets —
 -- calling a member a class doesn't have is the uncatchable C++ abort.
 local userwidget_cls = nil
+-- DIAGNOSTIC for the IsInViewport rejection at the end of on_screen_uncached. That test was
+-- DEAD for the whole life of the mod until 2026-07-31 (is_userwidget latched false on a single
+-- boot miss — see the note below), so fixing the resolver effectively SHIPPED A NEW FAIL-CLOSED
+-- GATE on the substrate every screen-directory lookup depends on, with no way to see it fire.
+-- This codebase's own rule: a guard that fails closed on shared substrate must say so, or a
+-- screen goes silent with nothing to grep. Keyed by CLASS NAME (bounded by the number of widget
+-- classes) and capped, so it can neither grow without limit nor flood the log.
+local vp_rejected = {}    -- lint:plain-table
+local vp_logged = 0
+local VP_LOG_MAX = 30
+-- MASTER SWITCH for that rejection, and it defaults OFF on purpose. The test never ran once in
+-- the mod's entire shipped history, so OFF is the behaviour of every release the player has
+-- actually used; turning it on was a side effect of the resolver fix, not a decision, and the
+-- community board went silent the same day on a predicate it gates completely. Known-good
+-- behaviour wins until there is evidence. The log above fires in BOTH modes, so one session of
+-- play says whether re-enabling it is safe — and if it is, this becomes `true` again with the
+-- Shop_Cook_C shadowing bug (2026-07-06) genuinely fixed instead of nominally fixed.
+Core.VIEWPORT_GATE = false
 local function is_userwidget(o)
     -- Via Mem.find_object, the mod's ONE retry-throttled engine-object resolver (crash audit
     -- RANK 5, 2026-07-31). This used to be a single early StaticFindObject whose result was
@@ -638,7 +656,22 @@ function Core.on_screen_uncached(o)
     -- proven safe here (discover.lua's inVP column uses it on every container).
     if depth < MAX_ANCESTORS and is_userwidget(cur) then
         local okv, invp = pcall(function() return cur:IsInViewport() end)
-        if okv and invp == false then return false end
+        if okv and invp == false then
+            -- Name the class the FIRST time each one trips this, in BOTH modes: with the gate
+            -- off these lines are the evidence for whether it is safe to turn back on.
+            if vp_logged < VP_LOG_MAX then
+                local cn = "?"
+                pcall(function() cn = cur:GetClass():GetFName():ToString() end)
+                if not vp_rejected[cn] then          -- lint:plain-table
+                    vp_rejected[cn] = true           -- lint:plain-table
+                    vp_logged = vp_logged + 1
+                    print("[KakarotAccess] on_screen: root " .. cn
+                        .. " has IsInViewport=false ("
+                        .. (Core.VIEWPORT_GATE and "REJECTED" or "allowed, gate off") .. ")\n")
+                end
+            end
+            if Core.VIEWPORT_GATE then return false end
+        end
     end
     return true
 end

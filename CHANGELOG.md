@@ -2,6 +2,85 @@
 
 ---
 
+## v0.1.5 - July 31, 2026
+
+**Braille, and a pile of things that were quietly not working.** If you read with a braille display,
+this mod was invisible to you until now: everything it said went to speech and nowhere else. That is
+fixed. The rest is more crash-hardening, and several screens that turned out to be saying nothing at
+all - or saying the wrong thing - without ever complaining about it.
+
+### New
+
+- **Braille output.** Everything the mod says now also goes to your braille display, as its own
+  separate output alongside the speech. There is a `braille` setting - `auto`, `on` or `off` - in
+  `config.txt` and in the L3+R3 menu. `auto` uses braille whenever your screen reader can take it,
+  and stays out of the way when it cannot, so leaving it alone is the right choice for most people.
+
+### Screens that were saying nothing
+
+- **The results screen after a major story fight.** It had never once read, in any version. The mod
+  was waiting for the screen to report itself as an ordinary interactive panel, and a result sheet
+  in this game does not - it renders in a mode that lets your clicks pass through it. So the reader
+  refused it on every single frame and stayed silent, with nothing in the log to say why. This is
+  the third screen to be lost to exactly that mistake, so this time every other screen was checked
+  as well; the rest were already correct.
+- **The community board sometimes would not start reading until you pressed something.** The board
+  goes through a short handshake while it opens - it is on screen, but the game has not handed it
+  your controller yet - and the mod was treating that moment as a leftover, closed panel. It now
+  reads the board as soon as it appears, and the cursor position follows a fraction of a second
+  later when the game hands it over.
+
+### Screens that were reading the wrong thing
+
+- **Every score on the results screen was wrong.** Completion time, max combo and damage taken all
+  read "222", in every fight, for everyone. The numbers on that screen are not text - each digit is
+  a picture, and the mod was reading the *filename* of the picture instead of which digit it was
+  showing. The filename never changes, so neither did the number. It now reads the real value: your
+  actual max combo, per fight.
+- **Every rank was "S".** Same shape of mistake, and a slightly funnier one: the rank icon's
+  filename ends in `_S`, which turns out to mean **small** - the icon's size - and the mod read it
+  as the letter S. Ranks now vary as they should. This also brings back a line you have never heard,
+  the overall rank for each fight and for the whole mission, which was being thrown away because the
+  bigger icon's filename ends in `_M`.
+- Completion time and damage taken are scored but carry no number on that screen, so the mod now
+  reads the label and the rank for those and does not invent a figure.
+- The results screen now reads **in the order it appears on screen** - each fight, then its own
+  three scores, then the total - instead of in the order the game happens to animate them in. It
+  waits for the screen to finish appearing first, so it starts about a second later than before.
+
+### Stability
+
+- **The radar picker could hand your buttons back to the game while it was still open.** Pressing L1
+  to change category would start Ki sense, and pressing A to confirm a target would make you jump.
+  It only happened sometimes, because the mod's hold on the controller quietly expires after a
+  second and was only being renewed by accident. It is now renewed properly, every frame the picker
+  is open.
+- **And the fix for that, in the previous build, could itself steal a button.** The safety net that
+  releases the controller if a button gets stuck was on a plain timer, so holding a button a moment
+  too long after closing the picker handed that button straight to the game. It now watches for a
+  button that is genuinely *stuck* - one that never changes - instead of one that is merely held.
+- A 23-item crash audit, applied. The short version: several guards that were meant to protect the
+  mod could fail in the closed direction and silently disable whole screens instead; a periodic job
+  that failed once would then re-run at full speed forever, which is what froze the game on the
+  explore-mode double-click; and four keyboard shortcuts were doing real work on the wrong thread.
+- The flight recorder now keeps about four times as much history, and a crash report can be read
+  from the file directly without asking you to relaunch anything.
+
+### The map
+
+- **The d-pad no longer skips places.** Quick presses could fall between two checks and vanish
+  entirely; presses are now caught as they happen. Holding a direction repeats, so a long list of
+  destinations is no longer one press per entry.
+- **X now does something deliberate.** It reads the selected destination, where it sits in the list,
+  and what the free cursor is over. It used to appear to do this by accident.
+
+### For bug reports
+
+If something goes wrong, `UE4SS.log` in the game's `AT\Binaries\Win64` folder is the useful file,
+along with `crash_trail.bin` next to the mod's scripts if the game closed on its own.
+
+---
+
 ## v0.1.4 - July 29, 2026
 
 **Crashes only.** The last version said it should not crash, and for some people it still did. So

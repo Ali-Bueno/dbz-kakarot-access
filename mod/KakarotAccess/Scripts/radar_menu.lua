@@ -36,7 +36,13 @@ local Menu = {}
 -- Runs on the shared 20ms pad scheduler (pad_poll.lua): catches the R3 press within ~1
 -- frame so the game barely sees it before we block (the opening click could otherwise
 -- leak a frame to R3's field action).
-local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
+-- Trigger raw (0..255) below which it counts as released (drain). RAISED FROM 25 TO XInput's own
+-- XINPUT_GAMEPAD_TRIGGER_THRESHOLD (30) on 2026-07-31 — that mismatch WAS the original defect: a
+-- worn or third-party trigger resting at 26-29 reads as released to XInput and to the game, but
+-- never to this line, so the drain below could never complete and the player was left with no pad
+-- and no keyboard. Matching the platform's own definition of "released" fixes it at the source; a
+-- trigger the game already ignores cannot leak anything by being treated as released here.
+local REL_TH = 30
 local DOUBLE_TAP_TICKS = 20   -- ~400 ms at the 20ms pad tick: window for a 2nd R3 tap (= explore toggle)
 -- A stick double-click is stiff and easily slower than the window above; when the 2nd tap
 -- lands just after the picker already auto-opened, we still treat it as the toggle (see the
@@ -49,12 +55,24 @@ local running = false
 local open = false        -- menu currently open (and pad blocked)
 local blocked = false
 local draining = false    -- closed, waiting for a neutral pad before unblocking
--- Deadline for that wait (crash audit RANK 4, 2026-07-31 — see the drain branch in step()). The
--- neutral-pad test can be permanently unsatisfiable on worn hardware, and while it is unsatisfied
--- the player has neither pad nor keyboard. Two seconds is far longer than a human takes to release
--- a button they just pressed, so it never cuts a genuine drain short; it only bounds a stuck one.
-local DRAIN_MAX_S = 2.0
+-- STUCK-PAD RESCUE for that wait. Anti-lockout only — see the drain branch in step().
+--
+-- The first attempt at this (earlier on 2026-07-31) was a flat 2 s deadline that forced the
+-- release regardless of pad state, and it REGRESSED into the very thing the drain exists to
+-- prevent: the player confirms a target with A, keeps a button down a moment longer than the
+-- deadline, and the forced unblock hands the game a held A — Goku jumps. Same for L1 (ki sense).
+-- The user's "sometimes it interferes with the game" was exactly that.
+--
+-- The honest discriminator is not TIME, it is CHANGE: a stuck button reports a CONSTANT bitmask,
+-- while a pad someone is actually using keeps changing. So the deadline RESTARTS on every change
+-- of the digital button state, and only a pad that has not changed at all for DRAIN_STUCK_S is
+-- treated as stuck. A player holding, mashing or fumbling can never trip it; a genuinely stuck
+-- button trips it in three seconds. Triggers are deliberately NOT part of the change signal —
+-- they are analog and jitter constantly, which would reset the deadline forever on precisely the
+-- drifting trigger this is meant to rescue; the REL_TH fix above handles them instead.
+local DRAIN_STUCK_S = 3.0
 local drain_until = nil
+local drain_btn = nil     -- digital button state the stuck-detector last observed
 local cats = {}           -- [{ key, name, items={{actor,key,dist,noun},...} }]
 local ci, ii = 1, 1       -- current category / item index
 local prev_btn = 0        -- previous button bitmask (edge detection)
@@ -139,7 +157,9 @@ local function do_close(mode)
     -- keep blocked; drain until neutral (see step). If the pad is already gone we
     -- unblock immediately (handled by the caller for the pad-lost path).
     draining = true
-    drain_until = os.clock() + DRAIN_MAX_S
+    -- Seed the stuck-detector from the CLOSING press itself, so its first observation is the
+    -- state the player is actually holding and the deadline starts counting from a real sample.
+    drain_btn, drain_until = nil, os.clock() + DRAIN_STUCK_S
 end
 
 -- ---- keyboard control (the picker without a pad) ------------------------------------
@@ -230,6 +250,20 @@ local function step()
     -- keyboard-only machine that return is the only path this function ever takes.
     -- Renewal is what makes the block crash-proof (Input.kb_block).
     if open or draining then Input.kb_block(KB_BLOCK_MS) end
+    -- ...and RE-ASSERT the PAD block every tick while the picker is open (user 2026-07-31: "other
+    -- times it starts triggering game commands — ki sense on L1"). The pad block is a LEASE
+    -- (PAD_BLOCK_LEASE_MS = 1 s) renewed only as a side effect of input_bridge's poll(), and
+    -- renewal deliberately only EXTENDS A LIVE LEASE — it can never resurrect an expired one. But
+    -- this menu asserted it exactly ONCE, in do_open. So any gap longer than a second in the 20 ms
+    -- dispatch — and it drops a tick whenever the game thread is busy, which is precisely when a
+    -- level streams — let the lease die with the picker still open, and from that moment every
+    -- button reached the game with nothing to re-arm it. Re-asserting is one interlocked write per
+    -- tick and makes the whole failure class impossible, instead of requiring us to prove which
+    -- starvation path caused it. NOT while `draining`: that phase is trying to hand control back.
+    -- `blocked` is set alongside it so the flag never lies about the hardware state: a
+    -- KEYBOARD-opened picker also asserts the block here, and the Transition teardown above
+    -- only releases `if blocked`.
+    if open then Input.block(true); blocked = true end
 
     local snap = Input.read()
     if not snap then
@@ -264,19 +298,19 @@ local function step()
     -- Draining: menu closed, waiting for a fully neutral pad before handing control
     -- back — so the A/R3/B that closed it isn't delivered to the game.
     if draining then
-        -- WALL-CLOCK CEILING (crash audit RANK 4, 2026-07-31). The neutral-pad test can be
-        -- UNSATISFIABLE on real hardware: REL_TH is 25, below XInput's own
-        -- XINPUT_GAMEPAD_TRIGGER_THRESHOLD of 30, so a worn or third-party trigger resting at
-        -- 26-29 — or one sticking face button — reads as released to the game and to XInput but
-        -- never to this line. `draining` then stays true forever, the loop above keeps renewing
-        -- kb_block every 20 ms because it renews while `open or draining`, and the player loses
-        -- the pad AND the keyboard with no in-game way out at all: not pause, not Escape, only
-        -- Alt+F4. The drain is a courtesy (it stops the closing press reaching the game); it must
-        -- never outrank being able to play. So it gets a deadline, and the release is forced.
-        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
-            or (drain_until and os.clock() >= drain_until) then
+        -- The pad is neutral once no button is down and both triggers are below the platform's
+        -- own released-threshold (REL_TH — see there; comparing against a LOWER number than
+        -- XInput's was the original lock-out bug).
+        local neutral = snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
+        -- Stuck-pad rescue, restarted on every CHANGE of the button state (see DRAIN_STUCK_S).
+        -- This is what stops the rescue from stealing a real press: as long as the player is
+        -- doing anything at all, the deadline keeps moving and the release stays courteous.
+        if snap.buttons ~= drain_btn then
+            drain_btn, drain_until = snap.buttons, os.clock() + DRAIN_STUCK_S
+        end
+        if neutral or (drain_until and os.clock() >= drain_until) then
             Input.block(false); blocked = false; draining = false
-            drain_until = nil
+            drain_until, drain_btn = nil, nil
             Input.kb_block(0)
             if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         end
