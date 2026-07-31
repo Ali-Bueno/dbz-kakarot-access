@@ -20,6 +20,15 @@ local I18n = {}
 local DEFAULT = "en"
 local lang = nil -- cached base code ("es", "en", …) once resolved
 local forced = nil -- explicit override from the mod config (nil = follow the game)
+-- FAILURE MEMO (crash/perf audit RANK 18, 2026-07-31). `lang` used to be the sentinel for both
+-- "never detected" and "detect NOW", with no throttle: every I18n.t/button/key/keyhelp/header/
+-- startlist call routes through I18n.language() below, so a failed detect() — the boot/title
+-- window before MessageManager is populated, or right after Ctrl+Shift+R — re-ran BOTH of
+-- detect()'s FindFirstOf walks on every single localized string lookup until one finally
+-- succeeded, dozens of times a tick. Same wall-clock-memo idiom as mem.lua's class_off: remember
+-- when detection last failed and don't retry before LANG_RETRY_EVERY_S has passed.
+local lang_next = 0
+local LANG_RETRY_EVERY_S = 1.0
 
 -- The languages the game itself ships (ELanguageType, CFramework_enums.hpp) collapsed to
 -- their base code — es_ES/es_MX→es, zh_CN/zh_TW→zh. This is the set a lang/<code>.txt may
@@ -60,7 +69,10 @@ end
 -- retries detection until the GameInstance is ready).
 function I18n.language()
     if forced then return forced end
-    if not lang then lang = detect() end
+    if not lang and os.clock() >= lang_next then
+        lang = detect()
+        if not lang then lang_next = os.clock() + LANG_RETRY_EVERY_S end
+    end
     return lang or DEFAULT
 end
 
@@ -71,7 +83,10 @@ function I18n.force_language(code)
 end
 
 -- Drop the cached language so the next lookup re-detects (call after a language change).
-function I18n.refresh() lang = nil end
+-- Also clears the RANK 18 failure memo: an explicit refresh must retry AT ONCE, not sit out a
+-- backoff left over from an earlier failed detection (config_menu.lua calls this right after
+-- the player picks a language, and expects the very next read to reflect it).
+function I18n.refresh() lang = nil lang_next = 0 end
 
 -- ---- external string files (lang/<code>.txt) -------------------------------
 -- Users can override any string by dropping an editable text file next to the mod. A
@@ -251,10 +266,12 @@ local S = {
         cfg_closed = "Configuración cerrada",
         cfg_on = "activado",
         cfg_off = "desactivado",
+        cfg_auto = "automático",
         cfg_pct = "%d por ciento",
         cfg_audio_cues = "Pistas de audio",
         cfg_cue_volume = "Volumen de pistas",
         cfg_radar_autotrack = "Radar automático",
+        cfg_braille = "Salida braille",
         cfg_language = "Idioma",
         cfg_lang_auto = "automático, idioma del juego",
         nav_ahead = "adelante",
@@ -367,6 +384,11 @@ local S = {
         map_travel_points = "%d puntos de viaje: %s",
         map_on_point = "encima de %s, pulsa confirmar",
         map_point = "punto",
+        map_info_hint = "pulsa %s para más detalles",
+        map_info_sel = "seleccionado %s, %d de %d",
+        map_info_none = "sin destino seleccionado, %d puntos de viaje",
+        map_info_empty = "sin puntos de viaje",
+        map_info_cursor = "cursor en %s",
         hp_self_fmt = "vida %d por ciento",
         hp_enemy_fmt = "%s, %d por ciento",
         shop_buy_fmt = "comprar: %s",
@@ -511,10 +533,12 @@ local S = {
         cfg_closed = "Settings closed",
         cfg_on = "on",
         cfg_off = "off",
+        cfg_auto = "automatic",
         cfg_pct = "%d percent",
         cfg_audio_cues = "Audio cues",
         cfg_cue_volume = "Cue volume",
         cfg_radar_autotrack = "Automatic radar",
+        cfg_braille = "Braille output",
         cfg_language = "Language",
         cfg_lang_auto = "automatic, game language",
         nav_ahead = "ahead",
@@ -624,6 +648,11 @@ local S = {
         map_travel_points = "%d travel points: %s",
         map_on_point = "on %s, press confirm",
         map_point = "point",
+        map_info_hint = "press %s for details",
+        map_info_sel = "selected %s, %d of %d",
+        map_info_none = "no destination selected, %d travel points",
+        map_info_empty = "no travel points",
+        map_info_cursor = "cursor on %s",
         hp_self_fmt = "health %d percent",
         hp_enemy_fmt = "%s, %d percent",
         shop_buy_fmt = "buy: %s",

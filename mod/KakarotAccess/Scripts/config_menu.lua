@@ -29,7 +29,15 @@ local PadPoll = require("pad_poll")
 local Menu = {}
 
 local REL_TH = 25         -- trigger raw (0..255) below which it counts as released (drain)
+-- Deadline for the close-drain (crash audit RANK 4, 2026-07-31 — same defect as radar_menu's).
+-- REL_TH is below XInput's own XINPUT_GAMEPAD_TRIGGER_THRESHOLD of 30, so a worn trigger resting
+-- at 26-29 reads as released everywhere except here: `draining` never clears, the pad stays hidden
+-- from the game, and the player cannot play. Two seconds is far longer than releasing a button
+-- takes, so it never truncates a real drain — it only bounds a stuck one.
+local DRAIN_MAX_S = 2.0
+local drain_until = nil
 local VOL_STEP = 10       -- cue-volume step per left/right press (percent)
+local MODES = { "auto", "on", "off" }   -- cycle order of a tri-state setting (settings.lua "mode")
 
 local running = false
 local open = false
@@ -45,6 +53,21 @@ local B = Input.BTN
 -- change() returns the localized value string to announce.
 
 local function on_off(v) return I18n.t(v and "cfg_on" or "cfg_off") end
+
+-- Tri-state ("auto" adds a third value to the on/off pair, so the two existing words are
+-- reused rather than translating a second set of them).
+local function mode_name(m)
+    if m == "auto" then return I18n.t("cfg_auto") end
+    return on_off(m == "on")
+end
+
+-- Advance a tri-state setting by `dir` and return its new localized name.
+local function cycle_mode(key, dir)
+    local cur = Settings.get(key)
+    local at = 1
+    for i, m in ipairs(MODES) do if m == cur then at = i break end end
+    return Settings.set(key, MODES[(at - 1 + dir) % #MODES + 1])
+end
 
 local OPTIONS = {
     {   -- Audio cues on/off
@@ -75,6 +98,15 @@ local OPTIONS = {
             local nv = not Settings.get("radar_autotrack")
             Settings.set("radar_autotrack", nv)   -- nav_tracker reads it live via _G
             return on_off(nv)
+        end,
+    },
+    {   -- Braille display output: auto (on when the screen reader reports it) / on / off
+        name = function() return I18n.t("cfg_braille") end,
+        value = function() return mode_name(Settings.get("braille")) end,
+        change = function(dir)
+            local nv = cycle_mode("braille", dir)
+            Speech.set_braille(nv)   -- re-resolve the sink now, not on the next launch
+            return mode_name(nv)
         end,
     },
     {   -- Language (auto or a game language code)
@@ -117,6 +149,7 @@ local function do_close()
     open = false
     Speech.say(I18n.t("cfg_closed"), true)
     draining = true   -- keep blocked until the pad is neutral (see step)
+    drain_until = os.clock() + DRAIN_MAX_S
 end
 
 local function force_release()
@@ -141,8 +174,10 @@ local function step()
     local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
 
     if draining then
-        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH then
+        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
+            or (drain_until and os.clock() >= drain_until) then
             Input.block(false); blocked = false; draining = false
+            drain_until = nil
             if _G.__KakarotPadModal == "config" then _G.__KakarotPadModal = nil end
         end
         prev_btn = snap.buttons

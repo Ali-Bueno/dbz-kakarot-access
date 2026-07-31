@@ -4,6 +4,97 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
+**Last updated:** 2026-07-31 — **BRAILLE DISPLAYS, THE MAP D-PAD, AND A 23-ITEM CRASH AUDIT (22
+applied, 1 refused).** Three user requests plus a fresh crash report; everything below is
+SOURCE-ONLY, UNVERIFIED IN GAME, and needs a full RESTART (every bridge but `mem_bridge` was
+rebuilt, and `main.lua`/`app.lua` changed).
+
+**1. Braille output (user request).** `speech.lua` called `prism.say` → `prism_backend_speak`, which
+is SPEECH ONLY, and the bridge never even resolved the braille export — so a braille display saw
+nothing the mod said. `prism_bridge.c` gains `braille()` and `features()` (bit values from
+`PrismBackendFeature` in `prism.h`, nothing hardcoded), both resolved with a new `RESOLVE_OPT` so an
+older `prism.dll` cannot cost the player their reader. Every utterance now also goes to
+`prism_backend_braille` as a SEPARATE, ADDITIVE call. **Deliberately NOT routed through
+`prism_backend_output`** (the library's combined speak+braille path): one call instead of two, but it
+puts ALL speech on an entry point whose semantics we cannot verify without the game, and speech is
+the mod's lifeline. Setting `braille = auto|on|off` in `config.txt` + the L3+R3 menu; `auto` fails
+OPEN when the backend cannot answer the capability query. 13 languages, README updated.
+
+**2. Map: three symptoms, three different causes** (user: *"navigating the map can feel a bit laggy,
+or it will sometimes miss places when you use the DPad… not sure what pressing X does, but I just
+notice it reading the names for the different locations. I was expecting to have more info"*).
+- *Missed presses* — `input_bridge.c` only stored the pad's LEVEL (`g_last`), so a tap whose whole
+  down-up cycle fell between two polls was INVISIBLE; and the polls are neither fast nor evenly
+  spaced (the 20 ms dispatch drops ticks when the game thread is busy, throttles to 100 ms during
+  loads via its RELAX gate, and every step that speaks blocks the game thread). The HOOK now
+  accumulates RISING EDGES at frame rate (`note_buttons`/`g_edgeAcc`/`take_edges`); `pad_poll`
+  drains it ONCE per tick and republishes (`Input.edges()`) — the latch is destructive, so a second
+  drainer would steal every other stepper's presses.
+- *Laggy* — no d-pad auto-repeat (a 20-destination list was 20 presses), and `ft_write_sel` ran
+  every 20 ms through `Mem.write_i32` → `class_ok` → `class_chain`, i.e. a full reflected super-walk
+  50×/s on the game thread. Now: hold-to-repeat, and the index is READ BACK (a plain guarded native
+  read, no reflection) and only written when it has drifted — same guarantee, a fraction of the cost.
+- *X* — **X was never a mod bind.** It is one of `ui_registry`'s `BOOST_BTNS`, so pressing any face
+  button lifted the scan quiet window, the travel-icon pool finally scanned, and the once-per-opening
+  "N travel points: …" line fired right then: an info key by accident. Now it is a real one
+  (`ft_describe`): selected destination + position in the list + what the free cursor is over, and on
+  the AREA map it re-reads the focused POI. Announced on entry so it is discoverable.
+- **What we canNOT say about a destination**: an inventory pass over the headers/dumps found that
+  only the NAME is source-verified. `entryUnlocked` (+0x11) reads 0 on points known to be accessible
+  — contradicted, unusable; `entryAreaId` (+0x14) exists but has no id→text table; `entryId` (+0x1c)
+  feeds `FUN_1415bd150` to build the game's own "Go to X?" string, which is unreversed. Do not
+  promise more without doing that RE.
+
+**3. The crash audit.** A 13-subsystem sweep with adversarial per-finding verification: 66 findings
+judged, 40 survived, 26 refuted; deduped to 23 ranked fixes. **22 applied.** The substrate ones worth
+remembering: `Core.array_of` gained the `strict` twin of `Core.member`'s (a multi-candidate probe
+EXPECTS its candidates to be absent, so fail-open there is a licence for the uncatchable abort) and
+`ui_directory`'s chain walk passes it automatically for any class with ALTERNATIVE chains, derived
+from the table rather than annotated; `prop_sets[key] = false` is now written only for a walk that
+COMPLETED (a transient `ForEachProperty` raise used to freeze a guard closed for the whole map, with
+no error and no log); `custom_props` is flushed on map transition like every other reflection cache
+beside it; `Registry.stop()` clears `active` (Ctrl+M with a screen committed left a stale pointer
+that muted the radar and locked out the R3 picker AND the config menu for the session); adapter
+`reset()` and both watchers are now fault-isolated like `is_active`/`update`; `Core.peek_all`'s
+"never scans" contract is TRUE at the source via a `no_scan` mode threaded to the directory roots;
+and four keybind handlers (F3, Ctrl+M, Ctrl+F2, F8/Ctrl+F8) were running their bodies on UE4SS's
+KEYBOARD thread — the 2026-07-27 sweep missed them because they are delegated through `app.lua`
+rather than bound directly.
+**ONE FIX REFUSED, and the reason generalises:** the plan wanted `pad_block_renew()` removed from
+`l_poll` "because the owning menus already call `Input.block(true)` every tick". They do NOT — it is
+called ONCE at open (`radar_menu.lua:87`, `config_menu.lua:133`); only `kb_block` is renewed. Applying
+it would have expired the pad block after 1 s with the menu still open. The half that was real — the
+close-drain can be UNSATISFIABLE because `REL_TH = 25` sits below XInput's own
+`XINPUT_GAMEPAD_TRIGGER_THRESHOLD` of 30, so a worn trigger resting at 26-29 strands the player with
+no pad and no keyboard — is fixed with a 2 s wall-clock ceiling in both menus. **Verify a plan's
+premise against the code before trusting it, even a verified one.**
+
+**4. The Krillin-cutscene report** (*objective re-announced during and after the cutscene; game got
+slow; Fatal error*). Both symptoms are the SAME defect. The objective line is a COMPOSITION — which
+of three title candidates answers, how many rows pass `on_screen`, whether the sub group contributed
+— diff-gated as ONE string, so any repaint that changes only the composition reads as a new
+objective. The settle that existed counted POLLS, and `step`'s three gates return WITHOUT touching
+the counter: during a cutscene the dialogue adapter commits IN on every subtitle line and OUT in
+every gap, so two "consecutive" polls could be SECONDS apart with half a cutscene between them,
+confirming a transient reading as stable. (The playbook's *a debounce measured in calls is not a
+debounce* rule, reached from the STARVED side rather than the over-called one — worth remembering as
+its own shape.) The same flicker fed the radar's "objective changed" signal with no debounce at all,
+re-arming `preempt.scans` every 300 ms while its consumer drains it once per ~1.5 s → PERMANENTLY
+armed → an armed preempt bypasses the suppressors by design → the marker walk kept dereferencing
+per-level pooled minimap widgets straight through the cutscene, and **a cutscene is not a
+Transition**, so nothing released them while sub-levels streamed out. Fixed: settle in WALL TIME +
+candidate dropped on every unobserved poll; the change signal only fires from a settled reading;
+`preempt.scans` arms from zero only; and `navi_icons` is dropped whenever an overlay owns the screen,
+not only when it has ALSO expired (the existing comment's own argument — the engine frees these and
+re-validation cannot see a recycled address — never depended on expiry). **The crash SITE is not
+pinned and was not guessed**: added `Mem.mark("nav.markers")`/`Mem.mark("nav.mapicons")`, because
+`best_candidate`'s two walks were an unmarked window inside `nav.step`, plus `objective ->` /
+`objective change ->` log lines naming which composition flipped. One trail now settles both halves.
+Independent candidate for the slowdown, fixed separately as RANK 6: `build_bindings` re-issued
+`StaticFindObject` + a synchronous `LoadAsset` on EVERY call while unresolved, and every dialogue
+line carrying an `<inputicon>` glyph goes through it — i.e. loader work at several hertz inside the
+async-load window that has deadlocked this game twice.
+
 **Last updated:** 2026-07-29 (d) — **the double-R3 "freeze" was an UNBOUNDED HANG, now fixed, and the
 crash black box can be read OFFLINE.** Two user reports: a crash just walking
 around **West City**, and explore mode (double-R3) **hanging the game with no crash message, needing
@@ -532,7 +623,37 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 
 ## Next step
 
-**2026-07-27: RETEST THE CRASH-AUDIT BATCH.** 14 files changed (10 Lua + all 4 native bridges),
+**2026-07-31: IN-GAME TEST OF THIS SESSION'S BATCH.** ~25 files changed and three bridges rebuilt
+(`prism_bridge`, `input_bridge`, `audio_bridge` — `mem_bridge.dll` is untouched; `mem.lua` changed,
+not the DLL). **Full RESTART required**, Ctrl+Shift+R is not enough. Lint clean over 74 files. What
+to check, in order of how much it could take down:
+
+1. **Does the mod still SPEAK AT ALL, and does the boot line name your reader?** F8. `prism_bridge`
+   changed. If it is silent, that is the whole session's biggest risk and nothing else matters.
+2. **`Core.array_of`'s new `strict` and `ui_directory`'s automatic strict on alternative chains** —
+   these sit under every screen and their failure mode is SILENCE, not a crash. If several screens
+   go quiet at once, press **Ctrl+G** to disable the reflection gates; if they come back, the gates
+   are the cause. The log prints one `strict array gate: …` / `member gate: …` line per distinct
+   case, which is the evidence. Failing closed here is meant to be BOUNDED (a tick or two while the
+   class is enumerated) — if it is permanent, that is a bug, not the design.
+3. **`Core.peek_all` no longer resolves directory roots by scanning.** Watch the world-map travel
+   d-pad and the status sheet, the two fast loops that depend on it.
+4. **The map, against the reporter's three complaints**: hold the d-pad (auto-repeat), tap it fast
+   (no press should be dropped now), press **X** on both maps (should describe, not just list).
+5. **Braille**: with a display connected, `braille = auto` should just work; the boot log prints
+   `braille output ON/off (mode=…, backend=…)`. If speech stutters more than before, set
+   `braille = off` in `config.txt` — it is one extra backend call per utterance and
+   `__KakarotSpeechStats` (Ctrl+F5) now times it.
+6. **The Krillin cutscene**, if it can be reproduced: the objective should NOT re-announce during it.
+   Whatever happens, the log now carries `objective -> …` / `objective change -> …` lines, and a
+   crash leaves `nav.markers` / `nav.mapicons` in `crash_trail.bin` — `tools/read-crash-trail.ps1`
+   decodes it without relaunching. **Ask a reporter for that file before anything else.**
+
+---
+
+### Previous next step (2026-07-27, superseded)
+
+**RETEST THE CRASH-AUDIT BATCH.** 14 files changed (10 Lua + all 4 native bridges),
 source-only and unverified in game. **A full game RESTART is required** — `app.lua`/`main.lua`
 changed and every DLL was rebuilt, so Ctrl+Shift+R is not enough. What to watch, in order of how
 much of the mod it could take down:

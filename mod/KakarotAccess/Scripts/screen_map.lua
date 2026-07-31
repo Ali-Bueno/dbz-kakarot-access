@@ -470,6 +470,86 @@ local ft_built_at, ft_pending = 0, nil
 -- or it does not.
 local ft_last_name = nil
 
+-- D-PAD AUTO-REPEAT (user 2026-07-31: "navigating the map can feel a bit laggy"). Without it a
+-- twenty-destination list is twenty separate presses, and the player compensates by tapping fast
+-- — which is also what made presses get eaten. Holding a direction now keeps stepping.
+-- Both delays are interaction constants (there is no game-side value to derive them from) and
+-- are paced against the SCREEN READER, not the OS key-repeat rate: every step interrupts the
+-- previous name, so anything faster than roughly a short name's worth just yields half-words.
+-- The floor is deliberately not tied to Speech.speak_seconds — waiting for each name to finish
+-- would make a long list slower to cross than tapping, which is the opposite of the fix.
+local RPT_DELAY_S = 0.40   -- hold this long before the repeat starts (a deliberate single step
+                           -- must never repeat)
+local RPT_EVERY_S = 0.25   -- then one step per this long
+local ft_hold_dir, ft_rpt_at = 0, 0
+
+-- Leaving the travel list: a transition, the map closing, or another adapter owning the screen —
+-- which includes the game's own "Go to X?" Yes/No, so this runs for the whole confirmation.
+--
+-- Keep ft_prevbtn tracking the pad's ACTUAL level instead of zeroing it. A zeroed level makes a
+-- direction the player is STILL HOLDING read as a brand-new press the instant control comes back
+-- (ft_pressed's level compare sees 1-from-0), stepping the list once by itself right where the
+-- player expects nothing to happen. Only the auto-repeat is genuinely reset: it represents a
+-- session of holding the d-pad, and that session ended when the list lost the screen.
+local function ft_idle()
+    local snap = Input.read()
+    ft_prevbtn = snap and snap.buttons or 0
+    ft_hold_dir, ft_rpt_at = 0, 0
+end
+
+-- Rising edge for `mask` = the NATIVE LATCH or the level compare against the previous tick.
+-- The latch (input_bridge's take_edges, drained once per pad tick by pad_poll) is fed inside
+-- the XInput hook at the game's frame rate, so it catches a tap whose whole down-up cycle fell
+-- between two of our polls — which the level compare structurally cannot see, and which is what
+-- "sometimes it will miss places when you use the DPad" was (user, 2026-07-31). The level
+-- compare stays as the fallback for an input_bridge.dll without the latch. Either one saying
+-- "pressed" is enough, and a boolean cannot double-fire.
+-- `buttons` is this tick's level; the CALLER commits it to ft_prevbtn once all its edges are read.
+local function ft_pressed(buttons, mask)
+    return Input.pressed(mask) or ((buttons & mask) ~= 0 and (ft_prevbtn & mask) == 0)
+end
+
+-- Keep the game's own selection index pinned to ours, so a stray analog hover cannot retarget
+-- its Confirm. This used to be an unconditional Mem.write_i32 on EVERY 20 ms tick, and that
+-- write asserts the host class first (Mem.class_ok -> class_chain walks the whole super chain
+-- through reflection: ~30 pcall'd reflection calls, fifty times a second, on the game thread).
+-- Reading the index back is a plain guarded native read with no reflection at all, so correct it
+-- only when it has actually drifted. Identical guarantee, a fraction of the cost.
+local function ft_pin_sel(host, idx)
+    if Mem.i32(host, FT.selIndex) == idx then return true end
+    return ft_write_sel(host, idx)
+end
+
+-- X on the world map: describe the selection on demand.
+--
+-- The player pressed X expecting an info key, got a list of place names, and reasonably
+-- expected more (user, 2026-07-31). X was never a mod bind: it is one of ui_registry's
+-- BOOST_BTNS, so pressing any face button lifts the scan quiet window, the travel-icon pool
+-- finally scans, and this screen's once-per-opening "N travel points: …" line fires right
+-- then — an info key by accident, saying the one thing it already said on opening. Now it is
+-- a real one, and answers the questions the list read-out cannot: WHICH destination is armed,
+-- WHERE in the list it sits, and what the free analog cursor is currently over (that is a
+-- different thing from the selection — the cursor roams, the d-pad selection does not).
+local function ft_describe()
+    local n = ft_points and #ft_points or 0
+    local parts = {}
+    if ft_sel and ft_points and ft_points[ft_sel + 1] then
+        parts[#parts + 1] = string.format(I18n.t("map_info_sel"),
+            ft_points[ft_sel + 1], ft_sel + 1, n)
+    elseif n > 0 then
+        parts[#parts + 1] = string.format(I18n.t("map_info_none"), n)
+    else
+        parts[#parts + 1] = I18n.t("map_info_empty")
+    end
+    -- Where the game's own free cursor sits, straight from the host text the adapter already
+    -- reads each poll (state.name is "empty terrain" when the cursor is off every area).
+    local s = state
+    if s and s.name then
+        parts[#parts + 1] = string.format(I18n.t("map_info_cursor"), s.name)
+    end
+    Speech.say(table.concat(parts, ". "), true)
+end
+
 local function ft_guidance(host)
     -- EDGE BOOKKEEPING FIRST (2026-07-28 — "a veces funciona, a veces no"). `ft_prevbtn` used to
     -- be updated only at the very END of this function, i.e. AFTER the "no list yet" early return.
@@ -480,8 +560,9 @@ local function ft_guidance(host)
     local snap = Input.read()
     local B = Input.BTN
     local buttons = snap and snap.buttons or 0
-    local function pressed(m) return (buttons & m) ~= 0 and (ft_prevbtn & m) == 0 end
+    local function pressed(m) return ft_pressed(buttons, m) end
     local hit_down, hit_up, hit_ok = pressed(B.DPAD_DOWN), pressed(B.DPAD_UP), pressed(B.A)
+    local hit_info = pressed(B.X)
     ft_prevbtn = buttons
 
     -- Keyboard: the arrows drive this exactly like the d-pad. Queued by main.lua's keybinds and
@@ -550,10 +631,24 @@ local function ft_guidance(host)
     elseif hit_up then
         move(-1)
     end
+    -- AUTO-REPEAT: a held direction keeps stepping after RPT_DELAY_S. Computed from the LEVEL
+    -- (what is held right now), which is the one thing the level read is actually right for —
+    -- edges say a press happened, they say nothing about it still being down.
+    local now = os.clock()
+    local held = (((buttons & B.DPAD_DOWN) ~= 0) and 1)
+              or (((buttons & B.DPAD_UP) ~= 0) and -1) or 0
+    if held ~= ft_hold_dir then
+        ft_hold_dir, ft_rpt_at = held, now + RPT_DELAY_S
+    elseif held ~= 0 and now >= ft_rpt_at then
+        ft_rpt_at = now + RPT_EVERY_S
+        move(held)
+    end
     -- Confirm: pin the chosen index and fire the game's own confirm for it (validated in-game).
     if hit_ok then confirm() end
+    -- X describes the selection in full (see ft_describe).
+    if hit_info then ft_describe() end
     -- keep the chosen index pinned so the game's own Confirm (A) also targets it.
-    if ft_sel then ft_write_sel(host, ft_sel) end
+    if ft_sel then ft_pin_sel(host, ft_sel) end
 end
 
 -- Area map: announce the POI the cursor is focused on (FocusTarget), each time it changes.
@@ -591,7 +686,8 @@ end
 
 function Map.reset()
     ann:reset(); dests_said = false
-    ft_points, ft_sel, ft_prevbtn = nil, nil, 0
+    ft_points, ft_sel = nil, nil
+    ft_idle()   -- button level + auto-repeat: a direction held on the way out must not resume
     -- Drop the memoised fast-travel host: the map is rebuilt on every open, so a handle from the
     -- previous visit is exactly the stale instance that killed the d-pad on re-entry (ft_host).
     ft_cached, ft_checked_at = nil, 0
@@ -664,7 +760,12 @@ function Map.update()
             ft_points = ft_build(host)
             if #ft_points > 0 then
                 dests_said = true
-                Speech.say(string.format(I18n.t("map_travel_points"), #ft_points, table.concat(ft_points, ", ")), false)
+                -- …and name the info key here, once, where the player is already being told
+                -- what the list holds. X used to *look* like an info key by accident (see
+                -- ft_describe) — saying so out loud is what turns that into a feature.
+                Speech.say(string.format(I18n.t("map_travel_points"), #ft_points,
+                    table.concat(ft_points, ", "))
+                    .. ". " .. string.format(I18n.t("map_info_hint"), I18n.button("X")), false)
             end
         end
     elseif s.host then
@@ -682,10 +783,25 @@ end
 local travel_running = false
 
 local function ft_step()
-    if Transition.active() then ft_prevbtn = 0 return end
+    if Transition.active() then ft_idle() return end
     local s = state
-    if not (s and s.world) or Registry.active_adapter() ~= Map then
-        ft_prevbtn = 0
+    if not s or Registry.active_adapter() ~= Map then
+        ft_idle()
+        return
+    end
+    if not s.world then
+        -- AREA map: no travel list to drive here, but the info key answers on this screen too —
+        -- X re-reads the POI under the cursor, which area_poi() otherwise speaks only when the
+        -- focus CHANGES. Same button, same meaning on both map screens.
+        local snap = Input.read()
+        local buttons = snap and snap.buttons or 0
+        local hit_info = ft_pressed(buttons, Input.BTN.X)
+        ft_prevbtn = buttons
+        ft_hold_dir, ft_rpt_at = 0, 0   -- the auto-repeat belongs to the world-map list only
+        if hit_info and s.host and Core.valid(s.host) then
+            area_focus_key = nil   -- drop the diff-gate so the SAME focus speaks again
+            area_poi(s.host)
+        end
         return
     end
     local host = ft_host()

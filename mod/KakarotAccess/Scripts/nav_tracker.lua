@@ -573,7 +573,17 @@ local function best_candidate(px, py, pz, want_pri)
     -- Emptied, NOT returned from: this function draws candidates from other sources further
     -- down (the minimap icon list), and those are still valid. The loop below simply iterates
     -- nothing.
-    if navi_icons ~= nil and tick >= navi_next and Core.scan_quiet() then
+    -- `tick >= navi_next` REMOVED (2026-07-31, the Krillin-cutscene report). The reasoning above
+    -- is that these handles are freed by the engine on teardown and re-validation cannot see a
+    -- recycled address — and that argument does not depend on the list having EXPIRED. With the
+    -- expiry conjunct in place, a list refreshed a few seconds before a cutscene began was kept
+    -- and dereferenced for the cutscene's whole duration, which is exactly the window where the
+    -- sub-levels holding those widgets stream out. A cutscene is not a Transition, so nothing
+    -- else releases them either. Quiet alone is the right condition: it means an overlay owns
+    -- the screen, i.e. both that the list cannot be refreshed AND that the world may be moving
+    -- under it. Still emptied to {} rather than nil, so the branch below cannot read this as
+    -- "never fetched" and force a 65 ms FindAllOf mid-cutscene.
+    if navi_icons ~= nil and Core.scan_quiet() then
         navi_icons = {}
     end
     if navi_icons == nil or (tick >= navi_next and not Core.scan_quiet()) then
@@ -594,6 +604,13 @@ local function best_candidate(px, py, pz, want_pri)
         end
     end
 
+    -- BLACK-BOX MARKS (2026-07-31). best_candidate's two walks were an unmarked window inside
+    -- `nav.step`: both dereference per-level pooled widgets, and if the process dies in one of
+    -- them the trail blames whichever loop wrote the last mark. That is the same blind spot the
+    -- registry prologue had, and the rule earned there was that when two candidates share an
+    -- unmarked window the deliverable is a MARK, not a hypothesis. One memcpy each, on a ~1.5 s
+    -- cadence — nothing next to the ~36 the sweep already writes per tick.
+    Mem.mark("nav.markers")
     for _, icon in pairs(navi_icons) do
         if Core.valid(icon) and icon_in_use(icon) then
             -- navi_icons is a module-level list held for RESCAN_CLASSES ticks.
@@ -603,6 +620,7 @@ local function best_candidate(px, py, pz, want_pri)
     end
 
     if not best then
+        Mem.mark("nav.mapicons")   -- the second half of the unmarked window; see nav.markers above
         local mm = minimap()
         if Core.valid(mm) then
             pcall(function()
@@ -1032,6 +1050,9 @@ Transition.on_begin("nav_tracker", function()
     last_enemy_key = nil
     last_aim_key = nil
     enemy_cache, enemy_next = nil, 0
+    -- The shared picker snapshot is a whole LIST of world-actor handles (Nav.targets_cached):
+    -- every actor in it lived in the level that is being torn down.
+    Nav.targets_snap, Nav.targets_snap_at = nil, 0
     gated_prev = true        -- audio is being stopped right here
     Audio.stop()
 end)
@@ -1067,6 +1088,24 @@ end
 -- see add_target), never on plain actors.
 local function chain_step(px, py, pz)
     local a = chain_wait.actor
+    -- A NIL handle is NOT the same event as a dead one — the same distinction step() makes for
+    -- `target.actor`, which this branch never got (user report 2026-07-31: during a collectible
+    -- sweep, opening any pausing menu — or getting pulled into a battle — makes the radar skip
+    -- the item the player is standing on and point at the next one, forever). `release_world_refs`
+    -- nils this handle on the falling edge of EVERY gate, so nil means only "the world went away
+    -- while we were waiting here", never "it was collected". Advancing on it ran chain_to_next
+    -- while the arrival path had already written chain_seen[key], so the skipped item could never
+    -- be re-targeted for the rest of the sweep. Stash it as plain data in the same resume slot
+    -- step() uses instead: the resume scan re-acquires it by category+key once the world is back,
+    -- chain_seen is left untouched, and arriving on it re-arms chain_wait with a live handle. (No
+    -- label: chain_wait never carried one, and the resume scan speaks Nav.item_label(found).)
+    if a == nil then
+        resume_pick = { key = chain_wait.key, grp = chain_wait.grp,
+                        stateful = chain_wait.stateful, tries = 0 }
+        chain_wait = nil
+        return
+    end
+    -- Only a handle that is non-nil AND fails validation counts as collected/despawned.
     local advance = not Core.valid(a)
     if not advance then
         local hidden, st = false, nil
@@ -1460,6 +1499,11 @@ function Nav.release_world_refs()
     -- nothing below WORLD_DROP_TICKS was clearing it, so a gated period SHORTER than the timer
     -- still handed it a dead pointer.
     if chain_wait then chain_wait.actor = nil end
+    -- The shared target snapshot (Nav.targets_cached, added 2026-07-31) is the same hazard in
+    -- bulk: a whole LIST of world-actor handles collected on an earlier tick. Dropping it here
+    -- is what makes the TTL safe — a served snapshot can then only ever contain handles gathered
+    -- inside the SAME uninterrupted free-roam window as the caller asking for it.
+    Nav.targets_snap, Nav.targets_snap_at = nil, 0
 end
 
 local function step()
@@ -1972,7 +2016,12 @@ local function explore_rescan(px, py, pz, ms)
     explore_scan_ms = ms
     local t0 = os.clock()
     local pois = {}
-    for _, cat in ipairs(Nav.list_targets()) do
+    -- The shared snapshot too (crash audit RANK 3, 2026-07-31). Behaviour here is unchanged in the
+    -- normal case — this function is already rate-limited to EXPLORE_RESCAN_MS and the TTL is that
+    -- same constant, so when it is due the snapshot is due as well and it sweeps. What it buys is
+    -- the other direction: if the R3 picker swept a moment ago, this reuses that instead of paying
+    -- a second ~1.2 s sweep for the same answer.
+    for _, cat in ipairs(Nav.targets_cached()) do
         for _, it in ipairs(cat.items or {}) do
             local x, y, z = actor_pos(it.actor)
             if x then
@@ -2141,7 +2190,18 @@ end
 -- ---- user commands --------------------------------------------------------------------
 
 -- F3: master toggle. Off = immediate silence; on = re-acquire and announce.
+--
+-- SAME WRAPPER AND SAME REASON AS Nav.toggle_route BELOW (crash audit RANK 1, 2026-07-31).
+-- A RegisterKeyBind callback runs on UE4SS's KEYBOARD thread, and this body is not a flag flip:
+-- `drop_target()` rewrites the very module upvalues (target / route / chain_wait / resume_pick)
+-- that the 100 ms step() reads, and `Speech.say` does a read-modify-write of speech.lua's shared
+-- `pending` queue — concurrently, on the SAME lua_State as the poll loop. That is the allocator +
+-- incremental-GC race that kills the process minutes later somewhere unrelated. The 2026-07-27
+-- keybind sweep missed this one for the same reason it missed toggle_route: it is delegated
+-- through app.lua (App.nav_toggle) rather than bound directly, so it did not look like a handler.
+-- F3 is the advertised radar master switch, so a player presses it constantly.
 function Nav.toggle()
+    ExecuteInGameThread(function()
     on = not on
     if not on then
         Audio.stop()
@@ -2162,7 +2222,9 @@ function Nav.toggle()
         auto_suppressed = false   -- F3 on resumes auto quest tracking after a stop/arrival
         Speech.say(I18n.t("nav_on"), true)
     end
-    return on
+    end)
+    -- No return value: the wrapper defers the body, so `on` is not yet decided here. App.nav_toggle
+    -- discards it anyway — exactly as App.nav_route_toggle already does for Nav.toggle_route.
 end
 
 -- ---- companion tracking (Shift+F5) -----------------------------------------------
@@ -2450,6 +2512,35 @@ local function npc_name(npc)
     -- some other descriptive id (or a Cpl code): clean it and speak it raw
     local cleaned = raw:gsub("^[%a]-_", ""):gsub("_", " ")
     return cleaned ~= "" and cleaned or nil
+end
+
+-- TTL-shared view of list_targets, for the two callers that must not pay for it on demand
+-- (crash audit RANK 3, 2026-07-31). list_targets issues ~17 raw FindAllOf calls — the file's own
+-- measurement is ~68 ms each, ~1.2 s for the sweep — and it takes no scan slot and never routes
+-- through timed_findall, so __KakarotScanStats cannot even see it. Two callers turned that into a
+-- felt freeze: explore mode re-sweeps every few seconds while the player is simply walking around,
+-- and radar_menu.do_open runs it SYNCHRONOUSLY on the shared 20 ms pad dispatch, so opening the R3
+-- picker in a dense area locks the game on the keypress. They now share one snapshot, so whichever
+-- of them swept last pays and the other is free.
+--
+-- The TTL is DERIVED from EXPLORE_RESCAN_MS, not picked: that constant is already this mod's own
+-- statement of how stale a target list may be before it must be re-swept, so reusing it keeps one
+-- definition instead of inventing a second. Written inline rather than as a named local on
+-- purpose — this file sits at Lua's 200-locals-per-function ceiling (settings.lua's `_G` handoff
+-- comment records the same constraint), and one more declaration here fails to COMPILE.
+--
+-- SAFETY — this holds live world-actor handles in bulk. It is dropped by release_world_refs and by
+-- the map-transition hook, so a snapshot can only ever be served to a caller inside the SAME
+-- uninterrupted free-roam window it was gathered in. Callers still validity-check every actor, as
+-- they always did with a fresh list.
+function Nav.targets_cached()
+    local t = os.clock()
+    if Nav.targets_snap and (t - (Nav.targets_snap_at or 0)) < EXPLORE_RESCAN_MS / 1000 then
+        return Nav.targets_snap
+    end
+    local list = Nav.list_targets()
+    Nav.targets_snap, Nav.targets_snap_at = list, t
+    return list
 end
 
 function Nav.list_targets()
@@ -3148,7 +3239,16 @@ function Nav.notify_objective_change(kind)
         preempt.focus = want
         print(string.format("[KakarotAccess] quest focus -> %s\n", tostring(kind)))
     end
-    preempt.scans = preempt.TRIES
+    -- ARM FROM ZERO ONLY (2026-07-31, the Krillin-cutscene report). The consumer drains this
+    -- counter at most once per SCAN_EVERY (~1.5 s), while this callback can fire as fast as the
+    -- quest HUD reader polls (300 ms) — so any caller that flaps held the preempt PERMANENTLY
+    -- armed, and an armed preempt deliberately bypasses the suppressors, keeping the marker walk
+    -- running straight through a cutscene over per-level handles the engine is freeing. The flap
+    -- is fixed at its source too (quest_objective now settles before signalling); this is the
+    -- defence in depth, because "armed" is a state no upstream bug should be able to pin.
+    -- Re-arming was never the meaningful transition anyway: only going from spent to armed is.
+    -- A second genuine change while armed still retargets through preempt.pri just below.
+    if preempt.scans <= 0 then preempt.scans = preempt.TRIES end
     preempt.pri = want
     -- IDLE radar (no hand-picked target, no battle-interrupted resume pending): a
     -- freshly activated objective must be tracked and KEEP being tracked even if its

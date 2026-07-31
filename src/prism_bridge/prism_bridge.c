@@ -15,9 +15,12 @@
  *   local prism = require("prism_bridge")
  *   prism.say("Hello", true)   -- speak (interrupt previous); interrupt defaults true
  *   prism.say("queued", false) -- speak without interrupting
+ *   prism.output("Hello", true)-- speak AND send to a braille display, in one backend call
+ *   prism.braille("Hello")     -- braille display only, no speech
  *   prism.stop()
  *   prism.is_speaking()        -> bool
  *   prism.detect()             -> backend name (e.g. "NVDA") or nil
+ *   prism.features()           -> table of booleans: what THIS backend actually supports
  *   prism.set_rate(v) / set_volume(v) / set_pitch(v)   -- v is a float
  */
 
@@ -40,6 +43,8 @@ typedef const char*   (PRISM_CALL *fn_backend_name)(PrismBackend*);
 typedef PrismError    (PRISM_CALL *fn_backend_initialize)(PrismBackend*);
 typedef PrismError    (PRISM_CALL *fn_speak)(PrismBackend*, const char*, bool);
 typedef PrismError    (PRISM_CALL *fn_output)(PrismBackend*, const char*, bool);
+typedef PrismError    (PRISM_CALL *fn_braille)(PrismBackend*, const char*);
+typedef uint64_t      (PRISM_CALL *fn_get_features)(PrismBackend*);
 typedef PrismError    (PRISM_CALL *fn_stop)(PrismBackend*);
 typedef PrismError    (PRISM_CALL *fn_is_speaking)(PrismBackend*, bool*);
 typedef PrismError    (PRISM_CALL *fn_set_float)(PrismBackend*, float);
@@ -56,6 +61,8 @@ static fn_backend_name       p_backend_name = NULL;
 static fn_backend_initialize p_backend_initialize = NULL;
 static fn_speak              p_speak = NULL;
 static fn_output             p_output = NULL;
+static fn_braille            p_braille = NULL;
+static fn_get_features       p_get_features = NULL;
 static fn_stop               p_stop = NULL;
 static fn_is_speaking        p_is_speaking = NULL;
 static fn_set_float          p_set_rate = NULL;
@@ -86,6 +93,53 @@ static int l_output(lua_State *L) {
     if (!g_ready) { lua_pushboolean(L, 0); return 1; }
     PrismError e = p_output(g_backend, text, interrupt ? true : false);
     lua_pushboolean(L, e == PRISM_OK);
+    return 1;
+}
+
+/* braille(text) -> bool : send text to the BRAILLE DISPLAY only, no speech.
+ *
+ * Kept as its own call rather than routing speech through prism_backend_output (which is the
+ * library's combined speak+braille path): output() is one call instead of two, but if its
+ * semantics ever differ from what we assume, every line of speech in the mod goes with it.
+ * speak() is the mod's lifeline, so it stays on the code path it has always used and braille
+ * is strictly ADDITIVE — a braille failure can never cost the player their speech. */
+static int l_braille(lua_State *L) {
+    const char* text = luaL_checkstring(L, 1);
+    if (!g_ready || !p_braille) { lua_pushboolean(L, 0); return 1; }
+    PrismError e = p_braille(g_backend, text);
+    lua_pushboolean(L, e == PRISM_OK);
+    return 1;
+}
+
+static void feat_field(lua_State *L, const char *name, uint64_t feats, uint64_t bit) {
+    lua_pushboolean(L, (feats & bit) != 0);
+    lua_setfield(L, -2, name);
+}
+
+/* features() -> table of booleans describing what THIS backend can actually do.
+ *
+ * The bit values come from PrismBackendFeature in prism.h — the library's own declaration, not
+ * numbers written here. `known` reports whether the query was answerable at all: an older
+ * prism.dll without prism_backend_get_features leaves every flag false, and a caller must be
+ * able to tell that apart from "this backend genuinely supports nothing" — otherwise braille
+ * would silently disable itself on a DLL perfectly capable of it. */
+static int l_features(lua_State *L) {
+    uint64_t f = (g_ready && p_get_features) ? p_get_features(g_backend) : 0;
+    lua_createtable(L, 0, 10);
+    feat_field(L, "speak",       f, PRISM_BACKEND_SUPPORTS_SPEAK);
+    feat_field(L, "braille",     f, PRISM_BACKEND_SUPPORTS_BRAILLE);
+    feat_field(L, "output",      f, PRISM_BACKEND_SUPPORTS_OUTPUT);
+    feat_field(L, "stop",        f, PRISM_BACKEND_SUPPORTS_STOP);
+    feat_field(L, "is_speaking", f, PRISM_BACKEND_SUPPORTS_IS_SPEAKING);
+    feat_field(L, "set_rate",    f, PRISM_BACKEND_SUPPORTS_SET_RATE);
+    feat_field(L, "set_volume",  f, PRISM_BACKEND_SUPPORTS_SET_VOLUME);
+    feat_field(L, "set_pitch",   f, PRISM_BACKEND_SUPPORTS_SET_PITCH);
+    lua_pushboolean(L, p_get_features != NULL);
+    lua_setfield(L, -2, "known");
+    /* Whether the braille ENTRY POINT resolved, which is a different question from whether the
+     * backend advertises the feature: with `known` false, this is all a caller has to go on. */
+    lua_pushboolean(L, p_braille != NULL);
+    lua_setfield(L, -2, "braille_available");
     return 1;
 }
 
@@ -136,6 +190,8 @@ static int l_is_ready(lua_State *L) {
 static const luaL_Reg prism_funcs[] = {
     {"say", l_say},
     {"output", l_output},
+    {"braille", l_braille},
+    {"features", l_features},
     {"stop", l_stop},
     {"is_speaking", l_is_speaking},
     {"detect", l_detect},
@@ -169,6 +225,13 @@ static HMODULE load_from_own_dir(const char* dllName) {
 #define RESOLVE(var, name) do { \
     (var) = (void*)GetProcAddress(g_prism, (name)); \
     if (!(var)) { all = 0; } \
+} while (0)
+
+/* OPTIONAL export: a miss leaves the pointer NULL and the feature off, but must NOT fail the
+ * whole module. Everything the mod says goes through here, so a prism.dll that predates an
+ * export must never cost the player their screen reader over a nice-to-have. */
+#define RESOLVE_OPT(var, name) do { \
+    (var) = (void*)GetProcAddress(g_prism, (name)); \
 } while (0)
 
 __declspec(dllexport) int luaopen_prism_bridge(lua_State *L) {
@@ -208,6 +271,8 @@ __declspec(dllexport) int luaopen_prism_bridge(lua_State *L) {
     RESOLVE(p_backend_initialize, "prism_backend_initialize");
     RESOLVE(p_speak, "prism_backend_speak");
     RESOLVE(p_output, "prism_backend_output");
+    RESOLVE_OPT(p_braille, "prism_backend_braille");
+    RESOLVE_OPT(p_get_features, "prism_backend_get_features");
     RESOLVE(p_stop, "prism_backend_stop");
     RESOLVE(p_is_speaking, "prism_backend_is_speaking");
     RESOLVE(p_set_rate, "prism_backend_set_rate");

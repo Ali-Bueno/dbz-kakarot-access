@@ -223,7 +223,10 @@ local function choices()
     --     a bit more / Return home") = UAT_UISystemWindowChoice: ChoiceTxt label, and
     --     the selected row shows its BasePlate (the yellow bar).
     for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
-        local arr, n = Core.array_of(win, pool)
+        -- STRICT: `pool` is a candidate list and each window class declares exactly one entry
+        -- of it, so every other name is one we positively expect to be absent — the case
+        -- fail-open turns into the uncatchable abort (2026-07-31 audit).
+        local arr, n = Core.array_of(win, pool, true)
         if arr then pcall(function()
             for i = 1, n do
                 local ch = arr[i]
@@ -299,7 +302,11 @@ local function window_has_choices(w)
     if not Core.valid(w) then return false end
     for _, pool in ipairs({ "WL_TextPlateCtn", "UIChoice_List" }) do
         local found = false
-        local arr, n = Core.array_of(w, pool)
+        -- STRICT: each window class declares exactly ONE of these two pools by design, so the
+        -- loser is a name we positively expect to be absent — fail-open there is a licence for
+        -- the uncatchable abort (2026-07-31 audit; Core.member had this since 07-28, array_of
+        -- only got the twin parameter now).
+        local arr, n = Core.array_of(w, pool, true)
         if arr then pcall(function()
             for i = 1, n do
                 local ch = arr[i]
@@ -392,7 +399,10 @@ local function dump_window(msg)
     pcall(function() wname = win:GetFullName():match("^%S+ (%S+)") or "?" end)
     f:write(string.format("[%d] win=%s msg=%s\n", os.time(), wname, tostring(msg)))
     for _, pool in ipairs(DUMP_POOLS) do
-        local arr, n = Core.array_of(win, pool)
+        -- STRICT: `pool` is a candidate list and each window class declares exactly one entry
+        -- of it, so every other name is one we positively expect to be absent — the case
+        -- fail-open turns into the uncatchable abort (2026-07-31 audit).
+        local arr, n = Core.array_of(win, pool, true)
         if arr then pcall(function()
             for i = 1, n do
                 local row = arr[i]

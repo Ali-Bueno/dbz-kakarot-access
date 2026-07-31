@@ -385,8 +385,19 @@ local function prop_set(o)
     if prop_budget <= 0 then return nil end     -- not this tick: gate stays open
     prop_budget = prop_budget - 1
     local set, count, why, depth = walk_props(cls)
-    if count == 0 then
-        prop_sets[key] = false     -- introspection told us nothing: never gate on it
+    -- COUNT ZERO MEANS TWO DIFFERENT THINGS, and only one of them is permanent (2026-07-31 audit).
+    -- A walk that COMPLETED and found nothing is a fact about the class: cache `false` and never
+    -- gate on it again. A walk that RAISED on the first level (`why = "d"`) also returns count 0 —
+    -- and writing `false` there froze a transient failure into the session. The consequence was
+    -- silent and total: prop_set's cache lookup then returns nil forever, with no retry, no
+    -- partial mark and no log line, so Core.member's STRICT branch refuses unconditionally and
+    -- Core.first_text / Core.first_member — every multi-candidate adapter's primary text — read
+    -- nothing on that class for the rest of the map. A reward sheet or story screen first seen
+    -- while the engine was busy simply never spoke again. The truncated-walk case already had
+    -- PARTIAL_RETRY_S / PARTIAL_RETRIES for exactly this reason; the count == 0 case had none of
+    -- it. So: permanent verdict only on a completed walk, everything else goes to the retry lane.
+    if count == 0 and why == nil then
+        prop_sets[key] = false     -- introspection COMPLETED and told us nothing: never gate on it
         return nil
     end
     prop_sets[key] = set
@@ -576,10 +587,15 @@ local MAX_ANCESTORS = 24
 -- calling a member a class doesn't have is the uncatchable C++ abort.
 local userwidget_cls = nil
 local function is_userwidget(o)
-    if userwidget_cls == nil then
-        local ok, c = pcall(function() return StaticFindObject("/Script/UMG.UserWidget") end)
-        userwidget_cls = (ok and c) or false
-    end
+    -- Via Mem.find_object, the mod's ONE retry-throttled engine-object resolver (crash audit
+    -- RANK 5, 2026-07-31). This used to be a single early StaticFindObject whose result was
+    -- latched with `(ok and c) or false` — so ONE miss, and the boot window is exactly when a
+    -- miss happens, cached `false` for the entire session and silently dropped the IsUserWidget
+    -- half of on_screen for good. Nothing said so anywhere. The resolver caches only SUCCESS,
+    -- retries at a wall-clock cadence rather than per call, and gives up loudly after its
+    -- deadline — and it is the same policy the ClassPrivate probe uses, instead of two modules
+    -- each inventing one and getting it wrong in opposite directions.
+    if not userwidget_cls then userwidget_cls = Mem.find_object("/Script/UMG.UserWidget") end
     if not userwidget_cls then return false end
     local ok, r = pcall(function() return o:IsA(userwidget_cls) end)
     return ok and r == true
@@ -677,9 +693,34 @@ end
 -- `ArrayProperty` while a fixed C array is a single ObjectProperty with ArrayDim > 1. So if the
 -- class is known and the member is not an ArrayProperty, we refuse before touching it. Fails
 -- open like every other guard here: an unknown class or an unenumerated member proceeds as before.
-function Core.array_of(owner, name)
+-- `strict` (2026-07-31 audit): the exact twin of Core.member's third argument, and it should have
+-- landed here on the same day. Core.member got it because a MULTI-CANDIDATE probe's contract is
+-- the opposite of an ordinary fetch: most of its candidates are EXPECTED to be absent, so failing
+-- open is a licence to fetch a name we have positive reason to believe is not declared — the
+-- uncatchable abort this gate exists to prevent. Array probes have exactly the same shape
+-- (screen_dialog tries {WL_TextPlateCtn, UIChoice_List}; each window class declares one), and
+-- without the parameter they fell straight through to the raw fetch whenever the set was
+-- unavailable — which is not rare, because PROP_SETS_PER_TICK is ONE set per tick shared by every
+-- adapter, so a screen presenting several new classes spends several ticks completely ungated.
+-- Failing closed here is acceptable for the same reason it is on Core.member: it is BOUNDED (a
+-- probe reads nothing for a tick or two, then self-heals) where failing open is fatal.
+-- Single-candidate callers must NOT pass it — fail-open on "don't know" is deliberate there, and
+-- widening strict to shared substrate is the 2026-07-25 Options regression.
+function Core.array_of(owner, name, strict)
     if not Core.valid(owner) then return nil, nil end
     local set, key, partial = prop_set(owner)
+    if strict and (not set or partial) and not custom_props[name] then
+        local cls
+        pcall(function() cls = owner:GetClass():GetFName():ToString() end)
+        cls = cls or "?"
+        if not strict_warned["arr:" .. cls] then   -- lint:plain-table
+            strict_warned["arr:" .. cls] = true    -- lint:plain-table
+            print(string.format(
+                "[KakarotAccess] strict array gate: no usable property set for %s "
+                .. "(candidate '%s' skipped)\n", cls, tostring(name)))
+        end
+        return nil, nil
+    end
     -- EXISTENCE gate, the same one Core.member applies (added 2026-07-27; it was missing here).
     -- Fetching a member the owner's class does not declare is one of this game's UNCATCHABLE
     -- aborts: UE4SS raises it below the Lua boundary, so the `pcall` around `owner[name]` below
@@ -1007,10 +1048,10 @@ dir_mod = function()
     end
     return Dir or nil
 end
-local function directory_list(cls_name)
+local function directory_list(cls_name, no_scan)
     local d = dir_mod()
     if not d then return nil end
-    return d.resolve(cls_name)
+    return d.resolve(cls_name, no_scan)
 end
 
 -- Real-time tick clock (100ms units). Backoffs used to run on each ADAPTER's private tick
@@ -1409,8 +1450,16 @@ end
 -- For per-tick predicates (the registry's cutscene gate) that must not cost anything:
 -- a probe that scans would defeat the very quiet it computes (the Battle_Hud_P_Main_C
 -- n=24 lesson, dump 2026-07-16 21:11).
+-- MADE TRUE AT THE SOURCE (crash audit RANK 16, 2026-07-31). The "never scans" contract above was
+-- an intention, not a fact: for a directory-MAPPED class this went into Directory.resolve, whose
+-- root getters reach a FindAllOf("PlayerController") and a full first-instance scan whenever a root
+-- is not yet cached — ~65 ms, on callers that must cost nothing. It fired after every map load, and
+-- PERMANENTLY at the title screen where the hud root can never resolve. Two victims: the registry's
+-- own per-tick cutscene gate, and screen_map's 20 ms travel step, which never calls
+-- Core.begin_scan_tick and so drained the shared budget without refilling it — starving the very
+-- detection it was waiting on. `no_scan` makes resolve answer from cached roots only.
 function Core.peek_all(cls_name)
-    local d = directory_list(cls_name)
+    local d = directory_list(cls_name, true)
     if d then return d end
     return all_cache[cls_name] or {}
 end
@@ -1456,6 +1505,14 @@ Transition.on_begin("ui_core", function()
     -- budget/backoff (same address-reuse argument), and the one-line-per-class log memo, so a
     -- class that is still truncated after the load says so again instead of going silent.
     prop_partial, prop_retry, prop_tries, partial_logged = {}, {}, {}, {}
+    -- …and the CUSTOM-property whitelist, which was the one reflection cache next to these that
+    -- never got flushed (2026-07-31 audit). It is the same address-reuse argument, only worse:
+    -- Core.allow_member records a bare NAME, but the underlying RegisterCustomProperty resolves
+    -- its BelongsToClass ONCE and thereafter matches by the raw UClass*. A map switch unloads
+    -- Blueprint generated classes and their addresses get reused, so after the first load the
+    -- registration stops resolving while the names stay whitelisted — and the gate flips from
+    -- PROTECTION into PERMISSION. Registrants re-arm on their own transition hook.
+    custom_props = {}
     -- probe_info / gi_prefix survive on purpose: GameInstance-child menus persist across
     -- maps, so their recorded paths let the probe rebuild the caches without scans right
     -- after a load. Per-level classes just miss and re-record on their next sighting.

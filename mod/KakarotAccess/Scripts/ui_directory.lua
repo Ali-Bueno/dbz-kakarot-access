@@ -60,10 +60,19 @@ end
 -- either — UE4SS raises them under the Lua boundary. Core.member asks the class first and
 -- returns nil for a name it does not declare, which is the answer both call sites already want.
 -- It fails OPEN when the class cannot be identified, so nothing that resolves today stops.
-local function prop(o, name)
+-- `strict` (2026-07-31 audit) — pass it for the hops that are DELIBERATE ABSENCE PROBES, i.e.
+-- the ones the comment above describes as trying a name the object is expected not to declare.
+-- Core.member falls open when the property set is unavailable, and that is right for an ordinary
+-- hop; on an absence probe it is precisely backwards, because the probe's whole purpose is to name
+-- something that is usually not there. And "unavailable" is the common case here, not a rare one:
+-- PROP_SETS_PER_TICK is ONE set per tick shared by every adapter, and find_hud below spends that
+-- single slot on `MyHUD` one line before probing `UIFieldManager` — so the probe was GUARANTEED
+-- ungated, on every PlayerController-family object, at the title screen and for several ticks
+-- after every map load (a transition flushes prop_sets and roots together).
+local function prop(o, name, strict)
     if not Core.valid(o) then return nil end
     local v
-    if not pcall(function() v = Core.member(o, name) end) then return nil end
+    if not pcall(function() v = Core.member(o, name, strict) end) then return nil end
     if not Core.valid(v) then return nil end
     return v
 end
@@ -91,10 +100,18 @@ local function first_instance(cls)
     return nil
 end
 
-local function find_root(key, cls)
+-- `no_scan` (crash audit RANK 16, 2026-07-31): answer ONLY from the cached root, never scan.
+-- Core.peek_all documents itself as scan-free and fast loops rely on that — screen_map's 20 ms
+-- travel-list step among them — but a directory-mapped class routed straight through here, and
+-- an unresolved root meant a full FindAllOf. Worse on the loop that does it: the 20 ms dispatch
+-- never calls Core.begin_scan_tick, so it DRAINS the shared scan budget without ever refilling
+-- it, starving the registry's own detection. Unresolved-and-not-allowed-to-scan answers nil,
+-- which every caller already handles as "not right now".
+local function find_root(key, cls, no_scan)
     local r = roots[key]
     if Core.valid(r) then return r end
     roots[key] = nil
+    if no_scan then return nil end
     local tick = now()
     if (root_next[key] or 0) > tick then return nil end
     -- The scan walks the whole object array, so it counts against the shared per-tick
@@ -117,10 +134,14 @@ end
 -- ATTitleController (plain HUD) at the title, so the whole hud/fm/bm/cm branch silently
 -- never resolved. The functional test for the RIGHT controller is the one whose MyHUD
 -- exposes UIFieldManager (i.e. it IS the AAT_GameHUD) — probe every candidate.
-local function find_hud()
+-- `no_scan`: see find_root above. This one matters most — it is the costliest root (a
+-- FindAllOf("PlayerController") plus a probe of every candidate) and it can NEVER resolve at the
+-- title screen, so before this it re-scanned on that cadence forever there.
+local function find_hud(no_scan)
     local h = roots["hud"]
     if Core.valid(h) then return h end
     roots["hud"] = nil
+    if no_scan then return nil end
     local tick = now()
     if (root_next["hud"] or 0) > tick then return nil end
     if not Core.take_scan_slot() then return nil end
@@ -132,7 +153,9 @@ local function find_hud()
                 -- prop() returns nil unless the field read succeeds AND the value is a
                 -- valid object; the UIFieldManager probe rejects the title's plain AHUD
                 -- and any vehicle controller with an empty HUD slot.
-                if hud ~= nil and prop(hud, "UIFieldManager") ~= nil then
+                -- STRICT: this is the absence probe itself — it exists to reject the title's
+                -- plain AHUD, which does not declare UIFieldManager. See prop().
+                if hud ~= nil and prop(hud, "UIFieldManager", true) ~= nil then
                     roots["hud"] = hud
                     return hud
                 end
@@ -145,18 +168,22 @@ end
 
 -- Root getters, by the short key the MAP chains use. fm/bm/cm/wm are property hops
 -- off a found root (no scan of their own).
+-- Every getter forwards `ns` (no_scan) explicitly rather than reading a module-level flag: a flag
+-- set around the resolve body would LEAK if anything unwound past the clear — and on this engine
+-- an error can pierce pcall — leaving the directory permanently unable to scan, which is the
+-- fail-closed-on-shared-substrate failure this codebase has been bitten by before.
 local getters = {}
-function getters.mm() return find_root("mm", "MenuManager") end
-function getters.gi() return find_root("gi", "BP_ATGameInstance_C") end
+function getters.mm(ns) return find_root("mm", "MenuManager", ns) end
+function getters.gi(ns) return find_root("gi", "BP_ATGameInstance_C", ns) end
 -- The TITLE level script actor: owns the title menu's load/options flows through
 -- TitleLoadMenuComponent / TitleOptionMenuComponent (AT.hpp:14119). Only exists on the
 -- title map; in game it's absent and the mm chains serve those screens instead.
-function getters.tt() return find_root("tt", "ATTitleLevelScriptActor") end
+function getters.tt(ns) return find_root("tt", "ATTitleLevelScriptActor", ns) end
 getters.hud = find_hud
-function getters.fm() return prop(find_hud(), "UIFieldManager") end
-function getters.bm() return prop(find_hud(), "UIBattleManager") end
-function getters.cm() return prop(find_hud(), "UICommManager") end
-function getters.wm() return prop(getters.gi(), "WindowManager") end
+function getters.fm(ns) return prop(find_hud(ns), "UIFieldManager") end
+function getters.bm(ns) return prop(find_hud(ns), "UIBattleManager") end
+function getters.cm(ns) return prop(find_hud(ns), "UICommManager") end
+function getters.wm(ns) return prop(getters.gi(ns), "WindowManager") end
 
 -- ---- the world epoch (the transition gate's only signal) ---------------------------------
 --
@@ -415,7 +442,10 @@ local memo = {}   -- cls -> { t = tick, list = {...} | false }
 -- {}   -> a chain DID reach its owner and the widget field is null: the screen does not
 --         exist right now (NO scan — the game's own registry is the answer)
 -- list -> every currently valid candidate instance (callers pick the on-screen one)
-function Directory.resolve(cls_name)
+-- `no_scan` (crash audit RANK 16, 2026-07-31): resolve from CACHED roots only — see find_root.
+-- Passed by Core.peek_all, whose documented contract is that it never scans and which fast loops
+-- depend on. Core.cached_all / cached_live keep the scanning path unchanged.
+function Directory.resolve(cls_name, no_scan)
     local chains = MAP[cls_name]
     if not chains then return nil end
     local tick = now()
@@ -431,16 +461,31 @@ function Directory.resolve(cls_name)
         return list
     end
     local seen = {}
+    -- A class with MORE THAN ONE chain is by definition an ALTERNATIVES probe (2026-07-31 audit):
+    -- the chains name different owners for the same widget — SkillTreeMenu under
+    -- m_xStartSkillTreeMenu vs under m_xPartyMenu, AgreementDialog under the title actor vs under
+    -- the option menu — so at most one can be right, and the losing branches are fetching a member
+    -- the object is expected not to declare, which is the uncatchable abort. Those hops take the
+    -- STRICT gate, which refuses instead of falling open when the property set is unavailable —
+    -- and unavailable is the COMMON case, not a rare one: PROP_SETS_PER_TICK is one set per tick
+    -- shared by every adapter, so a load or a busy screen leaves several consecutive ticks ungated.
+    -- Derived from the table rather than annotated per entry, so a chain added later inherits it.
+    -- SINGLE-chain entries keep failing OPEN, deliberately: those are ordinary hops the caller has
+    -- positive reason to believe exist, and closing them is the 2026-07-25 Options regression.
+    -- Refusing is bounded here in any case — resolve() answering nil (as opposed to an EMPTY list)
+    -- falls through to the scan path in Core.cached_all, and the memo is per-tick, so the next tick
+    -- retries and the ordinary gate takes over as soon as the class has been enumerated.
+    local alt = #chains > 1
     for _, ch in ipairs(chains) do
         -- Walk to the FINAL OWNER (all hops but the last); the last hop is the widget
         -- field itself. Only a valid owner can assert the screen's existence.
-        local o = getters[ch[1]]()
+        local o = getters[ch[1]](no_scan)
         for i = 2, #ch - 1 do
-            o = prop(o, ch[i])
+            o = prop(o, ch[i], alt)
         end
         if Core.valid(o) then
             owner_reached = true
-            local w = prop(o, ch[#ch])
+            local w = prop(o, ch[#ch], alt)
             if w ~= nil then
                 local ok, a = pcall(function() return w:GetAddress() end)
                 local key = (ok and a) or tostring(w)
@@ -452,7 +497,12 @@ function Directory.resolve(cls_name)
         end
     end
     if not owner_reached then
-        memo[cls_name] = { t = tick, list = false }
+        -- Do NOT memoise a no_scan miss. The memo is per-tick and shared, so a fast-loop peek that
+        -- failed only because it was not allowed to resolve the root would otherwise poison the
+        -- registry's own resolve for the rest of that tick — turning a cheap peek into a cause of
+        -- the very absence it was asking about. A no_scan SUCCESS is memoised normally below: it
+        -- came from cached roots, so it is the same answer a full resolve would have given.
+        if not no_scan then memo[cls_name] = { t = tick, list = false } end
         return nil
     end
     memo[cls_name] = { t = tick, list = list }

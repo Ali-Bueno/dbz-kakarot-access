@@ -9,6 +9,7 @@ local Core = require("ui_core")
 local I18n = require("i18n")
 local Mem = require("mem")            -- raw reads for the live (pre-save) key assignment
 local OFF = require("native_offsets")
+local Transition = require("transition")   -- build_bindings must not touch the loader mid-switch
 
 local A = {}
 
@@ -289,16 +290,33 @@ end
 -- cache retries later — StaticFindObject only sees LOADED assets, and caching an
 -- empty build made every button resolution silently fail for the whole session
 -- (seen live 2026-07-03: the fishing button spoke in one session and not another).
+-- Retry gate for the resolution below (crash audit RANK 6, 2026-07-31). See build_bindings.
+local BINDINGS_RETRY_S = 5.0   -- wall clock, same shape as ui_core's PARTIAL_RETRY_S
+local bindings_next = 0
+
 local function build_bindings()
+    -- HANG FIX. Returning nil on failure (correct — see the comment above) means every caller
+    -- retries the WHOLE body, and the body used to issue loader work: StaticFindObject, and on a
+    -- miss a synchronous LoadAsset, which is strictly heavier than the speculative lookup this
+    -- codebase banned outright after it deadlocked the boot twice (ui_core's PROBE_ENABLED = false
+    -- records that there is NO window on this game where such a call is provably safe). And the
+    -- callers are hot: screen_loading pipes recap and tip text through markup_to_speech on a 0.3 s
+    -- throttle WHILE a level streams — deliberately, so the tips keep reading — and every dialogue
+    -- or tutorial line carrying an <inputicon> glyph takes the same path. So the mod was issuing
+    -- loader calls at several hertz precisely inside the async-load window.
+    --
+    -- Two guards, both cheap: never during a transition, and at most one attempt per
+    -- BINDINGS_RETRY_S. Callers get nil meanwhile, exactly as they already do on a miss.
+    if Transition.active() then return nil end
+    local now = os.clock()
+    if now < bindings_next then return nil end
+    bindings_next = now + BINDINGS_RETRY_S
     local m = { configToCtrl = {}, configToDyn = {}, dynToCtrl = {}, idxToCtrl = {},
                 configToIcon = {} }
+    -- No LoadAsset fallback any more: forcing a synchronous package load from here is the exact
+    -- hazard above. Take the asset if it is ALREADY loaded, otherwise answer nil and let the
+    -- retry gate ask again in a few seconds — the game loads it on its own soon enough.
     local ico = StaticFindObject(ICON_DATA)
-    if not Core.valid(ico) then
-        -- The asset may simply not be loaded yet this session (StaticFindObject only
-        -- sees LOADED objects) — load it ourselves; all callers run on the game thread.
-        pcall(function() LoadAsset(ICON_DATA) end)
-        ico = StaticFindObject(ICON_DATA)
-    end
     if not Core.valid(ico) then return nil end
     -- KeyConfigList is a real TArray<struct> (Core.array_of confirms the type), not the
     -- fixed-C-array case; was a raw `ico.KeyConfigList` + `#arr`, which is the uncatchable

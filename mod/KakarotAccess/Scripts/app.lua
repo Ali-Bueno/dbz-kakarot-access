@@ -275,10 +275,17 @@ end
 
 -- Toggle the menu reader and announce the new state in the game's language. Announced
 -- here (not in main.lua) so the i18n layer stays reloadable.
+-- Ctrl+M. WRAPPED for the reason Nav.toggle_route documents (crash audit RANK 1, 2026-07-31):
+-- a RegisterKeyBind callback runs on UE4SS's KEYBOARD thread, and this body is not a flag flip.
+-- Registry.toggle() reaches Registry.start()/stop(), which call LoopAsync, bump the global
+-- generation and now also run an adapter's reset(); Speech.say does a read-modify-write of the
+-- shared `pending` queue; and I18n.t can run a FindFirstOf off-thread while the language is still
+-- unresolved. All on the SAME lua_State as the poll loop — the allocator + GC race.
 function App.toggle()
-    local on = Registry.toggle()
-    Speech.say(I18n.t(on and "reader_on" or "reader_off"), true)
-    return on
+    ExecuteInGameThread(function()
+        local on = Registry.toggle()
+        Speech.say(I18n.t(on and "reader_on" or "reader_off"), true)
+    end)
 end
 
 -- Read the on-screen contextual button prompts (the keyhelp bar) on demand.
@@ -293,10 +300,12 @@ end
 
 -- Toggle the AUTOMATIC action announcement (the screen's choices, read on entry and when
 -- they change — keyhelp_watch.lua). F2 (above) keeps reading the bar on demand either way.
+-- Ctrl+F2. Wrapped for the same reason as App.toggle just above (crash audit RANK 1).
 function App.keyhelp_auto_toggle()
-    local on = KeyhelpWatch.toggle()
-    Speech.say(I18n.t(on and "keyhelp_auto_on" or "keyhelp_auto_off"), true)
-    return on
+    ExecuteInGameThread(function()
+        local on = KeyhelpWatch.toggle()
+        Speech.say(I18n.t(on and "keyhelp_auto_on" or "keyhelp_auto_off"), true)
+    end)
 end
 
 -- Announce an overworld menu section from its EXCmnHeaderFontType enum value. Called by the

@@ -72,6 +72,39 @@ function Input.down(snap, mask)
     return snap ~= nil and (snap.buttons & mask) ~= 0
 end
 
+-- ---- rising-edge latch ------------------------------------------------------------
+-- `Input.read()` reports a LEVEL — what is held at the instant of the call — so a press whose
+-- whole down-up cycle falls between two polls is invisible. That is not a theoretical gap: the
+-- 20 ms pad dispatch drops a tick whenever the game thread is busy, throttles itself to 100 ms
+-- during loads and cutscenes, and every step that speaks blocks the game thread for the length
+-- of the screen-reader call. Presses got eaten, and on the world map that read as the d-pad
+-- "skipping" destinations (user, 2026-07-31).
+--
+-- input_bridge.dll therefore accumulates rising edges inside the XInput hook, at the game's own
+-- frame rate, ahead of all of that. The native latch is DESTRUCTIVE — draining it takes the
+-- edges — so it is drained exactly ONCE per pad tick, by pad_poll.lua, and republished here for
+-- every stepper in that tick. A stepper that drained it itself would steal the others' presses.
+local edge_bits = 0
+
+-- Drain the native latch into this tick's shared edge set. PAD_POLL ONLY.
+function Input.begin_tick()
+    if loaded and ib.take_edges then
+        local e = ib.take_edges()
+        edge_bits = (type(e) == "number") and e or 0
+    else
+        edge_bits = 0   -- older input_bridge.dll: callers fall back to their level compare
+    end
+end
+
+-- Buttons that went down during (or since) this tick, as an XINPUT bitmask.
+function Input.edges() return edge_bits end
+
+-- Did `mask` go down this tick? Callers should OR this with their own level-based edge test,
+-- so an input_bridge.dll without the latch keeps the previous behaviour instead of going dead.
+function Input.pressed(mask)
+    return (edge_bits & mask) ~= 0
+end
+
 -- Hide/show the pad from the GAME (no-op if the hook isn't installed).
 function Input.block(on)
     if loaded then ib.block(on and true or false) end

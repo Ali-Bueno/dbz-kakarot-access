@@ -449,7 +449,10 @@ local function board_summary()
         for i = 0, 2 do
             local sk = Core.member(d, string.format("WL_Brd_Activ_Skill%02d", i))
             if Core.valid(sk) and Core.is_visible(sk) then
-                local t = read(sk.WL_Txt_Activ_Skill)
+                -- Raw `sk.WL_Txt_Activ_Skill` missed by the 2026-07-29 sweep (2026-07-31
+                -- crash audit): the pcall around this loop does NOT catch an undeclared-
+                -- member abort on this engine, so only Core.member actually guards it.
+                local t = read(Core.member(sk, "WL_Txt_Activ_Skill"))
                 if t then parts[#parts + 1] = t end
             end
         end
@@ -508,8 +511,17 @@ local function clear_state()
 end
 
 -- Map-switch flush (transition.lua): panel_cache holds live widget refs across ticks —
--- drop them so a level change can't leave dangling pointers here. Pure Lua.
-Transition.on_begin("screen_community", clear_state)
+-- drop them so a level change can't leave dangling pointers here. Also re-arms the
+-- Community Skills custom-property registration (ensure_skill_props above):
+-- RegisterCustomProperty resolves BelongsToClass ONCE and thereafter matches by the raw
+-- UClass*, and a map switch unloads the Blueprint class and recycles its address — so
+-- after the first load the registration silently stops resolving while the names stay
+-- whitelisted, and 9 of 10 Community Board skill rows go silent (2026-07-31 crash/silence
+-- audit; ui_core.lua flushes its own custom_props whitelist on this same hook). Pure Lua.
+Transition.on_begin("screen_community", function()
+    clear_state()
+    skills_registered = false
+end)
 
 -- Grid slots for this tick, computed in is_active and reused by update (the grid and
 -- the board ALTERNATE with the A "Switch" button and can both report on_screen — the
@@ -698,6 +710,14 @@ function Commu.is_active()
     -- suspect (2026-07-16).
     det = Core.first_on_screen("Start_Commu_Detail_C", tick)
     if det and not Core.pane_live(det) then det = nil end
+    -- RANK 23 (2026-07-31 crash audit): pane_live is a LIVENESS test, not a content
+    -- test — on the ticks between the pane's opacity clearing and its title text
+    -- (Txt_Name) becoming readable, this alone claimed the tick and update() (which
+    -- requires Txt_Name, see below) said nothing: an adapter that holds the tick and
+    -- says nothing shadows every adapter registered below it. Mirror the grid branch
+    -- further down, which only claims once it actually has slots: resolve the name
+    -- here too and only claim once it is non-nil.
+    if det and read(Core.member(det, "Txt_Name")) == nil then det = nil end
     local m = det and "detail" or nil
     if not m then
         -- BOARD before GRID: the emblem grid stays rendered (21 visible slots)
@@ -979,8 +999,10 @@ end
 local function dump_cursor_hunt(frame)
     local lines = {}
     for _, m in ipairs(CURSOR_MEMBERS) do
-        local w
-        pcall(function() w = frame[m] end)
+        -- Raw `frame[m]` missed by the 2026-07-29 sweep (2026-07-31 crash audit): the
+        -- pcall did not actually catch an undeclared-member abort on this engine, only
+        -- Core.member does — matters if this DEBUG hunt is ever re-enabled.
+        local w = Core.member(frame, m)
         if Core.valid(w) then
             local wa = Mem.addr(w)
             scan_addr(m, wa, 0x88, 0x180, lines)                 -- the widget: transform + tail
@@ -1020,8 +1042,9 @@ end
 local DEBUG_GRID = false
 local function grid_hunt()
     local lines = {}
-    local el
-    pcall(function() el = grid.EmbList end)
+    -- Raw `grid.EmbList` missed by the 2026-07-29 sweep (2026-07-31 crash audit); same
+    -- member slots() reads via Core.member two screens up — reuse that guarded form.
+    local el = Core.member(grid, "EmbList")
     if Core.valid(el) then scan_addr("emblist", Mem.addr(el), 0x398, 0x80, lines) end
     if Core.valid(grid) then scan_addr("gridhost", Mem.addr(grid), 0x3A0, 0xA8, lines) end
     if #lines == 0 then return end
@@ -1077,8 +1100,9 @@ end
 local function dump_state(frame, hovered, pc)
     if tick - snap_tick < 20 then return end
     snap_tick = tick
-    local cw
-    pcall(function() cw = frame.WL_PanelCursor end)
+    -- Raw `frame.WL_PanelCursor` missed by the 2026-07-29 sweep (2026-07-31 crash
+    -- audit); board_hovered() already reads this same member via Core.member.
+    local cw = Core.member(frame, "WL_PanelCursor")
     local cx = Core.valid(cw) and Mem.float(cw, BOARD.cursorX) or nil
     local cy = Core.valid(cw) and Mem.float(cw, BOARD.cursorY) or nil
     -- instance count guards against reading a STALE pooled board (Start_Char lesson)
@@ -1198,7 +1222,10 @@ function Commu.update()
     if Speech.protected() then speech_deferred = true return end
     if speech_deferred then speech_deferred = false; ann:invalidate() end
     if mode == "detail" then
-        local name = read(det.Txt_Name)
+        -- Raw `det.Txt_Name` missed by the 2026-07-29 sweep (2026-07-31 crash audit) —
+        -- unlike the other four, this one runs every tick with NO pcall at all; is_active()
+        -- already reads this same member through Core.member, this must match it.
+        local name = read(Core.member(det, "Txt_Name"))
         if not name then return end
         ann:focus(I18n.header(5), nil, name, nil, detail_text)
     elseif mode == "grid" then

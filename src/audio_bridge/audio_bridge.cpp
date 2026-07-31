@@ -153,9 +153,21 @@ static bool play_cue(Cue *c, float pan, float volume, float pitch, bool applyPan
     if (applyPan && c->fmt.nChannels == 1) {
         float l, r;
         pan_gains(pan, &l, &r);
-        float matrix[8] = {0};
+        /* Sized for the largest legal destination, not for 8 (crash audit RANK 9, 2026-07-31).
+         * XAudio2 requires DestinationChannels to equal the destination voice's ACTUAL channel
+         * count, so the old `float matrix[8]` forced g_dstChannels to be clamped to 8 to fit —
+         * and on a >7.1 endpoint (a multi-output interface or a spatial-audio device, i.e.
+         * exactly a streaming rig) that mismatch made this call return E_INVALIDARG. Nothing
+         * checked the result, so play_cue went on to Submit/Start and reported success while the
+         * mod's ONLY spatial cue silently lost its direction, with nothing in the log. */
+        float matrix[XAUDIO2_MAX_AUDIO_CHANNELS] = {0};
         if (g_dstChannels >= 1) matrix[0] = l;
         if (g_dstChannels >= 2) matrix[1] = r;
+        /* The HRESULT is still not checked, deliberately: this function has no route to a log
+         * (hr_err only formats a buffer that do_init returns to Lua, and play_cue answers a plain
+         * bool that means "the cue played"). The fix is to remove the CAUSE rather than to report
+         * it — with the destination count now honest and the matrix sized for it, the argument
+         * mismatch that produced E_INVALIDARG cannot occur. */
         c->voice->SetOutputMatrix(NULL, 1, g_dstChannels, matrix);
     }
     c->voice->SetVolume(volume);
@@ -228,8 +240,12 @@ static const char *do_init(void) {
 
     XAUDIO2_VOICE_DETAILS det;
     g_master->GetVoiceDetails(&det);
+    /* The device's TRUE channel count — SetOutputMatrix rejects anything else (see the matrix in
+     * play_cue). The old `> 8` clamp existed only to fit a fixed float[8]; that array is now sized
+     * XAUDIO2_MAX_AUDIO_CHANNELS, so the clamp is gone. The bound that remains is the array's own,
+     * and it cannot legally trip — XAudio2 will not report more channels than it supports. */
     g_dstChannels = det.InputChannels;
-    if (g_dstChannels > 8) g_dstChannels = 8;
+    if (g_dstChannels > XAUDIO2_MAX_AUDIO_CHANNELS) g_dstChannels = XAUDIO2_MAX_AUDIO_CHANNELS;
 
     /* Sounds live in <this dll's folder>\sounds\ (deployed with the mod). */
     wchar_t dir[MAX_PATH];

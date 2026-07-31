@@ -13,6 +13,7 @@
 
 local Core = require("ui_core")   -- Core.drop_memos only (see the dispatch below)
 local Mem = require("mem")        -- crash black box only (Mem.mark)
+local Input = require("input")    -- Input.begin_tick only (the edge latch drain below)
 
 local Poll = {}
 
@@ -85,6 +86,12 @@ function Poll.start()
                 -- stepper re-computes a verdict it could have reused.
                 Mem.mark("pad.tick")
                 Core.drop_memos()
+                -- Drain the pad's rising-edge latch ONCE for the whole dispatch and republish it
+                -- (Input.edges()). The native latch is destructive, so a stepper draining it
+                -- itself would swallow every other stepper's presses; and doing it here means a
+                -- press survives the relax gate above, a dropped busy tick, and any stepper that
+                -- blocks the game thread speaking. See the note in input.lua.
+                Input.begin_tick()
                 for name, s in pairs(steppers) do
                     local ok, err = pcall(s.fn)
                     if not ok then

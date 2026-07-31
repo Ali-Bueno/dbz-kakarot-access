@@ -88,8 +88,15 @@ end
 local function selected_row()
     local bar = slot_bar(cur_idx)
     if not bar then return nil end
-    local role = Core.read_text(Core.member(bar, "Txt_Player")) or Core.read_text(Core.member(bar, "Txt_Suport"))
-    local name = Core.read_text(Core.member(bar, "Txt_Name")) or Core.read_text(Core.member(bar, "Txt_None"))
+    -- STRICT on both pairs (2026-07-31 audit): each is an ALTERNATIVES probe — a bar carries
+    -- Txt_Player or Txt_Suport, a name or the "empty" caption, never both — so the losing name is
+    -- one we positively expect to be undeclared, and an ungated fetch of that is the uncatchable
+    -- abort. Left as four Core.member calls rather than Core.first_text because that helper also
+    -- requires on_screen, which these rows are not gated on today.
+    local role = Core.read_text(Core.member(bar, "Txt_Player", true))
+        or Core.read_text(Core.member(bar, "Txt_Suport", true))
+    local name = Core.read_text(Core.member(bar, "Txt_Name", true))
+        or Core.read_text(Core.member(bar, "Txt_None", true))
     if not role and not name then return nil end
     return { role = role, name = name, lv = Core.read_text(Core.member(bar, "Txt_Lv")) }
 end

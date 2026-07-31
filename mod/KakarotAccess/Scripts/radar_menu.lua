@@ -49,6 +49,12 @@ local running = false
 local open = false        -- menu currently open (and pad blocked)
 local blocked = false
 local draining = false    -- closed, waiting for a neutral pad before unblocking
+-- Deadline for that wait (crash audit RANK 4, 2026-07-31 — see the drain branch in step()). The
+-- neutral-pad test can be permanently unsatisfiable on worn hardware, and while it is unsatisfied
+-- the player has neither pad nor keyboard. Two seconds is far longer than a human takes to release
+-- a button they just pressed, so it never cuts a genuine drain short; it only bounds a stuck one.
+local DRAIN_MAX_S = 2.0
+local drain_until = nil
 local cats = {}           -- [{ key, name, items={{actor,key,dist,noun},...} }]
 local ci, ii = 1, 1       -- current category / item index
 local prev_btn = 0        -- previous button bitmask (edge detection)
@@ -83,7 +89,11 @@ local function do_open()
     -- abort on this game — e.g. a bad property access), it must NOT strand the pad in a
     -- blocked state and freeze the game. The one-tick R3 leak before we block is
     -- harmless (R3 = ki-sense). Safety over the micro-leak.
-    local list = Nav.list_targets()
+    -- Shared TTL snapshot, not a fresh sweep (crash audit RANK 3, 2026-07-31): this runs
+    -- SYNCHRONOUSLY on the 20 ms pad dispatch, and the sweep behind it is ~1.2 s of unbudgeted
+    -- FindAllOf — so in a dense area the game visibly locked up on the R3 press. If explore mode
+    -- swept recently the list is already there; otherwise this pays for it and explore goes free.
+    local list = Nav.targets_cached()
     Input.block(true)
     blocked = true
     open = true
@@ -129,6 +139,7 @@ local function do_close(mode)
     -- keep blocked; drain until neutral (see step). If the pad is already gone we
     -- unblock immediately (handled by the caller for the pad-lost path).
     draining = true
+    drain_until = os.clock() + DRAIN_MAX_S
 end
 
 -- ---- keyboard control (the picker without a pad) ------------------------------------
@@ -253,8 +264,19 @@ local function step()
     -- Draining: menu closed, waiting for a fully neutral pad before handing control
     -- back — so the A/R3/B that closed it isn't delivered to the game.
     if draining then
-        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH then
+        -- WALL-CLOCK CEILING (crash audit RANK 4, 2026-07-31). The neutral-pad test can be
+        -- UNSATISFIABLE on real hardware: REL_TH is 25, below XInput's own
+        -- XINPUT_GAMEPAD_TRIGGER_THRESHOLD of 30, so a worn or third-party trigger resting at
+        -- 26-29 — or one sticking face button — reads as released to the game and to XInput but
+        -- never to this line. `draining` then stays true forever, the loop above keeps renewing
+        -- kb_block every 20 ms because it renews while `open or draining`, and the player loses
+        -- the pad AND the keyboard with no in-game way out at all: not pause, not Escape, only
+        -- Alt+F4. The drain is a courtesy (it stops the closing press reaching the game); it must
+        -- never outrank being able to play. So it gets a deadline, and the release is forced.
+        if snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH
+            or (drain_until and os.clock() >= drain_until) then
             Input.block(false); blocked = false; draining = false
+            drain_until = nil
             Input.kb_block(0)
             if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         end

@@ -66,7 +66,12 @@ local function clean(t) return t and A.markup_to_speech(t) or nil end
 local function node_text(owner, ...)
     if not Core.valid(owner) then return nil end
     for _, m in ipairs({ ... }) do
-        local node = Core.member(owner, m)
+        -- STRICT (2026-07-31 audit): the comment above already states these names are
+        -- ALTERNATIVES and that most are expected not to exist — so this is the exact contract
+        -- the strict gate was added for. Without it the gate still fell open whenever the
+        -- property set was unavailable, which is the common case on a screen presenting several
+        -- new classes (one set is enumerated per tick, shared by every adapter).
+        local node = Core.member(owner, m, true)
         if Core.valid(node) and Core.is_visible(node) then
             local t = clean(Core.read_text(node))
             if t and t ~= "" then return t end

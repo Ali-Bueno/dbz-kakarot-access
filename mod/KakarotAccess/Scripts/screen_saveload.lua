@@ -75,7 +75,13 @@ end
 
 -- A bar is filled when its detail/title canvas is rendered (see panel-gate note above).
 local function bar_filled(bar)
-    return Core.is_visible(Core.member(bar, "Canvas_Detail")) or Core.is_visible(Core.member(bar, "Canvas_Title"))
+    -- STRICT on both (2026-07-31 audit): an alternatives pair, so one of the two is expected to
+    -- be undeclared on any given bar class — the case where falling open means an ungated fetch
+    -- of a name we have positive reason to believe is absent. Refusing is bounded and lands on
+    -- the safe side: bar_text then returns nil and the caller waits for the next tick rather than
+    -- speaking a half-built row.
+    return Core.is_visible(Core.member(bar, "Canvas_Detail", true))
+        or Core.is_visible(Core.member(bar, "Canvas_Title", true))
 end
 
 -- The slot's spoken content. Empty and filled are BOTH read (an empty slot is real

@@ -86,8 +86,12 @@ local function guidance_of(win)
         -- `win[m]` as a call ARGUMENT was the worst shape available: the fetch is evaluated at
         -- the call site, and MEMBERS is a candidate list, so most names are expected to be
         -- absent on any given window class.
+        -- STRICT (2026-07-31 audit): the comment above already says most of MEMBERS is expected
+        -- to be absent on any given window class — that is precisely the contract the strict gate
+        -- exists for. Without it the fetch still fell open whenever the property set was
+        -- unavailable, which is common (one set enumerated per tick, shared by every adapter).
         local t
-        pcall(function() t = rich_text(Core.member(win, m)) end)
+        pcall(function() t = rich_text(Core.member(win, m, true)) end)
         if t then parts[#parts + 1] = t end
     end
     if #parts == 0 then return nil end

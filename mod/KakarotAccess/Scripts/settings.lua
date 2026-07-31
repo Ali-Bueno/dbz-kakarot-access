@@ -19,6 +19,7 @@ local SCHEMA = {
     { key = "audio_cues",      kind = "bool", def = true,  comment = "Audio navigation cues on/off (on|off)" },
     { key = "cue_volume",      kind = "pct",  def = 100,   comment = "Audio cue volume, 0-100" },
     { key = "radar_autotrack", kind = "bool", def = true,  comment = "Radar auto-tracks a new objective by itself (on|off)" },
+    { key = "braille",         kind = "mode", def = "auto", comment = "Send everything spoken to a braille display too: auto (on if the screen reader supports it) | on | off" },
     { key = "language",        kind = "lang", def = "auto", comment = "Mod language: auto (follow the game) or a code: en es fr de it pt ru pl ja ko zh ar th" },
 }
 
@@ -68,10 +69,20 @@ local function to_lang(raw, def)
     return VALID_LANG[raw] and raw or def
 end
 
+-- Tri-state switch: unlike a bool, "auto" means "decide from what the backend reports".
+local VALID_MODE = { auto = true, on = true, off = true }
+
+local function to_mode(raw, def)
+    if raw == nil then return def end
+    raw = tostring(raw):lower():gsub("%s+", "")
+    return VALID_MODE[raw] and raw or def
+end
+
 local function coerce(entry, raw)
     if entry.kind == "bool" then return to_bool(raw, entry.def) end
     if entry.kind == "pct" then return to_pct(raw, entry.def) end
     if entry.kind == "lang" then return to_lang(raw, entry.def) end
+    if entry.kind == "mode" then return to_mode(raw, entry.def) end
     return raw ~= nil and raw or entry.def
 end
 
@@ -159,5 +170,6 @@ function Settings.cues_enabled()   return values.audio_cues ~= false end
 function Settings.cue_gain()       return (values.cue_volume or 100) / 100 end
 function Settings.autotrack_enabled() return values.radar_autotrack ~= false end
 function Settings.language()       return values.language or "auto" end
+function Settings.braille()        return values.braille or "auto" end
 
 return Settings

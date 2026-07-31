@@ -17,6 +17,8 @@ changing how the game plays for everyone else.
 > **"Do not ask again"** in the chooser so Steam launches straight into it every time.
 
 - **Screen-reader output** via **PRISM** (works with NVDA, JAWS and Windows SAPI).
+- **Braille display support** — every spoken line also goes to a refreshable braille display,
+  through the same screen reader. On by default when your reader supports it.
 - **Audio navigation radar** with a directional beacon and arrival cues.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
 - **Fully translatable** — every spoken line lives in an editable text file (13 languages).
@@ -122,8 +124,9 @@ If something you need isn't listed, let me know (see the links at the bottom).
 | **D-pad ↑↓ / ←→** (config menu) | Move between options / change a value |
 | **D-pad ↓ / ↑** (status sheet) | Step through the stat blocks |
 | **Select + Y** (world map) | Open zone travel (Y = Triangle) |
-| **D-pad ↑ / ↓** (world map) | Move between zones |
+| **D-pad ↑ / ↓** (world map) | Move between zones — **hold** to keep stepping |
 | **X** (world map) | Travel to the selected zone (X = A on Xbox) |
+| **Xbox X / PS Square** (either map) | Describe what's selected: destination + position in the list + what the cursor is over. On the area map, re-reads the point of interest under the cursor |
 | **Left stick** (Community board) | Move around (d-pad support planned, like the map) |
 
 ### Keyboard (optional extras)
@@ -165,6 +168,10 @@ Open the in-game config menu with **L3 + R3** in the overworld:
 - **Audio cues** — on / off (mutes the radar beacon and pings).
 - **Cue volume** — 0–100 % in 10 % steps (plays a sample as you change it).
 - **Radar auto-activation** — on / off (manual R3 picks still work when off).
+- **Braille output** — `auto` / `on` / `off`. Everything the mod speaks is also sent to a
+  refreshable **braille display** through your screen reader. `auto` (the default) turns it on when
+  the reader reports braille support, so a connected display just works; set it to `off` if you
+  don't use one and want to save the extra call per line.
 - **Language** — `auto` or any of the 13 supported languages, independent of the game's language.
 
 ### Translating the mod

@@ -12,18 +12,59 @@ local Speech = {}
 
 local prism = nil
 local loaded = false
+local feats = nil       -- backend capability table from prism.features(), or nil on an older bridge
+local braille_on = false
 
 function Speech.init()
     local ok, mod = pcall(require, "prism_bridge")
     if ok and mod then
         prism = mod
         loaded = prism.is_ready and prism.is_ready() or false
+        if loaded and prism.features then
+            local okf, f = pcall(prism.features)
+            feats = okf and f or nil
+        end
         print("[KakarotAccess] prism_bridge loaded, screen reader: " .. tostring(prism.detect and prism.detect()) .. "\n")
     else
         print("[KakarotAccess] prism_bridge FAILED to load: " .. tostring(mod) .. "\n")
     end
     return loaded
 end
+
+-- ---- braille displays ------------------------------------------------------------
+-- PRISM drives braille displays as well as speech, but only when asked to: prism.say maps to
+-- prism_backend_speak, which is SPEECH ONLY — so a player reading through a braille display on
+-- NVDA/JAWS saw nothing this mod said (user request, 2026-07-31). Every utterance now also goes
+-- to prism.braille (prism_backend_braille) as a SEPARATE, additive call.
+--
+-- PRISM does expose a combined speak+braille entry point (prism_backend_output) which would be
+-- one backend call instead of two. Deliberately not used: speech is the mod's lifeline, and
+-- moving all of it onto a different entry point risks everything to save a call. Added
+-- alongside, a braille failure can never cost the player their speech.
+--
+-- Mode: "auto" (on when the backend advertises braille), "on" (force), "off". Resolved to one
+-- boolean here so the hot path stays a single `if`. Called from main.lua once Settings is up
+-- (Speech.init runs long before it) and again from the config menu whenever the user changes it.
+function Speech.set_braille(mode)
+    braille_on = false
+    if loaded and prism.braille and mode ~= "off" then
+        -- The entry point has to exist at all: an older prism.dll may not export it, in which
+        -- case prism.braille is a Lua function that can only ever return false.
+        if feats == nil or feats.braille_available ~= false then
+            -- "on" forces it. "auto" fails OPEN on "don't know" — an older prism.dll cannot
+            -- answer the capability query at all (known == false), and refusing there would
+            -- disable braille on a backend perfectly capable of it. Only a backend that
+            -- positively answers "no braille" is taken at its word.
+            braille_on = (mode == "on") or feats == nil or feats.known ~= true
+                or feats.braille == true
+        end
+    end
+    print(string.format("[KakarotAccess] braille output %s (mode=%s, backend=%s)\n",
+        braille_on and "ON" or "off", tostring(mode), Speech.backend_name()))
+    return braille_on
+end
+
+function Speech.braille_enabled() return braille_on end
 
 function Speech.is_loaded()
     return loaded
@@ -61,6 +102,10 @@ end
 local function timed_say(text, interrupt)
     local t0 = os.clock()
     prism.say(text, interrupt)
+    -- Braille rides the same sink, so it is timed with it: it is a second backend call on the
+    -- GAME THREAD, and this counter is exactly the instrument that would catch it costing more
+    -- than it is worth. Guarded — a braille display going away must never take speech with it.
+    if braille_on then pcall(prism.braille, text) end
     local dt = (os.clock() - t0) * 1000
     local s = _G.__KakarotSpeechStats
     if not s then s = { n = 0, ms = 0, max = 0 } _G.__KakarotSpeechStats = s end

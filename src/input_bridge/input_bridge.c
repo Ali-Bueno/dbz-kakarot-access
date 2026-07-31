@@ -30,6 +30,8 @@
  *   local ib = require("input_bridge")
  *   ib.install()                 -- hook XInput + the message pump (idempotent)
  *   local b, lt, rt, lx, ly = ib.poll()  -- wButtons, triggers 0..255, L-stick -1..1
+ *   ib.take_edges()              -- buttons that went DOWN since the last call, and clears
+ *                                -- (destructive: exactly one drainer per tick — pad_poll.lua)
  *   ib.block(true|false)         -- hide/show the pad from the GAME
  *   ib.kb_block(ms)              -- hide the KEYBOARD for ms (a lease: renew every tick)
  */
@@ -66,6 +68,19 @@ static volatile LONG    g_haveLast = 0;
  * the copy; InterlockedIncrement is a full barrier on x64). The reader retries while the
  * counter is odd (write in flight) or changed across its copy. */
 static volatile LONG    g_lastSeq = 0;           /* even = stable, odd = write in progress */
+/* RISING-EDGE LATCH (2026-07-31, user: "sometimes it will miss places when you use the DPad").
+ * g_last is a LEVEL: it only ever answers "what is held right now". A press whose whole
+ * down-up cycle falls between two Lua polls is therefore INVISIBLE, and the Lua polls are
+ * neither fast nor evenly spaced — pad_poll.lua dispatches every 20 ms but drops a tick while
+ * the game thread is busy, throttles to 100 ms during loads/cutscenes (its RELAX gate), and
+ * every menu step that speaks blocks the game thread for the duration of the screen-reader
+ * call. Sampling a level through that jitter loses presses, which is exactly what the map
+ * d-pad "skipping" destinations was.
+ * So the HOOK — which the game calls once per rendered frame, ahead of every one of those
+ * hazards — accumulates the rising edges itself, and Lua DRAINS them. A press cannot be lost
+ * however late or irregular the drain is; at worst it is served a frame or two later. */
+static volatile LONG    g_edgeAcc = 0;           /* rising-edge buttons since the last drain */
+static volatile LONG    g_edgePrev = 0;          /* previous button level, for the edge calc */
 /* Bounded so a reader can never spin on a wedged writer. The pump updates the pad once per
  * frame while poll() runs every 20 ms (pad_poll.lua TICK_MS), so a single retry already
  * covers real contention; giving up simply reports no snapshot for one tick — the same
@@ -103,6 +118,21 @@ static void pad_block_renew(void) {
     if (pad_blocking())
         InterlockedExchange64((volatile LONG64 *)&g_blockUntil,
                               (LONG64)GetTickCount64() + PAD_BLOCK_LEASE_MS);
+}
+
+/* ---- NO-CONTROLLER backoff for l_poll's direct-read fallback --------------------------
+ * (crash/perf audit RANK 19, 2026-07-31.) Full rationale is at l_poll below, which is the only
+ * place that SETS this; it is declared up here, ahead of hookGetState, only because hookGetState
+ * needs to CLEAR it the instant a real pad read succeeds, and a file-scope name must be declared
+ * before every use. Same GetTickCount64-deadline shape as g_blockUntil/g_kbUntil above. */
+#define PAD_ABSENT_BACKOFF_MS 1500  /* short enough a reconnect is never felt as a stall, long
+                                       enough to cut ~50 empty XInputGetState calls/second down
+                                       to under 1/second while no pad is attached */
+static volatile LONG64  g_padAbsentUntil = 0;   /* GetTickCount64 deadline; 0 = not backed off */
+
+static int pad_absent_backoff_active(void) {
+    LONG64 until = InterlockedCompareExchange64((volatile LONG64 *)&g_padAbsentUntil, 0, 0);
+    return until != 0 && (LONG64)GetTickCount64() < until;
 }
 
 /* ---- KEYBOARD blocking ---------------------------------------------------------------
@@ -153,7 +183,21 @@ static BOOL WINAPI hookPeekMessageW(LPMSG lpMsg, HWND hWnd, UINT minMsg, UINT ma
     for (guard = 0; guard < 256; ++guard) {
         BOOL got = g_realPeek(lpMsg, hWnd, minMsg, maxMsg, rm);
         if (!got || !lpMsg) return got;
-        if (!is_key_msg(lpMsg->message) || !kb_blocking()) return got;
+        /* RELEASES ALWAYS PASS (crash/perf audit RANK 15, 2026-07-31). is_key_msg's range
+         * 0x0100..0x0109 covers WM_KEYUP/WM_SYSKEYUP as well as the *_DOWN messages, and this
+         * test used to make no distinction — including the PM_NOREMOVE branch below, which
+         * actively re-consumes a peeked message with PM_REMOVE, so a swallowed key-up was
+         * destroyed, not merely deferred. Hiding a key-DOWN from the game is the whole point
+         * (that is what would trigger a bound action); hiding the matching key-UP leaves the
+         * game believing the key is still held, with no later message to ever clear it. Since
+         * the block is renewed every tick for as long as the radar picker is open, a movement
+         * key released WHILE the picker is up stayed "pressed" in the game's own input state
+         * after the picker closed — a blind player releasing W to work the picker kept running
+         * once it was dismissed, with no indication why. WM_KEYUP/WM_SYSKEYUP are, unlike
+         * WM_KEYLAST (see the comment on is_key_msg), unconditionally-defined SDK constants, so
+         * naming them here does not reintroduce the hazard that made is_key_msg use literals. */
+        if (!is_key_msg(lpMsg->message) || lpMsg->message == WM_KEYUP
+            || lpMsg->message == WM_SYSKEYUP || !kb_blocking()) return got;
         /* Alt+F4 always reaches the game: no accessibility feature may take away the
          * player's ability to quit. (WM_SYSCOMMAND / WM_CLOSE / WM_ACTIVATE are not
          * keyboard messages, so they were never candidates for swallowing.) */
@@ -167,6 +211,16 @@ static BOOL WINAPI hookPeekMessageW(LPMSG lpMsg, HWND hWnd, UINT minMsg, UINT ma
         }
     }
     return FALSE;
+}
+
+/* Fold one observed button level into the rising-edge latch (see g_edgeAcc).
+ * Called from the game's input-pump thread (the hook) OR from the game thread (l_poll's
+ * unhooked fallback) — never both in the same run, but the swap is interlocked anyway so a
+ * mixed order can only mis-attribute an edge, never lose one. */
+static void note_buttons(WORD b) {
+    LONG prev = InterlockedExchange(&g_edgePrev, (LONG)b);
+    LONG rising = (LONG)b & ~prev;
+    if (rising) InterlockedOr(&g_edgeAcc, rising);
 }
 
 /* Our replacement for XInputGetState: read the truth, cache it, optionally blank it. */
@@ -191,6 +245,12 @@ static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
             g_last = *pState;
             InterlockedIncrement(&g_lastSeq);      /* -> even: stable again */
             InterlockedExchange(&g_haveLast, 1);   /* interlocked, to match the reader */
+            /* RANK 19: the GAME's own successful read proves a pad is present, so l_poll's
+             * empty-slot backoff (declared above) must not go on hiding it from OUR next poll. */
+            InterlockedExchange64((volatile LONG64 *)&g_padAbsentUntil, 0);
+            /* Edge latch BEFORE the blocking memset below: the pad menus hide the pad from the
+             * GAME while they are open, and they still have to see their own presses. */
+            note_buttons(pState->Gamepad.wButtons);
         }
         if (pad_blocking()) {
             /* Hand the GAME a neutral pad; keep the packet number moving so the
@@ -356,9 +416,36 @@ static int l_poll(lua_State *L) {
      * so this is what keeps it alive — and stopping is what releases it. */
     pad_block_renew();
     if (g_hooked && idx == 0 && pad_snapshot(&st)) {
-        have = 1;
-    } else if (g_realGetState) {
-        if (g_realGetState((DWORD)idx, &st) == 0) have = 1;
+        have = 1;   /* the hook already fed the edge latch, at frame rate */
+    } else if (g_realGetState && !(idx == 0 && pad_absent_backoff_active())) {
+        /* NO-CONTROLLER BACKOFF (crash/perf audit RANK 19, 2026-07-31). This branch is reached
+         * whenever the hook has nothing cached to serve — either input_bridge never got
+         * installed, or (the common case for a keyboard-only player) it IS installed but there
+         * is genuinely no pad, so hookGetState's own failed reads keep clearing g_haveLast and
+         * pad_snapshot() above always misses. Without a backoff this called XInputGetState
+         * directly on the GAME thread from EVERY l_poll: both pad menus (RadarMenu, ConfigMenu)
+         * start unconditionally at boot and step() through Input.read() on the shared 20 ms pad
+         * loop (pad_poll.lua TICK_MS) with no "has a pad ever been seen" gate, so a keyboard-
+         * only session paid ~50 empty-slot queries a second from boot onward — an anti-pattern
+         * Microsoft's own docs call out (a disconnected slot's query goes out to device
+         * enumeration) and that UE4's own XInputInterface throttles for exactly this reason.
+         * So: remember when a direct read last came back empty and skip the real call for
+         * PAD_ABSENT_BACKOFF_MS afterwards, reporting no snapshot (nil to Lua) meanwhile — every
+         * caller already treats that the same as "no pad" (Input.read(): `if not b then return
+         * nil end`, input.lua:61). idx is always 0 in this codebase (input.lua's Input.read()
+         * is the only caller, and it always passes 0), so the backoff only ever gates/records
+         * user 0; any other index is left untouched. */
+        if (g_realGetState((DWORD)idx, &st) == 0) {
+            have = 1;
+            if (idx == 0) InterlockedExchange64((volatile LONG64 *)&g_padAbsentUntil, 0);
+        } else if (idx == 0) {
+            InterlockedExchange64((volatile LONG64 *)&g_padAbsentUntil,
+                                  (LONG64)GetTickCount64() + PAD_ABSENT_BACKOFF_MS);
+        }
+        /* Unhooked fallback: nothing else is watching the pad, so feed the latch from here.
+         * That is only poll-rate resolution — no better than the old level compare — but it
+         * keeps take_edges() answering truthfully instead of silently always 0. */
+        if (have && idx == 0) note_buttons(st.Gamepad.wButtons);
     }
     if (!have) { lua_pushnil(L); return 1; }
     lua_pushinteger(L, (lua_Integer)st.Gamepad.wButtons);
@@ -369,6 +456,17 @@ static int l_poll(lua_State *L) {
     lua_pushnumber(L, (lua_Number)st.Gamepad.sThumbRX / 32767.0);
     lua_pushnumber(L, (lua_Number)st.Gamepad.sThumbRY / 32767.0);
     return 7;
+}
+
+/* take_edges() -> bitmask of buttons that went DOWN since the previous call, and CLEARS it.
+ *
+ * Destructive by design: the latch is a single shared accumulator, so whoever drains it owns
+ * those edges. Exactly ONE caller may drain per pad tick — pad_poll.lua does it at the top of
+ * its dispatch and republishes the value to every stepper (Input.edges()). A second drainer
+ * would silently steal the first one's presses. */
+static int l_take_edges(lua_State *L) {
+    lua_pushinteger(L, (lua_Integer)InterlockedExchange(&g_edgeAcc, 0));
+    return 1;
 }
 
 /* block(on) : while on, the game receives a neutral pad. No-op if not hooked. The block is
@@ -430,6 +528,7 @@ static int l_kb_is_hooked(lua_State *L) {
 static const luaL_Reg input_funcs[] = {
     {"install",      l_install},
     {"poll",         l_poll},
+    {"take_edges",   l_take_edges},
     {"block",        l_block},
     {"inject",       l_inject},
     {"inject_off",   l_inject_off},

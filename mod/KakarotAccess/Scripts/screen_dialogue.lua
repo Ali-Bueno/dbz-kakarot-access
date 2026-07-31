@@ -229,7 +229,11 @@ local function event_speech_line()
     for _, host in ipairs(Core.cached_all("AT_UIFieldTalkFree", tick)) do
         if Core.valid(host) then
             for _, prop in ipairs({ "EventSpeechWidgetArray", "FreeTalkWidgetAry" }) do
-                local arr, n = Core.array_of(host, prop)
+                -- STRICT: two alternative spellings for the same pool, so one of them is always
+                -- a name this host class does not declare. Fail-open on an absence probe is the
+                -- uncatchable abort (2026-07-31 audit — Core.array_of gained the parameter
+                -- Core.member had carried since 07-28).
+                local arr, n = Core.array_of(host, prop, true)
                 if arr then
                     for i = 1, n do
                         local core

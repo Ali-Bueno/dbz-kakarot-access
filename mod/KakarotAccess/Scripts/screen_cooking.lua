@@ -247,7 +247,15 @@ function Cooking.is_active()
     -- detail pane. A pooled closed Shop_Cook_C keeps a FROZEN GetSelectValue() (that
     -- index is known-stale on this screen), which held this adapter ACTIVE and
     -- silently shadowed everything below it — the mute ring pause (2026-07-06).
-    return (title() or genre()) ~= nil
+    -- CLAIM MUST MATCH WHAT update() CAN SAY (crash/perf audit RANK 22, 2026-07-31). This used
+    -- to accept genre() alone as proof of life, but update()'s spoken name (below) falls back to
+    -- the selected LIST ROW, never to genre() — so a tick where genre() has repopulated but the
+    -- detail-pane title hasn't yet (an LB/RB genre switch, or first entry) claimed the tick and
+    -- then update() found no name to speak at all: an adapter that holds the tick and says
+    -- nothing shadows every adapter registered below it (CLAUDE.md §8). The valid list-select
+    -- index already required above proves the menu is genuinely open, so the second proof here
+    -- only needs to match update()'s actual fallback instead of adding a third, unspoken one.
+    return title() ~= nil or A.list_selected_row(list) ~= nil
 end
 
 function Cooking.reset()

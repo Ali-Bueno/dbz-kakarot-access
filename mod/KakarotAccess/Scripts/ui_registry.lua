@@ -176,6 +176,37 @@ local function probe(a)
     return false
 end
 
+-- The THIRD adapter entry point. `is_active` and `update` have been fault-isolated since
+-- 2026-07-26; `reset` was left bare — and it is the most dangerous of the three, because it is
+-- called from the COMMIT branch BEFORE `active` is assigned. An error there unwinds to Core.loop's
+-- pcall with `active` still pointing at the outgoing adapter and `pending`/`pending_n` still
+-- holding the candidate, so the next tick recomputes the same candidate, re-enters the same
+-- branch and raises again — forever, skipping the quiet gate, `active.update` and both watchers
+-- every time. Latent today (no adapter's reset raises) and permanent the day one does.
+local function safe_reset(a)
+    if not (a and a.reset) then return end
+    local ok, err = pcall(a.reset)
+    if ok then return end
+    local nm = adapter_name[a] or "?"
+    if not fault_logged[nm .. ":reset"] then   -- lint:plain-table
+        fault_logged[nm .. ":reset"] = true    -- lint:plain-table
+        print(string.format("[KakarotAccess] adapter '%s' faulted in reset: %s\n",
+            nm, tostring(err)))
+    end
+end
+
+-- The two watchers were the last unguarded calls in the step, and they touch live widgets on
+-- every tick. One raise in either aborts the rest of the dispatch at Core.loop's pcall — so they
+-- get the same once-per-name log the adapters get, instead of taking the reader down silently.
+local function safe_call(what, fn, arg)
+    local ok, err = pcall(fn, arg)
+    if ok then return end
+    if not fault_logged[what] then   -- lint:plain-table
+        fault_logged[what] = true    -- lint:plain-table
+        print(string.format("[KakarotAccess] %s faulted: %s\n", what, tostring(err)))
+    end
+end
+
 local function sweep()
     for _, a in ipairs(adapters) do
         if probe(a) then return a end
@@ -199,9 +230,9 @@ local function step()
     -- widgets are dying, and even an is_active() probe can be an uncatchable abort.
     -- Drop the active adapter so the post-load screen announces fresh.
     if Transition.active() then
-        if active and active.reset then active.reset() end
+        safe_reset(active)
         active, pending, pending_n = nil, nil, 0
-        KeyhelpWatch.screen_changed(nil)
+        safe_call("KeyhelpWatch.screen_changed", KeyhelpWatch.screen_changed, nil)
         -- Map load in progress: the game thread is at its busiest — relax the 20ms
         -- pad dispatcher too (pad_poll reads this global at its own cadence).
         _G.__KakarotPadRelax = true
@@ -238,8 +269,10 @@ local function step()
         -- Context change confirmed: reset both so nothing leaks across the switch and the
         -- newly focused screen announces its current control fresh.
         local prev = active
-        if active and active.reset then active.reset() end
-        if cur and cur.reset then cur.reset() end
+        -- Both resets are isolated (safe_reset) so the commit below ALWAYS lands: a raise here
+        -- used to leave the dispatcher wedged on the same candidate forever. See safe_reset.
+        safe_reset(active)
+        safe_reset(cur)
         active, pending, pending_n = cur, nil, 0
         -- TEMP diagnosis (2026-07-16 emblems latency): one line per screen change naming
         -- the winning adapter by its registration index (cross-ref app.lua order; 0 =
@@ -271,7 +304,7 @@ local function step()
         end
         -- New context: the screen's actions ("X: assign", "Y: skill tree") are read once,
         -- queued behind its own announcement (keyhelp_watch.lua).
-        KeyhelpWatch.screen_changed(cur)
+        safe_call("KeyhelpWatch.screen_changed", KeyhelpWatch.screen_changed, cur)
         -- A screen just opened or closed — the one moment a not-yet-cached submenu may be
         -- appearing (ring → items, items → detail, close → reopen). Let missing pools skip
         -- their backoff for a short window so the new screen reads at once (ui_core).
@@ -336,12 +369,12 @@ local function step()
                     nm, tostring(err)))
             end
         end
-        KeyhelpWatch.update()
+        safe_call("KeyhelpWatch.update", KeyhelpWatch.update)
     end
     -- Tutorial guidance line (guide_watch.lua): runs with OR without an active
     -- adapter (a guide box can be pinned over free roam), queued after whatever
     -- else this tick announced.
-    GuideWatch.update()
+    safe_call("GuideWatch.update", GuideWatch.update)
 end
 
 function Registry.start()
@@ -353,7 +386,17 @@ end
 
 function Registry.stop()
     enabled = false
-    KeyhelpWatch.screen_changed(nil)   -- reader off: nothing pending, nothing remembered
+    -- Restore the same invariant start() establishes: the reader being off means NO screen owner.
+    -- `active` used to be left pointing at whatever was committed, and step() — its only writer —
+    -- never runs again once Core.loop retires the loop, so Registry.active_adapter() served that
+    -- stale pointer for the rest of the session. nav_tracker's ui_muted() is then permanently
+    -- true: the radar audio stays muted, world_alive() and so Nav.field_ready() stay false, and
+    -- THAT gate is what opens both the R3 radar picker and the L3+R3 config menu. So Ctrl+M
+    -- pressed with any screen committed — during a dialogue or with the pause ring up, the most
+    -- natural moment to want quiet — disabled all of it, with nothing in the log to say why.
+    safe_reset(active)
+    active, pending, pending_n = nil, nil, 0
+    safe_call("KeyhelpWatch.screen_changed", KeyhelpWatch.screen_changed, nil)
     Core.set_quiet(false)              -- never leave the scan/pad throttles latched on
     _G.__KakarotPadRelax = false
 end

@@ -122,7 +122,14 @@ local function step()
     end
     track("p", p, true)
     local e = Core.first_on_screen("Battle_Hud_E_Main_C", tick)
-    if e then track("e", e, false) end
+    -- ENEMY BASELINE CLEAR (crash/perf audit RANK 20, 2026-07-31). track() was the only thing
+    -- that ever nilled sides.e, and it only runs when the enemy HUD is actually on screen — so a
+    -- fight where that HUD disappears (see the file header above: pooled, recycled "the instant
+    -- a fight ends OR AN ENEMY FALLS") while the PLAYER HUD stays up — a multi-opponent field
+    -- fight, a boss phase change — left the dead enemy's max HP standing as the baseline. The
+    -- next opponent's raw HP is then divided by the wrong baseline: pct can exceed 100 (pinned
+    -- at the top bucket, the whole descent mis-narrated) or open on a phantom mid-percent.
+    if e then track("e", e, false) elseif sides.e then sides.e = nil end
 end
 
 function Battle.start()

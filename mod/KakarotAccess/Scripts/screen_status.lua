@@ -112,9 +112,16 @@ local function hud_block(member)
 end
 
 -- The five attribute blocks, in the order they appear on screen.
+--
+-- peek_all, not cached_all (crash/perf audit RANK 17, 2026-07-31): this is reached from the
+-- d-pad's OWN 20 ms loop (pad_step below -> Status.step -> blocks() -> here), which — like
+-- screen_map's travel d-pad — never calls Core.begin_scan_tick and so never refills the shared
+-- scan budget it would be spending. BLOCK_CLASS is not directory-mapped, so cached_all falls to
+-- a ~65ms timed_findall scan on that fast loop; peek_all only ever reads the cached pool (see
+-- Status.update below, which is what actually populates it) and never scans.
 local function stat_widgets()
     local out = {}
-    for _, w in ipairs(Core.cached_all(BLOCK_CLASS, tick)) do
+    for _, w in ipairs(Core.peek_all(BLOCK_CLASS)) do
         if Core.on_screen(w) then out[#out + 1] = w end
     end
     if #out == 0 then
@@ -185,6 +192,12 @@ function Status.reset()
 end
 
 function Status.update()
+    -- Warm the block-class pool from THIS loop (the 100 ms registry side, where a scan is
+    -- affordable) via the scanning Core.cached_all; stat_widgets() reads it back through
+    -- Core.peek_all, which never scans (RANK 17 above). Return value unused — this call exists
+    -- only for its caching side effect, exactly like screen_map's world_icons_on_screen warms
+    -- Map_World_Icon_C for that screen's own 20 ms travel d-pad.
+    Core.cached_all(BLOCK_CLASS, tick)
     local h = header()
     if not h then return end
     ann:focus(nil, nil, h, nil, nil)

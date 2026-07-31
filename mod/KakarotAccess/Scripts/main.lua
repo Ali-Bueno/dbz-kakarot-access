@@ -76,6 +76,10 @@ Input.init()
 -- so the in-memory values survive a Ctrl+Shift+R reload; the config menu writes changes
 -- straight to disk. app.start() re-applies the language override to the (reloaded) i18n.
 Settings.init()
+-- Braille displays: Speech.init() runs long before the config exists (it is the first thing the
+-- mod does, so a load failure is reported through the reader itself), so the braille mode is
+-- applied here, once Settings is up. The config menu re-applies it whenever the user changes it.
+Speech.set_braille(Settings.braille())
 
 -- Snapshot everything loaded so far (stdlib + speech + prism_bridge + mem_bridge). These must
 -- survive a reload; anything required AFTER this point is our own logic and is
@@ -92,13 +96,18 @@ local App = require("app")
 -- NOT ship in releases.
 
 -- F8: speech test through the full pipeline (announces which screen reader PRISM picked).
+-- Both wrapped (crash audit RANK 1, 2026-07-31): a RegisterKeyBind callback runs on UE4SS's
+-- KEYBOARD thread, and Speech.say/stop are not flag flips — say() does a read-modify-write of
+-- speech.lua's shared `pending` queue that the poll loop also mutates, on the SAME lua_State.
 RegisterKeyBind(Key.F8, function()
-    Speech.say("Kakarot accessibility online. Screen reader: " .. Speech.backend_name(), true)
+    ExecuteInGameThread(function()
+        Speech.say("Kakarot accessibility online. Screen reader: " .. Speech.backend_name(), true)
+    end)
 end)
 
 -- Ctrl+F8: silence the screen reader.
 RegisterKeyBind(Key.F8, { ModifierKey.CONTROL }, function()
-    Speech.stop()
+    ExecuteInGameThread(function() Speech.stop() end)
 end)
 
 -- F1: repeat the currently focused menu item.
@@ -181,9 +190,24 @@ RegisterKeyBind(Key.R, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function()
         for name in pairs(package.loaded) do
             if not protected[name] then package.loaded[name] = nil end
         end
-        App = require("app")
+        -- PCALL'd (crash audit RANK 13, 2026-07-31). app.lua's top level requires ~25 adapter
+        -- modules and runs module-scope code, so an ordinary error in any of them — a half-saved
+        -- file, a renamed native_offsets field — used to propagate straight out of here: the
+        -- assignment never landed, `App` still pointed at the table whose loops had just been
+        -- stopped two lines above, App.start() never ran, and a blind player got TOTAL SILENCE
+        -- with nothing spoken and no way back but restarting the game. The old table's closures
+        -- are intact, so restarting it is a valid fallback.
+        local reload_ok, newApp = pcall(require, "app")
+        if reload_ok then
+            App = newApp
+        else
+            print("[" .. MOD .. "] reload FAILED, keeping the previous version: "
+                .. tostring(newApp) .. "\n")
+        end
         App.start()
-        Speech.say("Mod reloaded", true)
+        -- Say which of the two actually happened: a silent "Mod reloaded" over the OLD code is
+        -- exactly the report that wastes a debugging session.
+        Speech.say(reload_ok and "Mod reloaded" or "Reload failed, previous version restored", true)
     end)
 end)
 

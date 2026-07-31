@@ -110,8 +110,8 @@ end
 -- handle that cannot answer GetAddress ⇒ true, and the old path runs unchanged. A guard that
 -- fails closed on a shared substrate silently blanks whole screens.
 local CLASS_OFF = nil       -- UObjectBase::ClassPrivate offset — DERIVED at runtime, never guessed
--- The probe needs the bridge loaded AND /Script/UMG.UserWidget resolvable. A single early
--- attempt would latch "unavailable" for the session and silently disable the pre-check, so it
+-- The probe needs the bridge loaded AND a live UObject to derive from. A single early attempt
+-- would latch "unavailable" for the session and silently disable the pre-check, so it
 -- retries — but the retry budget is measured in TIME, not in calls: Mem.alive runs dozens of
 -- times per tick from Core.valid, so a per-call budget would burn through inside one or two
 -- ticks, which is exactly the boot window where the probe is expected to fail. Retry at most
@@ -123,12 +123,24 @@ local class_off_gave_up = false
 local CLASS_OFF_RETRY_EVERY_S = 0.5
 local CLASS_OFF_DEADLINE_S = 30.0
 
--- Derive it by asking the engine for both halves of the answer and matching them: take a
--- UObject guaranteed to be alive (a UClass found by path), get its class pointer through
--- reflection, and find that exact value in the first bytes of the object. Whatever offset holds
--- it IS ClassPrivate on this build — so an engine or game patch re-derives it instead of
--- trusting a stale constant.
-local function class_off()
+-- Derive it by asking the engine for both halves of the answer and matching them: take the
+-- object Mem.alive was ALREADY handed, get its class pointer through reflection, and find that
+-- exact value in the first bytes of the object. Whatever offset holds it IS ClassPrivate on this
+-- build — so an engine or game patch re-derives it instead of trusting a stale constant.
+--
+-- HANG FIX (crash audit RANK 5, 2026-07-31): the probe used to derive from
+-- StaticFindObject("/Script/UMG.UserWidget"), retried every RETRY_EVERY_S for the whole
+-- DEADLINE_S — i.e. a speculative object lookup on each of the first sixty attempts, every one
+-- of them inside the boot window while the engine is async-loading. That is the exact API and
+-- the exact window that deadlocked the game twice; ui_core's PROBE_ENABLED = false records the
+-- same verdict (there is NO time on this game when a StaticFindObject is provably safe). The
+-- object being checked answers both halves of the question, so no lookup is needed at all.
+--
+-- `base` is the caller's ALREADY-obtained GetAddress result, deliberately passed in rather than
+-- re-read here: GetAddress is the call that PIERCES pcall on a non-UObject handle, so it must
+-- happen once, inside Mem.alive's transactional guard. Its having answered an integer is also
+-- what makes the GetClass() hop below safe to attempt — the handle is proven UObject-family.
+local function class_off(obj, base)
     if CLASS_OFF then return CLASS_OFF end
     if class_off_gave_up or not loaded then return nil end
     local t = os.clock()
@@ -144,14 +156,13 @@ local function class_off()
                 .. math.floor(CLASS_OFF_DEADLINE_S) .. "s — MEMORY PRE-CHECK DISABLED\n")
         end
     end
-    local probe
-    if not pcall(function() probe = StaticFindObject("/Script/UMG.UserWidget") end)
-        or not probe then give_up_check() return nil end
-    local base, want
-    if not pcall(function()
-        base = probe:GetAddress()
-        want = probe:GetClass():GetAddress()
-    end) then give_up_check() return nil end
+    -- Type-checked before math.tointeger, which RAISES on a nil/non-number: the caller reaches
+    -- here even when its GetAddress came back nil, and an ordinary Lua error thrown from inside
+    -- the guard's pending window would leave the mark set and disable the pre-check for good.
+    if type(base) ~= "number" then give_up_check() return nil end
+    local want
+    if not pcall(function() want = obj:GetClass():GetAddress() end)
+        or type(want) ~= "number" then give_up_check() return nil end
     base, want = math.tointeger(base), math.tointeger(want)
     if base == nil or want == nil or base == 0 or want == 0 then give_up_check() return nil end
     for off = 0, 0x40, 8 do
@@ -163,6 +174,50 @@ local function class_off()
         end
     end
     give_up_check()
+    return nil
+end
+
+-- ---- the shared engine-object resolver ---------------------------------------------------
+--
+-- The ONE retry-throttled StaticFindObject in the mod (crash audit RANK 5, 2026-07-31). Two
+-- modules needed to resolve an engine object by path and each rolled its own policy, both wrong
+-- in opposite directions: this file retried the lookup at the probe cadence for the whole
+-- deadline, i.e. dozens of speculative lookups inside the boot async-load window that has
+-- deadlocked the game twice; ui_core latched `false` on a SINGLE early miss and thereby dropped
+-- the IsInViewport half of on_screen for the rest of the session. Neither failure says anything
+-- in a log. So the policy lives here, once, and callers just ask: at most one attempt per
+-- FIND_RETRY_EVERY_S, only a SUCCESS is ever cached, and past FIND_DEADLINE_S it stops trying
+-- and prints why. A caller must treat nil as "not yet", never as "no".
+--
+-- `r ~= nil` is not a validity check on this API — UE4SS answers an INVALID RemoteObject, not
+-- nil — so the result is confirmed with IsValid. Safe here specifically because a lookup MISS
+-- yields a null cpp object, which IsValid tests before it dereferences anything; the handles
+-- IsValid faults on are freed ones, which StaticFindObject cannot return.
+local FIND_RETRY_EVERY_S = CLASS_OFF_RETRY_EVERY_S   -- same cadence as the offset probe above
+local FIND_DEADLINE_S = CLASS_OFF_DEADLINE_S         -- and the same give-up horizon
+local find_state = {}                                -- path -> { obj, next, deadline, gave_up }
+
+function Mem.find_object(path)
+    if type(path) ~= "string" then return nil end
+    local st = find_state[path]
+    if st == nil then st = { next = 0 }; find_state[path] = st end
+    if st.obj then return st.obj end
+    if st.gave_up then return nil end
+    local t = os.clock()
+    if st.deadline == nil then st.deadline = t + FIND_DEADLINE_S end
+    if t < st.next then return nil end
+    st.next = t + FIND_RETRY_EVERY_S
+    local found
+    pcall(function()
+        local o = StaticFindObject(path)
+        if o ~= nil and o:IsValid() then found = o end
+    end)
+    if found then st.obj = found return found end
+    if os.clock() >= st.deadline then
+        st.gave_up = true
+        print("[KakarotAccess] object NOT resolvable after "
+            .. math.floor(FIND_DEADLINE_S) .. "s: " .. path .. "\n")
+    end
     return nil
 end
 
@@ -214,15 +269,22 @@ function Mem.alive(obj)
             .. "non-UObject handle reached Mem.alive. Reads continue unguarded; find the caller.\n")
         return true
     end
-    local off = class_off()
-    if off == nil then return true end                    -- cannot check → do not block
+    -- ORDER MATTERS (2026-07-31, crash audit RANK 5). The address is taken FIRST, inside the
+    -- transactional guard, and only then handed to the offset probe: GetAddress is the call that
+    -- pierces pcall on a non-UObject handle, so it stays inside the pending window, and the probe
+    -- now derives ClassPrivate from THIS object instead of doing its own StaticFindObject. The
+    -- probe is inside the window too — it is raise-free by construction (every engine hop is
+    -- pcall'd and every value type-checked), and its GetAddress hop belongs under the same mark.
+    -- Once CLASS_OFF is known, class_off() returns on its first line and costs nothing.
     guard.pending = true
     local a = Mem.raw_addr(obj)
+    local off = class_off(obj, a)
     guard.pending = false
     if a == nil then return true end                      -- handle cannot answer → do not block
     a = math.tointeger(a)
     if a == nil then return true end                      -- not an address we can read → open
     if a == 0 then return false end                       -- a real null: never touch it
+    if off == nil then return true end                    -- cannot check → do not block
     -- No pcall around these two: read_ptr is SEH-guarded (an unreadable address returns nil,
     -- it cannot fault), and its only Lua-level failure mode is a non-integer argument, which
     -- is ruled out above (`a` went through math.tointeger, `off` is our own derived integer,
