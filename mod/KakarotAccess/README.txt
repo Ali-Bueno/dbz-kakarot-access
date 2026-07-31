@@ -97,6 +97,8 @@ Controller (primary):
   D-pad up/down ..... picker: move through targets
   A ................. picker: lock onto the target
   B ................. picker: close and stop tracking
+  L3 + Y ............ repeat the current objective (works anywhere, even in a
+                      cutscene or a menu; Y = Triangle)
   L3 + R3 ........... open / close the config menu
   D-pad ............. config menu: move between options / change a value
   D-pad down/up ..... status sheet: step through the stat blocks
@@ -114,6 +116,7 @@ Keyboard (optional extras — not required to play):
   Shift+F3 .......... toggle NavMesh route guidance
   F5 ................ announce the tracked objective (distance, direction)
   Shift+F5 .......... cycle companion tracking
+  F10 ............... repeat the current objective in words (same as L3 + Y)
   F8 ................ speech test (also names your screen reader)
   Ctrl+F8 ........... silence the voice
   F11 / Shift+F11 ... status sheet: next / previous stat block

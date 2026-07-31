@@ -5,7 +5,8 @@
 -- so it is NOT in the menu Registry (which picks a single active adapter and would
 -- let this shadow real menus). Instead it runs its own light poll loop, like
 -- nav_tracker: it announces the objective whenever it CHANGES (diff-gated), so the
--- player hears each update, and F10 repeats the current objective on demand.
+-- player hears each update, and F10 (keyboard) or L3 + Y (pad) repeats the current
+-- objective on demand — including while the HUD is hidden, from the last known text.
 --
 -- Structure (CXX dump): the host holds up to three main rows (Quest_Navi_M00..M02)
 -- and three sub rows (Quest_Navi_S00..S02), each a Quest_Navi_M/S_C whose
@@ -21,6 +22,8 @@ local I18n = require("i18n")
 local Registry = require("ui_registry")
 local Transition = require("transition")
 local A = require("ui_archetypes")
+local Input = require("input")        -- the on-demand read's pad chord (see pad_step)
+local PadPoll = require("pad_poll")   -- shared 20 ms pad dispatch (dispatch only, no logic)
 
 local Quest = {}
 
@@ -44,7 +47,13 @@ local MAIN_TITLE = { "Txt_Main00", "Txt_Title", "WL_MainQuestListTitle" }
 local SUB_TITLE  = { "Txt_Sub00", "WL_SubQuestListTitle" }
 
 local running = false
-local last = nil             -- last announced objective string (diff gate)
+-- WHAT WAS ANNOUNCED, in two parts (2026-07-31). `last_key` is the SIGNATURE the diff gate
+-- compares (see sig_key / the note in step); `last_text` is the composed line that was actually
+-- spoken, kept for the on-demand re-reads, which want words rather than a comparison key. They
+-- used to be one variable, which forced the gate to diff the spoken text — the bug that
+-- re-announced a stale objective whenever the HUD repainted.
+local last_key = nil
+local last_text = nil
 local cand = nil             -- candidate text while it SETTLES (see step)
 local cand_since = nil       -- os.clock() of the poll that FIRST observed `cand` (see STABLE_S)
 local STABLE_TICKS = 2       -- observations the objective text must hold before it may speak:
@@ -187,6 +196,14 @@ local function objective_text()
     return table.concat(parts, ". "), sigs.main, sigs.sub, true
 end
 
+-- The two group signatures as ONE comparable key — what the speech diff gate stores and
+-- compares (see step). Declared here, above every user, and shared by the three of them so the
+-- announce path and the two on-demand re-reads can never disagree about what "the same
+-- objective" means.
+local function sig_key(sig_main, sig_sub)
+    return (sig_main or "") .. "|" .. (sig_sub or "")
+end
+
 -- Diff one group's signature against its last non-nil value; returns the group key
 -- when it genuinely changed (see the last_sig comment for the nil/seed rules).
 local function sig_changed(gkey, sig, was_seeded)
@@ -268,9 +285,9 @@ end
 
 -- Drop the in-flight settle candidate. Called from every poll that did NOT get to look at the
 -- HUD, because an unobserved poll is not evidence that anything held steady — see STABLE_S for
--- the report this comes from. It deliberately does NOT touch `last`: the diff gate staying stale
--- across a gate is the documented behaviour that makes a deferred announcement fire once the
--- gate lifts, and nothing here changes that.
+-- the report this comes from. It deliberately does NOT touch `last_key`: the diff gate staying
+-- stale across a gate is the documented behaviour that makes a deferred announcement fire once
+-- the gate lifts, and nothing here changes that.
 local function forget_candidate()
     cand, cand_since = nil, nil
 end
@@ -281,9 +298,20 @@ local function step()
     Mem.mark("quest.step")
     if Transition.active() then forget_candidate() return end
     if Registry.active_adapter() then forget_candidate() return end
+    -- CUTSCENES AND CONVERSATIONS (user report 2026-07-31: a stale "go back and talk to Krillin"
+    -- spoken once at the start of the Raditz cutscene). The adapter gate above does NOT cover
+    -- them: the dialogue adapter commits IN on every subtitle line and OUT in every gap between
+    -- them (ui_registry.lua:311-317), so `active_adapter()` is nil for a good part of any
+    -- cinematic and this reader runs right inside it — on a HUD the game is tearing down.
+    -- `Core.scan_quiet()` is the mod's only signal that stays true ACROSS those gaps (ui_registry
+    -- sets it from a scan_quiet adapter, and with no adapter from "no minimap, no battle, not
+    -- free roam" — i.e. the whole cinematic state), so it is the gate that matches the report.
+    -- Drops the settle candidate like its siblings: a reading taken before a cutscene is not
+    -- evidence about anything observed after it.
+    if Core.scan_quiet() then forget_candidate() return end
     -- Don't cut a PROTECTED line (a reward notice / tutorial instruction still
     -- playing): the objective would interrupt "Emblemas de alma recibidos…" a few
-    -- seconds in (user 2026-07-16). Deferring keeps `last` stale, so it re-announces
+    -- seconds in (user 2026-07-16). Deferring keeps `last_key` stale, so it re-announces
     -- once the protected line finishes (diff gate still fires).
     if Speech.protected() then forget_candidate() return end
     -- This loop is independent of the menu Registry loop, so it must seed its own
@@ -303,9 +331,10 @@ local function step()
     -- independently flickering sources (which title candidate answered, which rows passed
     -- on_screen, whether the sub group contributed), so a bare repaint reads as a new objective
     -- to both of them. The candidate is dropped on a nil read for the reason the old comment
-    -- gave: the HUD hides in combat/menus/transitions, and letting that overwrite `last` made
-    -- the SAME objective re-announce every time the player left a battle (user 2026-07-24). A
-    -- completed quest simply leaves `last` at the old goal until a new one shows.
+    -- gave: the HUD hides in combat/menus/transitions, and letting that overwrite the announced
+    -- state made the SAME objective re-announce every time the player left a battle (user
+    -- 2026-07-24). A completed quest simply leaves `last_key` at the old goal until a new one
+    -- shows.
     local settled = false
     if not text then
         forget_candidate()
@@ -316,20 +345,36 @@ local function step()
     end
     signal_check(sig_main, sig_sub, host_ok, settled)
     if not text or not settled then return end
-    if text == last then return end
-    last = text
+    -- DIFF THE SIGNATURE, SPEAK THE TEXT (2026-07-31). The composed reading is exactly that — a
+    -- COMPOSITION: whichever of three title candidates answered, plus however many rows happened
+    -- to pass Core.on_screen, plus whether the sub group contributed at all. So a repaint that
+    -- changes only the composition (the HUD collapsing for a cutscene, a title falling back from
+    -- Txt_Main00 to WL_MainQuestListTitle) rewrites the string while the objective itself has NOT
+    -- moved, and a gate that diffs the string cannot tell that apart from a new goal: it
+    -- re-announces the old one. The signatures are title + the bare objective lines, without the
+    -- volatile counters — the same value the radar's change signal has always been gated on.
+    local key = sig_key(sig_main, sig_sub)
+    if key == last_key then return end
     -- One line per announcement, naming the COMPOSITION that produced it (see `shape`). The
     -- 2026-07-31 report arrived with no log at all, and the open question it left — which part of
     -- the reading flipped while the objective itself stood still — is answerable from two of
     -- these lines and nothing else.
     print(string.format("[KakarotAccess] objective -> [%s|%s] %s\n", shape.main, shape.sub, text))
-    Speech.say(text, true)
+    -- SPEAK PROTECTED, COMMIT AFTERWARDS. An objective is an actionable instruction — the same
+    -- class of line as a tutorial or a reward notice — so it gets the protection every reader in
+    -- the mod already defers to (Speech.protected), instead of being shredded mid-sentence by the
+    -- next interrupt=true from a lower-priority readout. And the commit moves BELOW the say: an
+    -- objective marked as announced by a line that never finished is an objective the player
+    -- never hears again, which is the half of the 2026-07-31 report that reads as "it was said
+    -- once and never repeated".
+    Speech.say_protected(text)
+    last_key, last_text = key, text
 end
 
 -- Re-announce the current objective on demand — called when the map opens, so the
 -- player can review the goal there instead of the HUD reader repeating it during
 -- free-roam (user 2026-07-24: the objective must speak only on change / first sight,
--- and on the map when the player wants it again). Prefers the cached `last` because the
+-- and on the map when the player wants it again). Prefers the cached `last_text` because the
 -- quest HUD (Quest_Navi_C) is usually hidden on the map screen even though the objective
 -- is unchanged; falls back to a live read only when nothing has been announced yet.
 -- Runs on the game thread (the caller already runs inside the registry step). `interrupt`
@@ -337,11 +382,16 @@ end
 -- after the map's own area/help readout instead of talking over it (user 2026-07-24).
 function Quest.reannounce(interrupt)
     if interrupt == nil then interrupt = true end
-    if last then Speech.say(last, interrupt) return end
+    if last_text then Speech.say(last_text, interrupt) return end
     tick = tick + 1
     Core.begin_scan_tick()
-    local text = objective_text()
-    if text then last = text Speech.say(text, interrupt) end
+    local text, sig_main, sig_sub = objective_text()
+    if text then
+        -- Commit the signature too, not just the text: this reading has now been spoken, so the
+        -- poll loop must not repeat it the moment the map closes.
+        last_key, last_text = sig_key(sig_main, sig_sub), text
+        Speech.say(text, interrupt)
+    end
 end
 
 -- Radar wiring (app.lua): fn(kind) fires once per genuine objective change,
@@ -360,6 +410,10 @@ end
 function Quest.start()
     if running then return end
     running = true
+    -- The pad chord for the on-demand read (L3 + Y). Reached through the Quest table because its
+    -- stepper is defined BELOW this function: a direct local reference here would compile to a
+    -- global read and be nil at runtime, which is the mistake the globals lint exists to catch.
+    Quest.start_pad()
     _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
     local myGen = _G.__KakarotQuestGen
     local busy = false
@@ -388,6 +442,7 @@ end
 
 function Quest.stop()
     running = false
+    Quest.stop_pad()
     _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
 end
 
@@ -441,17 +496,89 @@ local function dump_state(text)
     f:close()
 end
 
--- F10: speak the current objective on demand (interrupts). Runs on the game thread
--- (touches live UObjects) and stays inert during a level transition.
+-- Speak the current objective on demand (interrupts). THE GAME-THREAD BODY: it touches live
+-- UObjects, so only callers that are already on the game thread may call it directly (the pad
+-- stepper below); everything else goes through Quest.read().
+--
+-- FALLS BACK TO THE LAST KNOWN TEXT (2026-07-31). It used to be a live read or nothing, so it
+-- answered "no active objective" whenever the quest HUD was not up — during a cutscene, inside
+-- any menu, in battle — which is precisely when a player reaches for it, and the answer was not
+-- merely unhelpful but WRONG: the mod knows the objective, it announced it. Live read first (it
+-- is the freshest), the last announced line second, the "nothing" string only when we genuinely
+-- have never seen one.
+local function read_now()
+    if Transition.active() then return end
+    tick = tick + 1
+    Core.begin_scan_tick()
+    local text, sig_main, sig_sub = objective_text()
+    if DUMP then pcall(dump_state, text) end
+    if text then last_key, last_text = sig_key(sig_main, sig_sub), text end
+    Speech.say(text or last_text or I18n.t("objective_none"), true)
+end
+
+-- F10 / the pad chord, from OFF the game thread (a UE4SS keybind callback runs on its own
+-- thread — see main.lua).
 function Quest.read()
-    ExecuteInGameThread(function()
-        if Transition.active() then return end
-        tick = tick + 1
-        Core.begin_scan_tick()
-        local text = objective_text()
-        if DUMP then pcall(dump_state, text) end
-        Speech.say(text or I18n.t("objective_none"), true)
-    end)
+    ExecuteInGameThread(read_now)
+end
+
+-- ---- gamepad: read the objective on demand -----------------------------------------
+-- L3 + Y (hold the left stick click, tap Y / Triangle) is the controller twin of F10 — the
+-- player asked for a way to re-hear the current objective, and the mod is designed to be played
+-- with a pad, so the keyboard key alone does not ship this feature.
+--
+-- WHY THAT CHORD. It must not collide with anything the mod already reads, and it must be safe
+-- to leak to the game (nothing is blocked here — the mod only READS the pad):
+--   * R3 alone is the radar picker and L3 + R3 is the config menu, so no R3 chord is available;
+--     radar_menu only checks that L3 is NOT held, so any other modifier + R3 would open it.
+--   * L3 alone is out for the same reason: its rising edge is the first half of the config chord.
+--   * The d-pad, A, B and X are all consumed by mod overlays and by the map/status readers.
+-- L3 + Y leaves one modifier gesture the mod already asks players for (hold L3, tap something)
+-- and a face button no mod screen binds. It stays available everywhere — free roam, menus,
+-- cutscenes — because the fallback above is exactly what makes it worth pressing there.
+local pad_running = false
+local pad_prev = 0           -- button mask last seen (level-compare edge)
+
+local function pad_step()
+    -- Read the pad ONCE, decide the edge, and COMMIT `pad_prev` before any early return
+    -- (screen_map's 2026-07-28 lesson: bookkeeping at the end swallows presses made while a gate
+    -- is closed, and that reads to the player as "sometimes it works").
+    local snap = Input.read()
+    local buttons = snap and snap.buttons or 0
+    local B = Input.BTN
+    -- Rising edge for Y from the NATIVE LATCH or the level compare. The latch matters most
+    -- exactly where this bind does: during cutscenes and loads the dispatch relaxes to 100 ms,
+    -- and a tap that begins and ends inside one of those windows is invisible to a level compare.
+    -- The L3 half is deliberately a plain level read of the SAME snapshot — a chord's modifier is
+    -- a held state, not an edge.
+    local hit = (Input.pressed(B.Y) or ((buttons & B.Y) ~= 0 and (pad_prev & B.Y) == 0))
+        and (buttons & B.LEFT_THUMB) ~= 0
+    pad_prev = buttons
+    if not hit then return end
+    -- A mod overlay owning the pad (radar picker / config menu) gets it to itself, as everywhere
+    -- else in this codebase.
+    if _G.__KakarotPadModal then return end
+    -- Called DIRECTLY, not through Quest.read: pad_poll already dispatches inside
+    -- ExecuteInGameThread, so this is the game thread. read_now calls Core.begin_scan_tick, which
+    -- the "a 20 ms loop must not seed the scan budget" rule forbids PER TICK — this is one seed
+    -- per button press, the same one-shot the F10 key has always done, not a 50 Hz refill.
+    read_now()
+end
+
+function Quest.start_pad()
+    if pad_running then return end
+    if not Input.is_loaded() then
+        print("[KakarotAccess] quest_objective: input bridge not loaded, L3+Y read disabled\n")
+        return
+    end
+    pad_running = true
+    -- Shared 20 ms scheduler (pad_poll.lua): pad_step early-outs on one bit test per tick.
+    PadPoll.register("quest_read", pad_step)
+end
+
+function Quest.stop_pad()
+    pad_running = false
+    PadPoll.unregister("quest_read")
 end
 
 return Quest

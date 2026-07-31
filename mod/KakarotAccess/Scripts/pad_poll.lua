@@ -1,8 +1,9 @@
 -- Shared 20ms pad scheduler.
 --
 -- ONE LoopAsync + ONE ExecuteInGameThread dispatch serves every feature that must read
--- the gamepad faster than the 100ms registry poll (radar_menu's R3 picker, the map
--- travel d-pad, the status-page d-pad). They used to run three separate 20ms loops —
+-- the gamepad faster than the 100ms registry poll (radar_menu's R3 picker, config_menu's
+-- L3+R3 chord, quest_objective's L3+Y objective re-read, the map travel d-pad, the
+-- status-page d-pad). They used to run three separate 20ms loops —
 -- 150 game-thread callbacks queued per second even with all three idle — and that queue
 -- pressure hurts exactly when the game thread is busiest (cinematics, loads). Each
 -- stepper keeps its own cheap early-out gate; this module only owns the dispatch.
@@ -18,6 +19,9 @@ local Input = require("input")    -- Input.begin_tick only (the edge latch drain
 local Poll = {}
 
 local TICK_MS = 20
+-- Published so a stepper can convert its own tick counter into wall time without restating the
+-- period (radar_menu times its deferred picker open against Nav.targets_build_ms this way).
+Poll.TICK_MS = TICK_MS
 local RELAX_EVERY = 5  -- during cutscene subtitles / map loads (ui_registry publishes
                        -- _G.__KakarotPadRelax) dispatch only every 5th tick (100ms):
                        -- every 20ms consumer is inert there (R3 picker closed, no menu

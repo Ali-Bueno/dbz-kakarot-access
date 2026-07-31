@@ -79,6 +79,7 @@ local prev_btn = 0        -- previous button bitmask (edge detection)
 local tk = 0              -- step counter (double-tap timing)
 local last_r3_tk = nil    -- tick of the previous R3 press
 local pending_open_tk = nil   -- R3 pressed; holding to see if a 2nd tap makes it a toggle
+local open_wait_tk = nil      -- tick we started waiting on the nav loop's deferred target build
 -- Opened from the KEYBOARD. Decides one thing only: whether "no pad snapshot" means the
 -- picker must be torn down (pad-opened: the pad went away mid-menu) or is the normal state
 -- (keyboard-opened on a machine with no pad at all).
@@ -102,16 +103,29 @@ end
 
 -- ---- open / close ------------------------------------------------------------------
 
+-- Returns TRUE when the picker opened, FALSE while it is still waiting for a target list.
+-- Both callers must keep asking until it returns true (or give up themselves).
 local function do_open()
     -- Build the target list BEFORE blocking. If a world read faults (an uncatchable C++
     -- abort on this game — e.g. a bad property access), it must NOT strand the pad in a
     -- blocked state and freeze the game. The one-tick R3 leak before we block is
     -- harmless (R3 = ki-sense). Safety over the micro-leak.
-    -- Shared TTL snapshot, not a fresh sweep (crash audit RANK 3, 2026-07-31): this runs
-    -- SYNCHRONOUSLY on the 20 ms pad dispatch, and the sweep behind it is ~1.2 s of unbudgeted
-    -- FindAllOf — so in a dense area the game visibly locked up on the R3 press. If explore mode
-    -- swept recently the list is already there; otherwise this pays for it and explore goes free.
-    local list = Nav.targets_cached()
+    --
+    -- NEVER SWEEP HERE (2026-07-31, the streamer's crash trail: the process died inside
+    -- `pad.tick`). Both call sites reach this function on the shared 20 ms pad dispatch, and the
+    -- sweep behind list_targets is 17 unbudgeted FindAllOf — ~1.2 s of blocked game thread while
+    -- it dereferences every candidate. `no_build` makes that structurally impossible: we get the
+    -- shared snapshot or nil, and nil arms the nav loop to build it on its own 100 ms tick.
+    -- Waiting is bounded by Nav.targets_build_ms (one nav tick + the worst sweep measured this
+    -- session); past that the nav loop is gated or stuck, so we open with whatever exists rather
+    -- than leave the player pressing R3 at nothing.
+    local list = Nav.targets_cached(true)
+    if not list then
+        open_wait_tk = open_wait_tk or tk
+        if (tk - open_wait_tk) * PadPoll.TICK_MS <= Nav.targets_build_ms() then return false end
+        list = Nav.targets_snap or {}
+    end
+    open_wait_tk = nil
     Input.block(true)
     blocked = true
     open = true
@@ -123,6 +137,7 @@ local function do_open()
     else
         announce_item(true)
     end
+    return true
 end
 
 -- How long each keyboard-block lease lasts. The step runs every 20 ms, so this is ~15
@@ -193,8 +208,14 @@ local function handle_kb(cmd)
                 -- below — the keyboard block is a lease that expires by itself, so a fault
                 -- inside do_open's world reads cannot strand it.
                 Input.kb_block(KB_BLOCK_MS)
-                do_open()
-                kb_open = true
+                -- do_open can answer "still waiting for the nav loop's target build" — re-queue
+                -- the command so the next 20 ms dispatch asks again. The keyboard block is a
+                -- self-expiring lease, so holding it across those few ticks is safe.
+                if do_open() then
+                    kb_open = true
+                else
+                    kb_cmd = "toggle"
+                end
             end
         end
         return
@@ -326,15 +347,22 @@ local function step()
         -- L3 held? this is the config-menu chord (config_menu.lua) — ignore R3 entirely
         -- so it neither opens the picker nor starts an explore double-tap.
         if pressed(B.RIGHT_THUMB) and not Input.down(snap, B.LEFT_THUMB) and Nav.field_ready() then
+            -- open_wait_tk belongs to the PREVIOUS tap's deferred open: clear it on both
+            -- branches so a new press never inherits a stale wait and opens on an empty list.
             if last_r3_tk and (tk - last_r3_tk) <= DOUBLE_TAP_TICKS then
-                last_r3_tk, pending_open_tk = nil, nil
+                last_r3_tk, pending_open_tk, open_wait_tk = nil, nil, nil
                 Nav.toggle_explore()
             else
-                last_r3_tk, pending_open_tk = tk, tk
+                last_r3_tk, pending_open_tk, open_wait_tk = tk, tk, nil
             end
         elseif pending_open_tk and (tk - pending_open_tk) > DOUBLE_TAP_TICKS then
-            pending_open_tk = nil
-            if Nav.field_ready() then do_open() end
+            -- Stay armed while do_open waits on the deferred target build, so this branch retries
+            -- next tick instead of dropping the press. Cleared either way once it resolves.
+            if not Nav.field_ready() then
+                pending_open_tk, open_wait_tk = nil, nil
+            elseif do_open() then
+                pending_open_tk = nil
+            end
         end
         prev_btn = snap.buttons
         return

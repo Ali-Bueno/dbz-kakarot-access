@@ -4,6 +4,79 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
+**Last updated:** 2026-07-31 (c) — **THE STREAMER'S CRASH TRAIL NAMED THE SITE OUTRIGHT: DIED INSIDE
+`pad.tick`, INSIDE THE RADAR PICKER'S OWN DEFERRED TARGET SWEEP.** Two threads this session: the
+crash trail below, and separate player feedback that the quest objective goes stale/unreadable.
+**SOURCE-ONLY, UNVERIFIED IN GAME** — 6 Lua files plus this README and the mod's own
+`README.txt`/`package.ps1`, no bridge rebuilt, but `main.lua` changed so a full RESTART is needed.
+
+**1. The crash.** `crash_trail.bin` decoded with `tools/read-crash-trail.ps1`: 201,275 marks (~11
+min), ordinary free-roam walking, died inside `pad.tick`. Off the trail alone: no adapter had
+committed; **explore mode was ON** (`nav.explore` fires every `nav.step`); the pad was dispatching at
+a genuine 16 ms (`__KakarotPadRelax` false, so not a cutscene/load); the last two `pad.tick` marks
+are 16 ms apart — death landed inside an ordinary tick, not after a hang.
+**Build correction:** the player was NOT on v0.1.4 — `Mem.mark("pad.tick")`/`Core.drop_memos()`
+(`pad_poll.lua:91-92`) shipped in `93d539c`, AFTER the v0.1.4 tag (`cb4a30f`), so the build is in
+`93d539c..HEAD`, almost certainly `0b60eaf`. **Date a trail's marks against the commit history,
+never the tag list.**
+**Root cause:** of the five pad-dispatch steppers (`config_menu`, `quest_read`, `radar_menu`,
+`map_travel`, `status_pad`), four early-out on pure-Lua gates. The fifth — `radar_menu`'s deferred
+single-tap open — called `Nav.list_targets()` inline on a cold/expired cache: **17 unbudgeted
+`FindAllOf`, ~1.2 s of blocked game thread**, synchronously on the shared 20 ms pad dispatch. Explore
+mode toggles on an R3 double-tap, so a player using it taps R3 continuously and every uncompleted
+tap fell through to that open; `pad_poll.lua`'s `pcall` protects nothing against this engine's
+uncatchable aborts. **Rule: a fast input loop must never invoke work costed in seconds, and a TTL
+cache is only half a fix until the MISS path is checked too** — the earlier `targets_cached` TTL
+change removed the sweep from the warm-cache path but left it on the cold-cache fallback, exactly
+the state on a player's first press.
+**Refuted:** `mm_cache`/`Nav.field_ready()` being re-walked by the pad loop was NOT the cause — every
+stepper short-circuits first. Did settle a real contradiction: `AT_UIMiniMapRadar` IS per-level and
+HUD-rooted (`ui_directory.lua:330`, `:535-537`), so `nav_tracker.lua:1501`'s "pooled widget, not a
+world actor" comment is wrong about its own reason, though it still correctly stays unreleased.
+**Fixed** (full mechanism in the [crash ledger](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md)
+2026-07-31 (c)): `actor_pos` self-guards with `Core.valid` (`nav_tracker.lua:362-367`); the 17-scan
+sweep moved off the pad dispatch onto the nav loop via `Nav.targets_cached`/`Nav.targets_want`
+(`:2587-2607`, `:2081-2096`); `do_open()` now returns true/false and both callers retry instead of
+dropping the press (`radar_menu.lua:108-131`, `:214-218`, `:358-365`); `enemies_list()` dropped its
+expiry conjunct, the same fix `best_candidate` already got on the Krillin report (`:1227-1238`);
+`release_world_refs()` now also drops `human_mesh`/`invoker_key`/`invoker_nav` (`:1505-1529`);
+`Nav.list_targets()` gets its own `Mem.mark("nav.sweep")` (`:2609-2616`); and `screen_dialogue.lua`'s
+`nav_mute` is now derived per tick from which surface answered, closing the UI gate (and running
+`release_world_refs`) for scene surfaces while leaving the overworld talk window/bubbles alone
+(`:35-103`) — the reasoned, not-yet-confirmed fix for a separate report of a crash right as a
+cutscene starts.
+
+**2. Stale / unreadable objective** (user: "go to Lucca Village" only announced after several
+restarts; stale at cutscene start; no way to re-hear it). `quest_objective.lua` now diffs a
+`sig_main|sig_sub` signature instead of the composed string, so an HUD repaint that only changes the
+COMPOSITION (which title candidate answered, how many rows passed `on_screen`) no longer reads as a
+new goal (`:203-205`, `:348-371`); gated on `Core.scan_quiet()`, the one signal that survives the
+adapter flipping in/out between subtitle lines (`:311`); `Speech.say_protected`'s commit moved to
+AFTER the say, so a shredded line is no longer marked announced and lost (`:370-371`); `Quest.read()`
+falls back to the last known text when a live read comes back empty (`:509-517`). `main.lua`: F10
+moved out of the `Build.debug` block — it had never actually shipped (`:177-186`; `package.ps1`'s
+comment updated to match) — and the `version.txt` lookup was reading one folder too deep, so every
+packaged release logged itself as `dev` (`:38-47`). New **L3 + Y** pad chord for the same on-demand
+re-read (`quest_objective.lua:519-577`, wired through `pad_poll.lua`, documented in
+`mod/KakarotAccess/README.txt`). `README.md`'s crash-reporting section now tells reporters to copy
+`crash_trail.bin` and `UE4SS.log` **before** relaunching, since the next launch resets the ring
+(`:197-239`).
+
+**Still open:** the cutscene-start crash has no trail confirming it yet (reasoned, not verified);
+`screen_dialogue`'s `ui_muted()` still reads false once the registry drops `active` to nil in a
+between-lines gap (a small window at scene START only — the world gate covers the body of a scene);
+the explore sweep's ~1.2 s cost is unchanged, just relocated to the nav loop where it belongs; a
+class-pointer stamp for `Mem.alive` was considered and deliberately NOT built (the premise — a stable
+per-object Lua handle table — is unverified, and the mod's most shared guard is the wrong place to
+risk a fail-closed regression).
+
+**Next step:** get this batch played for real — the crash fix has no in-game confirmation yet and the
+cutscene-start crash specifically has no trail of its own. Watch for the picker opening a tick late
+while explore mode is active, for a battle/cutscene starting on a manual radar pick, and for F10/L3+Y
+repeating the objective mid-scene. If another crash happens, get `crash_trail.bin` + `UE4SS.log`
+before the reporter relaunches, and check any `pad.tick`-ending trail's build against `93d539c..HEAD`
+before trusting a tag.
+
 **Last updated:** 2026-07-31 (b) — **THE PICKER'S PAD LEAK, AND THE COMMUNITY BOARD TRACED TO THE
 AUDIT ITSELF.** Two user reports. Everything below is SOURCE-ONLY and UNVERIFIED IN GAME, but it is
 Lua-only: the bridges are already built and deployed (all four DLLs newer than their sources), so a
@@ -762,7 +835,7 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | Skill Palette / Super Attack equip | done | `screen_skillcustom.lua` — selected slot plate = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden (structural plates 4/7 have both always ON); slot button from plate `ButtonIconImage` → `A.platbtn_name`; empty slot = literal "---" → "ranura vacía"; level/Ki/desc from the detail pane only while it names the same skill (pane lags and goes stale on empty). `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified in-game 2026-07-13 |
 | Skill Tree / learn super attacks | done | **2026-07-14: the lock is read NATIVELY** from the game's own per-node state byte (offsets in *Derived facts*), so "bloqueada"/"adquirida" is correct on EVERY node whatever the browsing path — the old KNOWN LIMIT (noted below) is GONE. The name-propagation heuristic survives only as the fallback if the native read fails its bounds/FName self-check. Entry was slow (~30 s) until the feed's storm guard was fixed (see *Known issues*). Verified in-game 2026-07-14. — `screen_skilltree.lua` — `Start_Skilltree_C` < `UAT_UISkillTreeMenu`, ALL reflected (`Txt_Skillname/Txt_Lv_Num/Txt_Energy_Num/Txt_Detail/Txt_Name`); orbs = `WL_Skilltree_Zorb00` TArray of 12 `UAT_UISkilltreeZorb`: entries 1–6 = REQUIRED cost, 7–12 = OWNED. Orb color = POSITION in its 6-orb grid (red/blue/green/purple/silver/gold — verified twice 2026-07-14; textures don't encode color, all named "Ins_Item"). Reads name+lvl+Ki+non-zero cost, desc, owned orbs at the end. "How to acquire" text is NOT on screen while browsing (7-node full-text scan) — it only exists in the post-A message window, which already reads (decision: leave as-is). LOCKED nodes: the ONLY marker the game exposes is the tree cursor's padlock (`UISkillTree.Skilltree_Cursor.WL_ImgIconMicon` visible), and only on a skill's ENTRY (lv-1) node when the skill is unowned — 6 capture rounds proved there is nothing else: no readable panel index/pointer/position (cursor grid coords do live at tree+0x15F8/+0x15FC as grid×95), key-help bar identical on every node, no cover/lock widget on screen; the char-level gate ("need level 10") exists ONLY in the post-confirm message window (dialog reader speaks it). So the lock is PROPAGATED by skill name within a screen visit (`locked_skills`, cleared in reset): once the entry node reads locked, every level of that skill announces "bloqueada". KNOWN LIMIT (accepted): reaching a level-2/3 node WITHOUT passing its level-1 node first announces no lock — unfixable by reflection. Round-7 panel sweep closed the last door: all 108 `WL_Ins_Panel_Cover` are visible always (a frame, not a padlock) and every skill icon is an anonymous `MaterialInstanceDynamic`, so panels can't be matched to skills. The real data (`USkillManager`/`USkillTree`) exposes ZERO reflected functions and owned levels live in private save memory (`USkillSave`) — a full fix needs native RE (Ghidra), deferred. Verified in-game 2026-07-14. **2026-07-29:** a session crash investigation traced a silent refusal of `WL_Skilltree_Zorb00` to a NEW substrate bug (partial property-set caching in `ui_core`'s super-struct walk, truncating at the BP class and getting cached as authority) — not to this screen; the member is confirmed real (these are the 12 orbs verified above) and the fix is source-only / unverified, needs a full restart. Whether the mod actually crashed the process that session is STILL OPEN, pending the crash trail — see the *Last updated* entry and the crash ledger |
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` — the screen's ACTION prompts ("X: asignar", "Y: árbol de habilidades", "A: usar") read once on entering any menu and again only when the set CHANGES (diff-gated, queued behind the screen's own readout). Hangs off the `ui_registry` dispatcher, so every menu (incl. future ones) is covered; passive/time-critical readers opt out with `keyhelp_auto = false` (13 adapters). Face buttons are finally NAMED: `keyhelp.lua` now falls through to `A.platbtn_token` (the palettes' resolver) when the bar's device-INDEXED textures (Btn00..03) can't name themselves. Nav entries ("mover", "cambiar pestaña") are dropped. Ctrl+F2 toggles it (needs a game RESTART — main.lua); F2 still reads the whole bar. 2026-07-17: SAME-PHRASE COOLDOWN (30 s, `os.clock`, survives screen changes) — the dispatcher's screen flips cleared the diff gate and re-announced an identical bar within seconds, and an A↔B phrase alternation on cursor moves re-spoke each move; identical phrases now wait out the cooldown, new phrases speak at once, F2 unaffected. Verified in-game 2026-07-17. Read LEFT-TO-RIGHT as on screen: the bar is a CanvasPanel the game lays out itself, so the widget number is a slot id, NOT a position — the place comes from the slot's `GetPosition()` (its `LayoutData` offsets reflect back as 0.0), falling back to the render transform / ancestors. COST RULE (learned the hard way: the first cut lagged the item + skill-palette menus to a crawl): inside the poll step it may ONLY use `Core.cached_all` (tick passed — a raw `FindAllOf` per poll stalls the game thread) and it polls the bar's LABELS, resolving the glyphs just once, on the poll where they changed. Verified in-game 2026-07-14 |
-| Quest objective HUD (text) | done | `quest_objective.lua`, VERIFIED in-game 2026-07-15 night. Two-step fix: (1) directory-mapped `{"fm","QuestNavigation"}` (detection was scan-starved); (2) single-objective quests put the text in the TITLE node (`Txt_Main00`/`WL_MainQuestListTitle`) with every M/S row hidden (F10 dump proved it) — groups now speak on title OR rows. F10 diagnostic kept but `DUMP=false` |
+| Quest objective HUD (text) | done | `quest_objective.lua`, VERIFIED in-game 2026-07-15 night. Two-step fix: (1) directory-mapped `{"fm","QuestNavigation"}` (detection was scan-starved); (2) single-objective quests put the text in the TITLE node (`Txt_Main00`/`WL_MainQuestListTitle`) with every M/S row hidden (F10 dump proved it) — groups now speak on title OR rows. F10 diagnostic kept but `DUMP=false`. **2026-07-31 (c), PENDING in-game verify:** diff moved from the composed string to a `sig_main|sig_sub` signature so a repaint that only changes the composition no longer re-announces; gated on `Core.scan_quiet()`; `Speech.say_protected` commit moved after the say so a shredded line isn't lost; `Quest.read()` now falls back to the last known text; new **L3+Y** pad chord repeats it on demand (F10's controller twin) |
 | Episode title cards | wip | `screen_questcard.lua` (NEW 2026-07-15) — `AT_UIQuestMainStart.TitleText` (0x3E0) via `{"fm","QuestMainStart"}` (0x558); telop pattern (once per appearance, queued), registered below telop. `fm.QuestMainLogo` is image-only (ChapterTitleImage) — unread, by design. 2026-07-17 night (user): a story-chapter card in a cinematic ("Detén la invasión saiyan") went UNREAD — this reader was never verified and its `on_screen` gate may be blind like the intro cards' was; TRACE armed (`qcard` lines: both fm cards' on/vis/op/text per state change) — next episode/chapter card in the log decides the fix |
 | Cooking menu | done | `screen_cooking.lua`, VERIFIED in-game 2026-07-15 night end-to-end (entry menu via the second `Shop_Top_C` chain; dish list; cook — latch spoke "Bollo jugoso al vapor" legitimately). HONEST CAVEAT from the latch log: the ghost pane read `vis=0 opacity=1.0` — `pane_live` did NOT discriminate it; the shadowing was actually killed by the yields (ring/entry-rows) + spoken-key suppression + the game parking the pane a while later. `LATCH_DEBUG` stays ON (one line per activation) to catch any residual window (e.g. emblems right after cooking) |
 | Fishing minigame | done | `screen_fishing.lua`. RE-VERIFIED in-game 2026-07-15 (user landing fish consistently) after FOUR fixes that day: (1) directory regression — `AT_UIBattleRushSpeedCore` mapped via a pointer the game never sets → phase 2 dead; unmapped. (2) adapter's own 2 s absence backoff on a ~3 s hook bar → phase-1 cue late/absent since forever; removed (throttling is ui_core's job). (3) the game ALTERNATES between several pooled ring cores — the single cached_live pin was stale half the reels (vis=false, ringSize frozen; caught in the dump); now `ring_core()` picks the on-screen pool instance. (4) reel is <1 s (~420 u/s) and both buttons are random per catch → speech redesigned: phase 2 = bare letter only, on the phase byte (`fishing.phase == 2`), first tick; the "X, luego Y" pre-pair removed (the second letter was the stale core's). DEBUG off |
@@ -824,6 +897,28 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-07-31 (c): IN-GAME TEST OF THE CRASH-TRAIL FIX AND THE OBJECTIVE-ANNOUNCEMENT FIXES.** 6 Lua
+files plus `README.md`/`README.txt`/`package.ps1`; no bridge rebuilt. **Full RESTART required**
+(`main.lua` changed, so Ctrl+Shift+R is not enough).
+
+1. **Explore mode (double-R3) plus the R3 picker, back to back, repeatedly.** This is the reported
+   crash site: the picker's target sweep used to run inline on the pad dispatch on a cold cache. It
+   should still open (now possibly a tick later while the nav loop builds the list), however fast
+   R3 is tapped, and nothing should freeze.
+2. **A field battle or cutscene starting while a manual radar target is picked, and a cutscene
+   starting mid-conversation.** The reasoned-but-unconfirmed fix for "crash right as a cutscene
+   starts" depends on `screen_dialogue`'s new per-tick `nav_mute`.
+3. **The quest objective**: a fresh objective should announce promptly, an HUD repaint that doesn't
+   change it should stay silent, and F10 / L3+Y should repeat it on demand — including mid-cutscene
+   and inside a menu.
+4. **If a crash still happens**, get `crash_trail.bin` and `UE4SS.log` **before relaunching** (the
+   README now says so explicitly) — the next launch resets the ring. Check any `pad.tick`-ending
+   trail's build against `93d539c..HEAD`, never the tag list.
+
+---
+
+### Previous next step (2026-07-31 (a), superseded)
 
 **2026-07-31: IN-GAME TEST OF THIS SESSION'S BATCH.** ~25 files changed and three bridges rebuilt
 (`prism_bridge`, `input_bridge`, `audio_bridge` — `mem_bridge.dll` is untouched; `mem.lua` changed,

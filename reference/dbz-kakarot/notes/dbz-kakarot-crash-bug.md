@@ -1,5 +1,103 @@
 # dbz-kakarot-crash-bug
 
+> **2026-07-31 (c) — THE STREAMER'S TRAIL NAMED THE SITE OUTRIGHT: DIED INSIDE `pad.tick`, INSIDE THE
+> RADAR PICKER'S OWN DEFERRED TARGET SWEEP.** `crash_trail.bin` decoded with
+> `tools/read-crash-trail.ps1`: 201,275 marks (~11 minutes), ordinary free-roam walking, last op
+> `pad.tick`. Read straight off the trail, nothing else needed: no menu adapter had committed (the
+> registry was probing its whole list every tick); **explore mode was ON** (`nav.explore` fires on
+> every `nav.step`); the pad was dispatching at a genuine 16 ms (`__KakarotPadRelax` false — a
+> cutscene or a load would have relaxed it to 100 ms); and the last two `pad.tick` marks are 16 ms
+> apart, i.e. death landed inside an ORDINARY tick, not after a hang.
+>
+> **BUILD CORRECTION, and it changes how every future trail must be read: the player was NOT on
+> v0.1.4.** `Mem.mark("pad.tick")` and `Core.drop_memos()` (`pad_poll.lua:91-92`) both shipped in
+> `93d539c`, which lands AFTER the v0.1.4 tag (`cb4a30f`) — so a trail containing a `pad.tick` mark at
+> all can only come from a build in `93d539c..HEAD`, here almost certainly `0b60eaf`. **Date a
+> trail's marks against the COMMIT HISTORY, never the tag list** — the 07-29 entry below was already
+> burned once by a stale local tag; this time the mark's mere presence is enough to prove the same
+> point again.
+>
+> **ROOT CAUSE.** Five steppers share the 20 ms pad dispatch (`config_menu`, `quest_read`,
+> `radar_menu`, `map_travel`, `status_pad`). Four early-out on pure-Lua gates and touch no UObject on
+> a tick where nothing relevant is pressed. The fifth does not: `radar_menu`'s deferred single-tap
+> open (`do_open()`'s `pending_open_tk` branch) called `Nav.list_targets()` inline the instant the
+> cached target snapshot was cold or expired — **17 unbudgeted `FindAllOf` calls, ~1.2 s of blocked
+> game thread, dereferencing every candidate, synchronously, on the shared 20 ms dispatch.** Explore
+> mode toggles on an R3 DOUBLE-tap, so a player using it taps R3 continuously, and every uncompleted
+> tap fell through to this open. `pad_poll.lua` wraps every stepper in `pcall`; that buys nothing on
+> this engine — the sweep does not need to error to kill the process, it only needs to run inline on
+> a thread the OS will not wait 1.2 s for.
+>
+> **THE RULE: a fast input loop must never invoke work whose cost is measured in seconds, and a TTL
+> cache is only half a fix until you check what happens on a MISS.** The earlier `targets_cached` TTL
+> change had already removed the 17-scan sweep from the COMMON path (a warm cache) — but left it
+> exactly where it always was on the FALLBACK path, and the fallback is what runs when the cache is
+> cold, which is precisely the state on a player's FIRST press of a session. Moving an expensive call
+> behind a cache protects the hit; it does nothing for the miss unless the miss gets looked at on
+> purpose.
+>
+> **HYPOTHESIS REFUTED, recorded so nobody re-runs it:** `mm_cache` / `Nav.field_ready()` being
+> re-walked by the pad loop at its measured ~62 Hz was investigated and is NOT the cause — every pad
+> stepper short-circuits before `field_ready` on a tick where nothing is open. The investigation did
+> settle a real contradiction on the way through: `AT_UIMiniMapRadar` is **per-level, HUD-rooted**
+> (`ui_directory.lua:330` resolves it through `{"fm","MapMng","MinimapIns"}`; the same file's
+> Transition hook at `:535-537` drops the whole directory because "the PlayerController, HUD and
+> MenuManager die with the level"), so `nav_tracker.lua:1501`'s comment calling `mm_cache` "a pooled
+> widget, not a world actor" is wrong about its OWN stated reason. It still correctly stays out of
+> `Nav.release_world_refs()` — just because it dies with the level and self-heals on the next failed
+> `Core.valid`, not because it was never a level object.
+>
+> **FIXED (SOURCE-ONLY, UNVERIFIED IN GAME):**
+> 1. `nav_tracker.lua:362-367` `actor_pos()` now self-guards with `Core.valid(actor)`, instead of
+>    depending on ~35 call sites each remembering to check first — `explore_rescan` was feeding it
+>    actors straight out of the shared TTL snapshot with no check at all.
+> 2. `nav_tracker.lua:2587-2607` new `Nav.targets_cached(no_build)` / `Nav.targets_build_ms()`: the
+>    17-scan sweep is deferred to the nav loop via `Nav.targets_want`, serviced in `explore_tick`
+>    (`:2081-2096`, deliberately ABOVE the `explore_on` gate so the picker works whether or not
+>    explore mode is on) and measured into the same `explore_sweep_max` telemetry `explore_rescan`
+>    already fed.
+> 3. `radar_menu.lua:108-131` `do_open()` now returns true/false, never sweeps itself, and waits up
+>    to `Nav.targets_build_ms()` for the deferred build; both call sites — the pad's deferred open
+>    (`:358-365`) and the queued keyboard command (`:214-218`) — retry instead of dropping the press.
+>    `pad_poll.lua:24` publishes `Poll.TICK_MS` so the wait is real time, not a restated period.
+> 4. `nav_tracker.lua:1227-1238` `enemies_list()` — dropped the `tick >= enemy_next` conjunct, the
+>    same sweep `best_candidate`'s `navi_next` got on the Krillin report: a list refreshed just
+>    before a cutscene began was previously KEPT (not expired) and dereferenced through the whole
+>    scene.
+> 5. `nav_tracker.lua:1505-1529` `release_world_refs()` now also drops `human_mesh` and
+>    `invoker_key`/`invoker_nav` — per-world objects marshalled straight into reflected engine calls,
+>    previously released only by the map-transition hook.
+> 6. `nav_tracker.lua:2609-2616` `Nav.list_targets()` gets its own `Mem.mark("nav.sweep")` — this
+>    crash cost a full audit to attribute to a function that had never marked itself.
+> 7. `screen_dialogue.lua:35-103` `nav_mute` is now DERIVED per tick from which surface answered
+>    (`commit_nav_mute`, `SCENE_SURFACE`) instead of the old static `false`: scene surfaces
+>    (`Xcmn_Subtitles_C`/`ATUISubtitles`/`Field_Navi_Win_C`) now mute the radar and — the safety
+>    reason this exists — close the UI gate that runs `Nav.release_world_refs()`, while the
+>    overworld talk window and bubbles keep today's menus.md behaviour unchanged. A 500 ms
+>    falling-edge hold (`MUTE_HOLD_POLLS = 5`, `:76`, derived from `ui_registry`'s own `ABSENT_TICKS`
+>    falling-edge debounce) absorbs the in/out flicker between subtitle lines. This closes both the
+>    cutscene-start crash exposure (the UI gate previously never closed at all for a cutscene, so
+>    release never ran) and a separate report of the radar talking over dialogue.
+>
+> (Same session also shipped four NON-crash announcement fixes to `quest_objective.lua`/`main.lua`/
+> `pad_poll.lua`/`README.md` — see STATUS.md 2026-07-31 (c) for the full list; out of scope for this
+> ledger.)
+>
+> **STILL OPEN, do not mark solved:**
+> - The cutscene-start crash itself has **no trail yet** — fix 7 is reasoned from the UI-gate
+>   mechanics and the timing of the report, not confirmed in play.
+> - `screen_dialogue`'s residual gap: `ui_muted()` (`nav_tracker.lua:306-309`) is
+>   `a ~= nil and a.nav_mute ~= false` — once the registry drops `active` to nil in the gap between
+>   two lines, it returns false regardless of the new hold. The world gate underneath covers the
+>   BODY of a scene; the remaining window is at scene START, before the world gate has closed either.
+> - The explore sweep's ~1.2 s burst is unchanged in cost — it now runs on the 100 ms nav loop
+>   instead of the 20 ms pad dispatch, which is where it belongs, but it still blocks the game
+>   thread for over a second when it runs.
+> - A class-pointer stamp for `Mem.alive` was considered and deliberately NOT built this session: it
+>   only helps if UE4SS hands back a stable Lua handle table per object, which is unverified, and
+>   the mod's most shared guard is the wrong place to add an unverified rejection path (risks the
+>   documented fail-closed-on-shared-substrate failure). Verify the premise before touching it.
+
 > **2026-07-29 (f) — A 14-CANDIDATE PASS KILLED 9, KILLED THE UNIFYING THEORY, AND KILLED THE
 > BATTLE_MONITOR LEAD. What survived is ONE real defect and the discovery that THE BLACK BOX
 > ATTRIBUTES AT LOOP-ENTRY GRANULARITY — every poll loop writes one mark and then runs an entirely

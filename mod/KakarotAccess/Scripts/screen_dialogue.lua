@@ -32,10 +32,75 @@ local A = require("ui_archetypes")
 
 local Dialogue = {}
 
--- Overworld chatter/subtitles do NOT pause the game, so they must not silence the
--- navigation radar (menus.md: keep cues running when the game doesn't pause). The
--- nav tracker checks this flag; every other adapter (menus, dialogs) keeps muting.
-Dialogue.nav_mute = false
+-- ---- nav_mute: DERIVED per tick from the surface that answered -------------------
+--
+-- This flag cannot be a constant, because the four surfaces above are two different
+-- situations and the nav tracker's UI gate (nav_tracker.lua:1550) means two different
+-- things to them:
+--
+--   * OVERWORLD — Field_Talk_Win_C, AT_UIFieldTalkFree. An NPC talk window or a speech
+--     bubble; the game keeps running. `nav_mute = false` so the radar keeps its cues
+--     (menus.md: keep cues running when the game does NOT pause). This is the original,
+--     deliberate behaviour and it is preserved exactly.
+--
+--   * SCENE — Xcmn_Subtitles_C / ATUISubtitles (cutscene subtitles) and Field_Navi_Win_C
+--     (the story-call portrait pop-up). The game is running a scene: field actors are
+--     being destroyed and scene actors spawned. `nav_mute = true`, for two reasons. The
+--     comfort one: the radar stops talking over the line (two of its announcements
+--     interrupt, so they CUT it). The safety one, which is why this changed: closing the
+--     UI gate is what runs `Nav.release_world_refs()` on the falling edge, so the radar
+--     stops holding world-actor handles across exactly the window the engine frees them.
+--     With the old static `nav_mute = false` the UI gate never closed for a cutscene, and
+--     at the START of one the world gate underneath it has not closed yet either (the
+--     minimap is still up for a moment) — so nothing gated the radar at all. That is the
+--     player crash "the moment an in-engine dialogue cutscene started" (2026-07-31).
+local SCENE_SURFACE = {
+    ["Xcmn_Subtitles_C"] = true,    -- cutscene subtitles (Blueprint)
+    ["ATUISubtitles"]    = true,    -- ...same surface via the native class
+    ["Field_Navi_Win_C"] = true,    -- story call: remote-speaker portrait pop-up
+}
+
+-- FALLING-EDGE DEBOUNCE. This adapter flips in and out between every subtitle line
+-- (ui_registry.lua:311-319 documents that cadence), and for up to CONFIRM_TICKS polls
+-- after a probe answers false the registry still points `active` at us — so `ui_muted()`
+-- keeps reading this field across the gap. Undebounced, every pause between two cutscene
+-- lines would un-mute the radar and re-open the UI gate mid-scene; and a pooled
+-- Field_Talk_Win_C sitting on a STALE line (the multi-surface hazard described in the
+-- header above) would answer in that gap and un-mute it for the rest of the scene. So a
+-- scene claim holds the mute for this long after the last one.
+-- WALL TIME, never a call count: is_active is called both from the registry sweep and from
+-- its sticky fast path, so a count of calls confirms nothing about elapsed time.
+-- The magnitude is not picked: it is the registry's own falling-edge debounce for a
+-- flapping engine signal — ABSENT_TICKS = 5 polls, "~500 ms of continuous absence"
+-- (ui_registry.lua:78) — expressed in seconds through the registry's poll period.
+local MUTE_HOLD_POLLS = 5                                  -- ui_registry.lua:78 ABSENT_TICKS
+local MUTE_HOLD_S = MUTE_HOLD_POLLS * Core.POLL_MS / 1000  -- ui_core.lua:22 POLL_MS
+local scene_until = 0        -- os.clock() at which the scene claim expires
+
+Dialogue.nav_mute = false    -- default = the overworld case; see commit_nav_mute
+
+-- The SINGLE writer, called on every is_active evaluation (and from reset). `src` is the
+-- class name of the surface that answered this tick, or nil when none did. A scene surface
+-- (re)arms the hold; the flag is then simply "are we still inside the hold", so it decays
+-- back to the overworld default on its own and can never latch a previous scene's value.
+-- Passing nil is the right answer for "nothing answered": ui_muted() only reads this field
+-- while the registry still points `active` at us, and once it stops (`a == nil`) it returns
+-- false regardless — from there the radar is gated by nav_tracker's own world gate, which
+-- is the pre-existing protection for the body of a cutscene (the minimap is hidden there).
+local function commit_nav_mute(src)
+    local now = os.clock()
+    if src and SCENE_SURFACE[src] then scene_until = now + MUTE_HOLD_S end
+    local mute = now < scene_until
+    if mute ~= Dialogue.nav_mute then
+        -- One line per TRANSITION, never per tick: this edge silences the radar AND drops
+        -- its world-actor caches, so a false fire has to be visible instead of inferred.
+        -- Strictly rarer than the `screen ->` commit line the registry already prints on
+        -- this same cadence, because the hold absorbs the short gaps.
+        print(string.format("[KakarotAccess] dialogue nav_mute -> %s (%s)\n",
+            tostring(mute), src or "no surface"))
+    end
+    Dialogue.nav_mute = mute
+end
 
 -- Passive / time-critical reader: excluded from the automatic keyhelp read
 -- (keyhelp_watch.lua) — its prompts are either urgent or already spoken here.
@@ -45,6 +110,16 @@ Dialogue.keyhelp_auto = false
 -- busiest (sequencer, streaming): ui_registry reads this flag to defer steady-state
 -- scans (ui_core quiet mode) and relax the 20ms pad dispatcher. Everything a
 -- dialogue can open (skip confirm, choices) lives on pooled, already-cached widgets.
+--
+-- STAYS STATIC, unlike nav_mute above (2026-07-31). It was reviewed alongside it and the
+-- per-surface treatment is wrong here: this flag only makes the mod do LESS engine work,
+-- so it has neither a safety nor a speech consequence to get wrong, while turning it off
+-- for the overworld surfaces would make `flip_quiet` false for every bubble/talk flip —
+-- i.e. a `Core.boost_missing()` + hot window per line (ui_registry.lua:311-323), which is
+-- the exact mechanism behind the measured cinematic scan storm, re-armed in free roam
+-- where bubbles pop constantly. It would also silently change two consumers outside this
+-- fix's scope, both of which use it as "a dialogue is up": quest_objective.lua:306-311
+-- (its only signal that survives the in/out gaps) and screen_community.lua:679-685.
 Dialogue.scan_quiet = true
 
 local ann = Core.make_announcer()
@@ -270,15 +345,20 @@ local function trace_line(src, w, line)
         src, wn, vis, op, tostring(Core.pane_live(w)), line:sub(1, 40)))
 end
 
-function Dialogue.is_active()
-    tick = tick + 1
+-- The surface probe: returns the current "Speaker: line", the widget it came from and the
+-- CLASS NAME of the surface that answered (all nil when nothing is speaking).
+-- Split out of is_active on purpose: every exit — including the "a menu owns the screen"
+-- one, which returns before a single surface has been looked at — then passes through the
+-- one nav_mute commit in the wrapper below, and no early return added later can bypass it.
+-- A flag written only on the success path latches the previous scene's value.
+local function read_surface()
     -- An OPEN overworld menu owns the screen. Every field menu shows the shared
     -- Xcmn_Header_C section header; meanwhile a paused/ambient talk window keeps
     -- reporting on_screen underneath and would shadow the whole menu family
     -- (registered below us) — seen live 2026-07-03: the field menu was unreadable
     -- while an NPC dialogue was paused behind it. Yield while the header is up.
     local hdr = Core.cached_live("Xcmn_Header_C", tick)
-    if Core.on_screen(hdr) then cached = nil return false end
+    if Core.on_screen(hdr) then return nil end
 
     local line, w, src
     if subtitles_on() then
@@ -319,12 +399,32 @@ function Dialogue.is_active()
         line, w = event_speech_line()
         if line then src = "AT_UIFieldTalkFree" end
     end
+    return line, w, src
+end
+
+function Dialogue.is_active()
+    tick = tick + 1
+    local line, w, src = read_surface()
+    -- EVERY evaluation, including the ones that answer false.
+    commit_nav_mute(src)
     if line and w then trace_line(src, w, line) end
     cached = line
     return cached ~= nil
 end
 
-function Dialogue.reset() ann:reset() end
+function Dialogue.reset()
+    ann:reset()
+    -- Re-DERIVE the flag rather than slamming it back to the module default. reset() runs
+    -- on every screen change, and the flip between two subtitle lines IS a screen change
+    -- (dialogue -> none -> dialogue), so a reset that cleared the hold would delete the
+    -- debounce exactly where it exists to work. It also runs on the INCOMING adapter AFTER
+    -- is_active() and BEFORE `active` is assigned (ui_registry.lua:274-276), so a hard
+    -- `= false` here would hand the nav loop an un-muted tick at the very moment a cutscene
+    -- commits — the one moment this whole change exists to cover. Committing with no
+    -- surface claim restores the default the instant the hold expires and never latches a
+    -- stale one, which is what "restore the default" has to mean for a debounced flag.
+    commit_nav_mute(nil)
+end
 
 function Dialogue.update()
     -- The line is the "name": a new line re-announces (interrupt), an unchanged one stays silent.

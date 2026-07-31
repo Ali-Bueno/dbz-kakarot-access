@@ -120,6 +120,7 @@ If something you need isn't listed, let me know (see the links at the bottom).
 | **D-pad ↑ / ↓** (picker open) | Move through targets (nearest first) |
 | **A** (picker open) | Lock onto the focused target |
 | **B** (picker open) | Close and stop tracking |
+| **L3 + Y** | Repeat the **current objective** ("go to Lucca Village") — works anywhere, including during a cutscene or a menu |
 | **L3 + R3** | Open / close the **config menu** |
 | **D-pad ↑↓ / ←→** (config menu) | Move between options / change a value |
 | **D-pad ↓ / ↑** (status sheet) | Step through the stat blocks |
@@ -149,6 +150,7 @@ Handy shortcuts that mirror or complement the controller — not required to pla
 | **Enter** (world map) | Travel to the selected point |
 | **F5** | Announce the tracked objective (distance, clock direction) |
 | **Shift+F5** | Cycle companion tracking |
+| **F10** | Repeat the current objective in words (the same as **L3 + Y**) |
 | **F8** | Speech test (also names the active screen reader) |
 | **Ctrl+F8** | Silence speech immediately |
 | **F11 / Shift+F11** | Next / previous stat block on the status sheet |
@@ -194,17 +196,26 @@ it falls back to English, so you can't break it. See `lang/README.txt` for the f
 
 ## Reporting a crash
 
-If the game closes on its own, **one file tells us almost everything** — and without it a crash
-report can only be guessed at. Please send it along with your report.
+> **If the game just crashed, don't start it again yet.** Copy two files first — starting the
+> game erases both. The short version:
+>
+> 1. Copy `UE4SS.log` and `Mods\KakarotAccess\Scripts\crash_trail.bin` somewhere safe.
+> 2. Now start the game once, quit normally, and copy the **new** `UE4SS.log` too.
+> 3. Send the three files. The details are below.
 
-**The file:** `UE4SS.log`, in your game folder, next to the game's executable:
+If the game closes on its own, **two small files tell us almost everything** — and without them a
+crash report can only be guessed at. Please send them along with your report.
+
+**The files**, both in your game folder, next to the game's executable:
 
 ```
 …\steamapps\common\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\UE4SS.log
+…\steamapps\common\DRAGON BALL Z KAKAROT\AT\Binaries\Win64\Mods\KakarotAccess\Scripts\crash_trail.bin
 ```
 
 The quickest way to get there: press <kbd>Windows</kbd>+<kbd>R</kbd>, paste the path below, and
-press Enter — the folder opens with the file in it.
+press Enter — the folder opens with `UE4SS.log` in it, and `crash_trail.bin` is inside its
+`Mods` → `KakarotAccess` → `Scripts` subfolder.
 
 ```
 %ProgramFiles(x86)%\Steam\steamapps\common\DRAGON BALL Z KAKAROT\AT\Binaries\Win64
@@ -213,17 +224,19 @@ press Enter — the folder opens with the file in it.
 (If Steam is on another drive, open the game's folder from Steam: *Library → right-click DRAGON
 BALL Z KAKAROT → Manage → Browse local files*, then go into `AT`, `Binaries`, `Win64`.)
 
-**The order matters, because the file is overwritten every time the game starts:**
+**The order matters, because both files are wiped the next time the game starts:**
 
-1. **Right after the crash, copy `UE4SS.log` somewhere safe** (your desktop is fine). This copy
-   records which screen the reader was on as you played, up to the moment it stopped.
-2. **Then start the game once more and quit normally.** The mod keeps a small flight recorder of
-   its last operations, which survives a crash; on the next launch it writes them into the new
-   `UE4SS.log` under *PREVIOUS SESSION ENDED HERE*. That section says what the mod was doing in
-   the final fraction of a second.
-3. **Send us both copies.**
+1. **Right after the crash — before starting the game again — copy `UE4SS.log` and
+   `crash_trail.bin` somewhere safe** (your desktop is fine). `UE4SS.log` records which screen the
+   reader was on as you played, up to the moment it stopped. `crash_trail.bin` is the mod's little
+   flight recorder: the last things it did, in the final fraction of a second. It is a small
+   (32 KB) file and it is **reset on the next launch**, so relaunching first loses it.
+2. **Then start the game once more and quit normally.** On that launch the mod reads the flight
+   recorder and writes it into the new `UE4SS.log`, under *PREVIOUS SESSION ENDED HERE*, in plain
+   readable text. Copy that new `UE4SS.log` too.
+3. **Send us all three files.**
 
-Neither file contains personal information beyond your game folder's path.
+None of them contains personal information beyond your game folder's path.
 
 **Also useful, if it exists:** Windows may have written a crash report to
 `%LOCALAPPDATA%\AT\Saved\Crashes\` — if there is a folder there with a recent date, zip it up

@@ -351,7 +351,16 @@ local function player_pawn()
     return nil
 end
 
+-- SELF-GUARDING (2026-07-31, the streamer's pad.tick trail). This is the exact call the whole
+-- AV-at-0x10 crash family dies on: a raw reflected call on an actor the engine has freed. It used
+-- to rely ENTIRELY on ~35 call sites each remembering to `Core.valid` first, and that discipline
+-- had already broken in the one place it mattered — `explore_rescan` fed it actors straight out of
+-- the shared TTL snapshot with no check at all, so a handle up to EXPLORE_RESCAN_MS old was
+-- dereferenced raw. A convention that must hold at 35 sites is not a guard; put it in the callee.
+-- COST: `Core.valid` is memoized per tick (Core.drop_memos), so for the callers that already
+-- validated — nearly all of them — this is a table hit, not a second Mem.alive + IsValid.
 local function actor_pos(actor)
+    if not Core.valid(actor) then return nil end
     local ok, loc = pcall(function() return actor:K2_GetActorLocation() end)
     if ok and loc then return loc.X, loc.Y, loc.Z end
     return nil
@@ -1215,7 +1224,13 @@ local function enemies_list()
     -- the past so the first non-quiet tick does a real refresh.
     -- Re-validating per use is NOT a substitute: a freed address the engine has already recycled
     -- passes every check we can make (mem.lua says so in as many words).
-    if enemy_cache ~= nil and tick >= enemy_next and Core.scan_quiet() then
+    -- `tick >= enemy_next` REMOVED (2026-07-31), the same sweep best_candidate got on the Krillin
+    -- report. The argument above — these are enemy actors, the engine frees them as a matter of
+    -- course, and re-validation cannot see a recycled address — never depended on the list having
+    -- EXPIRED. With the expiry conjunct here, a list refreshed less than RESCAN_CLASSES ticks
+    -- before a cutscene or dialogue began was KEPT and dereferenced for that whole scene, which is
+    -- precisely the window the actors die in. Quiet alone is the right condition.
+    if enemy_cache ~= nil and Core.scan_quiet() then
         enemy_cache = {}
         return enemy_cache
     end
@@ -1504,6 +1519,14 @@ function Nav.release_world_refs()
     -- is what makes the TTL safe — a served snapshot can then only ever contain handles gathered
     -- inside the SAME uninterrupted free-roam window as the caller asking for it.
     Nav.targets_snap, Nav.targets_snap_at = nil, 0
+    -- Both of these are PER-WORLD engine objects that were released only by the map-transition
+    -- hook (2026-07-31 audit). A battle, a cutscene or a streaming boundary closes this gate with
+    -- no LoadMap, so the transition flush never ran and they survived — and unlike a Lua-side
+    -- handle these get marshalled straight INTO reflected engine calls (ProjectPointToNavigation /
+    -- FindPathToLocationSynchronously take the mesh by pointer, RegisterNavigationInvoker holds
+    -- the system), where no Core.valid on our side can protect the parameter.
+    human_mesh = nil
+    invoker_key, invoker_nav = nil, nil
 end
 
 local function step()
@@ -2054,7 +2077,24 @@ local function explore_tick()
     -- step(), so without its own mark a trail ending in `nav.step` could not tell the two apart
     -- (noted while root-causing the 2026-07-26 (c) crash). It reaches the same target sweep.
     Mem.mark("nav.explore")
-    if not explore_on or not Nav.field_ready() then return end
+    if not Nav.field_ready() then return end
+    -- DEFERRED TARGET BUILD for the R3 picker (2026-07-31). radar_menu asks for the snapshot with
+    -- no_build on the 20 ms pad dispatch and is answered nil when it is cold; the sweep is paid
+    -- HERE, on the 100 ms nav loop, which is where every other list_targets call already lives.
+    -- Ordered ABOVE the explore_on gate on purpose: the picker is available whether or not explore
+    -- mode is on, so this must not depend on it. Measured into the same telemetry as
+    -- explore_rescan, which is what makes Nav.targets_build_ms a derivation rather than a guess.
+    if Nav.targets_want then
+        Nav.targets_want = nil
+        local t0 = os.clock()
+        Nav.targets_snap, Nav.targets_snap_at = Nav.list_targets(), os.clock()
+        local dt = (os.clock() - t0) * 1000
+        if dt > TICK_MS and dt > (Nav.explore_sweep_max or 0) then
+            Nav.explore_sweep_max = dt
+            print(string.format("[KakarotAccess] picker sweep blocked the game thread %.0f ms\n", dt))
+        end
+    end
+    if not explore_on then return end
     local pawn = player_pawn()
     if not pawn then return end
     local px, py, pz = actor_pos(pawn)
@@ -2533,17 +2573,47 @@ end
 -- the map-transition hook, so a snapshot can only ever be served to a caller inside the SAME
 -- uninterrupted free-roam window it was gathered in. Callers still validity-check every actor, as
 -- they always did with a fresh list.
-function Nav.targets_cached()
+-- no_build: the caller is on the shared 20 ms PAD dispatch, where the sweep behind list_targets
+-- must never run. Answer nil and arm the nav loop to build it instead (see explore_tick).
+--
+-- THE STREAMER'S CRASH, 2026-07-31. The trail decoded to a death inside `pad.tick`, ~11 minutes
+-- into ordinary free roam. The only pad path that enters the engine with nothing pressed on that
+-- tick is radar_menu's deferred single-tap open -> do_open -> here; explore mode toggles on an R3
+-- DOUBLE-tap, so a player using explore taps R3 constantly and every uncompleted tap falls through
+-- to it. Serving it from this function was already half the fix; the other half is that a cold or
+-- expired snapshot still fell through to the inline sweep below — 17 unbudgeted FindAllOf, ~1.2 s
+-- of blocked game thread, dereferencing every candidate — ON THAT 20 ms DISPATCH. pad_poll wraps
+-- each stepper in pcall, which buys nothing here: this engine's aborts are uncatchable.
+function Nav.targets_cached(no_build)
     local t = os.clock()
     if Nav.targets_snap and (t - (Nav.targets_snap_at or 0)) < EXPLORE_RESCAN_MS / 1000 then
         return Nav.targets_snap
+    end
+    if no_build then
+        Nav.targets_want = true
+        return nil
     end
     local list = Nav.list_targets()
     Nav.targets_snap, Nav.targets_snap_at = list, t
     return list
 end
 
+-- How long a pad-side caller should wait for a deferred build before giving up and opening with
+-- whatever it has. DERIVED, not picked: one nav tick to notice the request, plus the worst sweep
+-- actually MEASURED this session (explore_sweep_max, fed by both sweep sites). Floored at one more
+-- nav tick so a session that has never swept still waits a whole tick.
+function Nav.targets_build_ms()
+    return TICK_MS + math.max(Nav.explore_sweep_max or 0, TICK_MS)
+end
+
 function Nav.list_targets()
+    -- ITS OWN MARK (2026-07-31). This is the mod's single most expensive and most dangerous
+    -- operation — 17 unbudgeted FindAllOf plus a dereference of every candidate — and it is
+    -- reachable from BOTH the 100 ms nav loop and (before today) the 20 ms pad dispatch. The
+    -- streamer's trail ended at `pad.tick` and it took a full audit to work out that this was what
+    -- ran inside it. One memcpy on a call that happens every few seconds at most: the next trail
+    -- names the sweep outright instead of naming whichever loop invoked it.
+    Mem.mark("nav.sweep")
     if not Nav.field_ready() then return {} end
     local pawn = player_pawn()
     if not pawn then return {} end

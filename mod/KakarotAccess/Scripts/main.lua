@@ -21,6 +21,10 @@ local MOD = "KakarotAccess"
 -- Our own directory, derived from this file's own path. Used for version.txt and for the crash
 -- black box below, so the two can never disagree about where the mod lives.
 local MOD_DIR = (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]")) or "."
+-- The mod's own folder, one level ABOVE Scripts (…\Mods\KakarotAccess). That is where
+-- package.ps1 stages version.txt — the installer reads it from there — while MOD_DIR is the
+-- Scripts folder inside it. See the version block below.
+local MOD_ROOT = MOD_DIR:match("^(.*)[/\\]") or MOD_DIR
 
 -- NAME THE BUILD IN THE FIRST LINE OF THE LOG (2026-07-29 (e)). A player's UE4SS.log did not say
 -- which release produced it, so classifying a crash report meant guessing — and guessing wrong is
@@ -30,13 +34,25 @@ local MOD_DIR = (debug.getinfo(1, "S").source:sub(2):match("^(.*)[/\\]")) or "."
 -- forgot to bump it): `package.ps1` already writes `version.txt` into the staged mod as the single
 -- source of truth for what was shipped, so we read that. An unpackaged working tree has no
 -- version.txt and says so, which is itself the useful answer — it means "this is not a release".
+--
+-- LOOK IN THE MOD FOLDER, NOT IN Scripts (fixed 2026-07-31). package.ps1 writes version.txt into
+-- …\Mods\KakarotAccess\version.txt (line 197 — the installer reads it from there to know what is
+-- installed), and this used to open …\Mods\KakarotAccess\Scripts\version.txt, one folder too
+-- deep. It therefore never found it: EVERY release printed "dev (unpackaged)", which is the exact
+-- opposite of what this line was added for, and left crash reports unattributable to a build.
+-- Scripts stays in the list as a second candidate so a hand-placed copy still works.
 print("[" .. MOD .. "] Lua loading, build " .. (function()
     local ok, v = pcall(function()
-        local f = io.open(MOD_DIR .. "\\version.txt", "r")
-        if not f then return nil end
-        local s = f:read("*a")
-        f:close()
-        return s and s:gsub("%s+$", "")
+        for _, dir in ipairs({ MOD_ROOT, MOD_DIR }) do
+            local f = io.open(dir .. "\\version.txt", "r")
+            if f then
+                local s = f:read("*a")
+                f:close()
+                s = s and s:gsub("%s+$", "")
+                if s and s ~= "" then return s end
+            end
+        end
+        return nil
     end)
     if ok and v and v ~= "" then return v end
     return "dev (unpackaged, no version.txt)"
@@ -158,6 +174,17 @@ RegisterKeyBind(Key.F5, function() App.nav_where() end)
 -- Shift+F5: cycle companion tracking (nearest party member -> next -> quest objective).
 RegisterKeyBind(Key.F5, { ModifierKey.SHIFT }, function() App.nav_companion() end)
 
+-- F10: read the current quest objective ("go to Lucca Village") on demand. SHIPPED, not a dev
+-- key (moved out of the Build.debug block 2026-07-31): package.ps1 sets debug = false for every
+-- release, so in every build a player has ever run there was no way to re-hear the objective at
+-- all, and a missed announcement was simply lost. The pad twin is L3 + Y (quest_objective.lua).
+-- Nothing runs on the keyboard thread here: like F1/F2/F3/F5/F11 above, the handler only
+-- delegates and the ExecuteInGameThread wrap lives one level down, in QuestObjective.read() —
+-- which also keeps it hot-reloadable. Deliberately NOT wrapped a second time here: that would be
+-- the only ExecuteInGameThread queued from INSIDE a game-thread callback in the whole mod, and
+-- UE4SS documents nothing about re-entering its queue while it is being drained.
+RegisterKeyBind(Key.F10, function() App.read_objective() end)
+
 -- F11 / Shift+F11: on the character status page (confirm a character in Characters), step
 -- forward/back through the stat blocks — HP, Ki and the five attributes — reading each as its
 -- total plus the breakdown (base, state boost, food effect). Entering the page already speaks
@@ -228,9 +255,6 @@ if Build.debug then
                 math.floor(loc.X + 0.5), math.floor(loc.Y + 0.5), math.floor(loc.Z + 0.5)), true)
         end)
     end)
-
-    -- F10: read the current quest objective text on demand (also auto-announced on change).
-    RegisterKeyBind(Key.F10, function() App.read_objective() end)
 
     -- Ctrl+F5: dump the guidance candidates + a NavMesh probe to dumps/dump_nav_targets.txt.
     RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function() App.nav_dump() end)
