@@ -3,6 +3,202 @@
 > DBZ Kakarot perf architecture — VERIFIED CLOSED 2026-07-17 (cinematics + loading smooth, user-confirmed): screen directory, sticky-active registry, quiet mode, watch lane, scan budgets, pad_poll scheduler. Rules for future code.
 
 
+## 2026-08-03 (d) — MEASURED AT LAST: 29% OF THE GAME THREAD IS `FindAllOf`, AND 71% OF THAT FINDS NOTHING
+
+First dump taken with the complete meter (Ctrl+F5, 410 s of ordinary play):
+
+```
+ui step ms: max=925.0 avg=35.48 over 4102 ticks
+findall scans: n=1982 total_ms=119463 max_ms=455.0 avg_ms=60.3
+ghost classes: 42 never found (1397 scans, 84783 ms burned)
+```
+
+The arithmetic that matters: **a scan averages 60 ms** (worst 455) and `SCANS_PER_TICK = 2` on a
+100 ms grid, so the scan machinery is permitted to spend **120% of a tick**. That is not a budget,
+it is a licence, and `ui step ms: max=925.0` is what it buys. Everything else queues behind it —
+which is why "menus take about a second to start reading" and "the radar is slow to resume after a
+battle" turned out to be ONE bug, not two.
+
+**Reading the ghost list correctly.** `found = 0` means "no scan of this name ever returned an
+instance", and that covers two different populations:
+1. Names the game never instantiates (`AT_UIQteMashAlert` 10.0 s, the five `CompZ_Page_*`/`Memo`
+   ~25 s, the three `Start_Commu_*` ~15.5 s, `Map_World_Icon_C` 6.5 s).
+2. **Directory-mapped classes whose SCAN IS ONLY THE FALLBACK** — they scan precisely when the
+   screen is absent, so every one of those scans is waste, but the fix is different. The tell is
+   `AT_UIMiniMapRadar` sitting in the list while the radar plainly works.
+   The structural point behind population 2, worth keeping: **a mapped class whose own ROOT is
+   unreachable correctly falls back to scanning** (an unreachable root cannot assert absence), so a
+   screen rooted somewhere that does not exist right now scans forever *exactly while it is
+   impossible*. `Gametitle_C` (9.6 s) + `AT_UIXcmnAgreement` (8.5 s) = 21% of the whole ghost bill,
+   all of it during gameplay, where the title cannot exist. The fix is a POSITIVE precondition —
+   `Core.gameplay_world()`, the `mm` root — not a negative one.
+
+**Shipped against it:** ledger-driven escalation of `ABSENT_BACKOFF` (4→8→16 s, disarmed forever by
+one sighting, never applied to `QUIET_EXEMPT`, always bypassed by the boost window) and the
+gameplay-world gate on the two boot adapters. Deliberately not touched: `SCANS_PER_TICK`. Raising it
+worsens the spike the 2026-07-14 dump measured; lowering it starves first detection. The honest fix
+is fewer classes asking, not a different number of slots.
+
+**The ledger's blind spot, learned the hard way the same day.** A class the directory resolves by
+pointer only ever SCANS when the screen is genuinely absent, so it sits in the ghost ledger at
+`found = 0` looking identical to a name that does not exist. For a screen that is merely wasted
+work; for a **PREDICATE** — `AT_UIMiniMapRadar` (free roam + the nav world gate), `Start_Top_C`
+(ring open), `Battle_Hud_P_Main_C` (in battle) — it is a trap, because other machinery is gated on
+the answer and the fallback matters most exactly when the pointer path cannot answer (right after a
+load, roots flushed). Hence `NEVER_ESCALATE` in `ui_core`. GENERAL RULE: **a measurement that cannot
+distinguish "never exists" from "not reachable right now" must not be allowed to drive a decision
+whose failure mode is silence.** The ledger is honest about cost and blind about meaning.
+
+**Latency bugs found in the same passes, unrelated to scanning:**
+- `nav_tracker.minimap()` wrote its 5 s retry lockout BEFORE running the probe, so one miss cost the
+  full 5 s — and `world_alive()` is false throughout, i.e. the entire nav loop is dead, not just the
+  minimap. Arm a backoff on the OUTCOME, never on the attempt. (The 5 s itself was also stale: it
+  was sized when acquisition was a raw `FindAllOf`, and `cached_live` has owned that cost since the
+  directory landed.)
+- Two separate "fire on `tick % N == 0`" gates carried an arbitrary phase across a battle or a load,
+  because the tick counter free-runs while the gates are shut: up to 1.4 s of silence after control
+  is already back. A modulo on a free-running counter is a RANDOM delay, not a cadence, whenever
+  the thing it gates can be blocked for a while — measure from the last attempt instead, or reset
+  the phase on the rising edge.
+- `Nav.SW.lists` (the sweep's build) is cleared only by `Nav.sweep_partial()`, and three of the five
+  `list_targets` call sites never called it. `class_list` serves a cached list without re-scanning,
+  so after one such call **the sweep never scanned again** and kept serving actor handles gathered
+  before the battle. Now self-healing at build entry: only a build that reported PARTIAL may be
+  resumed. LESSON, the same one as the fishresult gate: a contract that says "every caller must
+  remember to call X" will be broken by most callers — make it structural.
+- `confirm_ticks = 1` was inert. `ui_registry`'s first-sighting branch returned unconditionally, so
+  no candidate could commit before its second tick and `= 1` was identical to the default 2. Five
+  adapters had opted out of a 100 ms debounce and were paying it anyway.
+
+## 2026-08-03 (c) — THE SCAN SET, AUDITED: 35 CLASSES NOTHING RESOLVES, AND A METER THAT COULD NOT SEE THE BIGGEST SCANNER
+
+A full sweep of every call into the scanning helpers (`Core.cached_all` / `cached_live` /
+`first_on_screen` / `peek_all` / `first_text_offviewport`, plus every raw `FindAllOf`) across the 75
+shipped Lua files. What it found:
+
+**1. 35 distinct classes across 19 production adapters have no `ui_directory` chain**, so each is
+resolved by a full-object scan. Grouped by owner: `keyhelp` (Xcmn_Keyhelp_C); `nav_tracker`
+(AT_UIMiniMapNaviIcon); `screen_choice` (Choice_Win_C, AT_UIChoiceWin, Choice_Cmd_C,
+AT_UIChoiceCmd); `screen_choicelist` + `screen_questreward` (Xcmn_Win01_List_C);
+`screen_community` (AT_UICommunityStart, Start_Commu_Emb_C, Start_Commu_Brd_C); `screen_compz` (six
+`CompZ_Page_*` / `CompZ_Memo_C`); `screen_dialog` (Xcmn_Win00_Choice_C); `screen_dialogue`
+(Xcmn_Subtitles_C, ATUISubtitles, Field_Talk_Win_C, Xcmn_Header_C); `screen_fishing` /
+`screen_fishresult` (AT_UIBattleRushSpeedCore, Mgame_Result_C); `screen_list` / `screen_palette` /
+`screen_tutorial` (CFUIMultiLineTextBox); `screen_loading` (Xcmn_MultiLineText_C); `screen_map`
+(Map_World_Curs_C, Map_World_Icon_C); `screen_options` (Xlist_Bar03_C); `screen_palette`
+(Start_Item_Bar_C); `screen_questreward` (Quest_Sub_Reward_C, AT_UIQuestSubReward); `screen_shopcmn`
+(Xlist_Bar04_C); `screen_status` (AT_UIStartStatusList01); `screen_telop` (Quest_Main_Telop_C);
+`screen_toasts` (Info_Log_C, Info_Log02_C). Many are legitimately unmappable — they are ROWS and
+text pools, not top-level screens, and the directory maps screens by owner pointer.
+
+**2. Four native/Blueprint TWIN pairs, and the two sources contradict each other on what they
+cost.** `Choice_Win_C`/`AT_UIChoiceWin`, `Choice_Cmd_C`/`AT_UIChoiceCmd`,
+`Xcmn_Subtitles_C`/`ATUISubtitles`, `Quest_Sub_Reward_C`/`AT_UIQuestSubReward`. RE-UE4SS's shipped
+docs (`docs/lua-api/global-functions/findallof.md:3`, `assets/API.txt:110-112`) say `FindAllOf`
+returns "all **non-default** instances of the supplied class name" **including subclasses** — under
+which reading the native name alone would cover both and the `_C` twin is redundant. But this
+repo's own comments, written from observation on THIS game, say the opposite (`nav_tracker.lua:2925`
+"a native-base FindAllOf can return nothing when a subclass exists", `:2951`, and the community-board
+lesson at `:3198`). The likely reconciliation is that the *class lookup by short name* fails when the
+native `UClass` is not loaded, so the answer depends on load state — but that is a hypothesis, and
+either way **one half of each pair is a permanent ghost scan**. Note the caveat on the docs claim: the
+actual comparison lives in the un-vendored `UEPseudo` submodule, so it is a documented claim, not
+source-verified.
+
+**3. The meter had a blind spot big enough to invert the ranking.** `timed_findall` only saw scans
+routed through `Core.cached_all` / `Core.first_live`. Everything raw — the radar sweep's ~17 scans
+(~68 ms each, ~1.2 s cold), the navi-icon pool on its own 10 s cadence, `AT_Character`,
+`RecastNavMesh`, the Options rows — was invisible, which `nav_tracker.lua:2560-2562` stated in a
+comment and nobody acted on. Any offender list built before 2026-08-03 was therefore ranking the
+budgeted scans while ignoring the unbudgeted ones.
+
+**What shipped (phase 1, source-only):** `Core.findall` (timed entry point for the raw sites —
+accounting only, no budget/backoff), `Core.scan_ledger` (session-persistent, per class the most
+instances ever returned; `found = 0` = ghost), and a `ghost classes:` block in the Ctrl+F5 dump.
+Deliberately NOT shipped: any change to `ABSENT_BACKOFF` or any class-name deletion — the rule at
+the bottom of this file ("do NOT blind-tune ABSENT_BACKOFF without an offender list, it starves
+event-less popups") is the whole reason phase 1 is a meter and not a fix. Escalating the backoff for
+proven ghosts is the phase-2 candidate; note the boost window (`Core.boost_missing`, ~1.5 s, armed by
+registry commits and pad presses) already covers any screen a player OPENS, so the exposure of a
+longer backoff is limited to surfaces that appear with no press — which is precisely what
+`QUIET_EXEMPT` already enumerates.
+
+## 2026-08-03 — THE GAMEMODE IS A BAG OF ~50 MANAGERS, AND WE USE EXACTLY ONE
+
+Source: the first UE4SS dump ever taken **in gameplay** on this game (`Area11_P`, 2026-08-03;
+every earlier one was captured at the title screen, which is why the gameplay Blueprint classes
+had always come back as empty stubs). Nothing below is implemented — it is a work list.
+
+**The pattern already exists in the mod and was only ever used once.** `ui_directory.getters.mm`
+resolves `MenuManager` by `FindAllOf` once + cache forever. The object dump shows the SAME
+GameMode instance carrying dozens more components under
+`Area11_P:PersistentLevel.BP_ATGameModeMain_C_0.*` — `QuestManager`, `NpcManager`,
+`NpcVisibleMeshManager`, `BattleManager`, `ATWindRoadManager`, `PlacementObjectInfoManager`,
+`CrossTalkManager`, `HudManager`, … (`UE4SS_ObjectDump.txt:285492-285700`). None are reflected as
+named fields on native `AATGameMode` (`AT.hpp:13208-13256` has no such members), so each costs
+exactly what `MenuManager` costs today: one `getters.X` entry, one scan, cached forever. **No new
+UE4SS surface, same risk profile as what already ships.**
+
+**Why this matters: it attacks `Nav.list_targets()`**, which the mod's own comment calls its
+"single most expensive and most dangerous operation" — 17 unbudgeted `FindAllOf`, ~68 ms each,
+≈1.2 s of game thread in one tick (`nav_tracker.lua:2016-2018`), flagged as needing "a cheaper
+source" and never followed up. Concrete replacements found:
+
+| Scanned today | Reachable instead via |
+|---|---|
+| `FindAllOf("ATWindRoad")` (`nav_tracker:2958`) | `GameMode.ATWindRoadManager.WindRoadList` — a real `TArray<AATWindRoad*>` (`AT.hpp:29801`) |
+| `FindAllOf("PlacementObjectInfo")` (`:2934`) | `GameMode.PlacementObjectInfoManager.PlacementObjectInfoList` (`AT.hpp:42642`) |
+| `FindAllOf("QuestCharacter")` (`:2805`) | `GameMode.QuestManager.QuestCharacterFindList` (`AT.hpp:42856`) or `NpcVisibleMeshManager.NpcCharacterList` (`AT.hpp:42525`) |
+| `FindAllOf("ATMapIconComponent")` (`:2763`) | **Needs no new root at all** — `fm.FieldIconManager.IconActorArray[i].UserComponent` hangs off the already-mapped `"fm"` root (`AAT_UIFieldManager.FieldIconManager` @0x698, `AT.hpp:32911`; back-ref at `AT.hpp:14812`). Bonus: that array is the RENDERED icon set, likely smaller than the class scan. |
+| `FindAllOf("AT_UIMiniMapNaviIcon")` (`:603`, a ~10 s hot loop, and `:2721`) | The already-resolved minimap root's `MapNaviIconList` (`AT.hpp:34970`) — **but it dumps as a single `ObjectProperty` of `size 0x50`, i.e. a FIXED C ARRAY of 10 that collapses to element 0.** That is the exact shape `ui_core.lua:716-728` documents, and the only recovery is `RegisterCustomProperty` — which the playbook separately calls a trap. Not a cheap win; treat as its own decision. |
+| `FindAllOf("AT_Character")` (`:1252`), `FindAllOf("AT_MobBase")` (`:3052`) | **No manager array found.** `UNpcManager` only holds `Dinosaurs` (`AT.hpp:42350-42385`). This pair is the one genuine case for the Sparking ZERO acquisition hook below. |
+
+Not searched exhaustively (44k lines): owners for `Portal`, `LevelNavigator`,
+`ATEnemiesBaseBehaviour`, `FieldPointComponent`. "Not found" here means not found, not absent.
+
+**The Sparking ZERO approach (`RegisterBeginPlayPostHook`), assessed at last.** It fires once per
+actor as it finishes `BeginPlay`; a mod matches `GetClass()` and caches. Two hard limits this game
+imposes, neither of which the architecture doc spells out:
+- **It is anchored on `AActor::BeginPlay`, so it fires for ACTORS ONLY.** Every manager above is a
+  `UActorComponent` and every screen in `ui_directory.MAP` is a widget/`UObject`. **The entire
+  widget half of the mod's scanning gets zero benefit.** Its whole value is `nav_tracker`'s world
+  side — i.e. essentially the `AT_Character` / `AT_MobBase` pair the table above could not solve.
+- **It inherits `tick_hook.lua`'s boot hazard, and worse.** That hook crashed the game at boot
+  because the mod's own guards are not armed that early; a global `BeginPlay` hook fires for every
+  actor in the boot and title sequence, i.e. far earlier and far more often. It needs the same
+  "arm only once in confirmed gameplay" gating, proven in isolation first.
+
+**Other findings from the same pass (accessibility, not perf):**
+- **`UCrossTalkManager.LipSyncOwner`** (`AT.hpp:40754`, `AAT_Character*`, live at
+  `UE4SS_ObjectDump.txt:285537`) — a direct pointer to **whoever is currently being lip-synced**.
+  This is a candidate answer to BOTH open dialogue problems: the `nav_mute` cutscene-vs-ambient
+  ambiguity (currently a surface list plus a timer) and the "don't read subtitles that are already
+  voiced" request. UNKNOWN and only testable in game: whether it is set for ambient field chatter
+  too, or only for formal scenes.
+- **`UAT_UIBattleManager` is half unread.** The mod already holds this root every battle tick and
+  reads four fields; sitting unused: `LockonCursor` (0x1F8), `BattleCond` (0x258, buff/debuff
+  display), `SkillChain` (0x278), `CommandPalette` (0x290), `GaugeDurable` (0x2B8, guard
+  durability), `BattleTime` (0x2D0), `BattleEscape` (0x318), `TPSSkill*` (0x208-0x218).
+- **`AAT_GameHUD.m_pPlayer`** (`AT.hpp:14690`) — a more direct player-character pointer than
+  `nav_tracker.lua:344-356`'s minimap→`PlayerIns`→`FindFirstOf` chain.
+- **`UAT_UIGameover.CurrentSelectIndex`** (`AT.hpp:33473`) is a REAL reflected int32. The notes'
+  "this game does not reflect selection indices" conclusion was about the battle PAUSE ring
+  specifically, not universally — do not over-generalise it.
+
+**Hooking, from the same pass.** `Field_Talk_Win_C:Construct()` (`Field_Talk_Win.hpp:16`) and
+`Quest_Sub_C:Construct()` (`Quest_Sub.hpp:84`) are genuine Blueprint overrides and are the same
+*category* of engine boundary as the `ReceiveTick` that works — the best remaining candidates, but
+extrapolated from two data points, untested. **The whole `OnBattleStart` / `OnBattleEnd` /
+`OnQuest` family is NATIVE** (`AT.hpp:13252`, `:40030`, `:42370`, `:41954`, `:42531`) — never on a
+`_C` class — and this game is 3-for-3 on native hooks silently never firing (`header_hook.lua`).
+Do not build on them without a cheap isolated test. Battle/pause/results/game-over/loading/quest
+widgets have NO Blueprint override at all and must stay on the resolve-then-poll path.
+
+Caveat on all of it: one live capture, one field map. The core managers are systemic rather than
+level content, so they should be present on every field GameMode — but that is an inference.
+
+---
+
 **The measured problem (Ctrl+F5 dump, 2026-07-14):** `ui step ms: max=153.0 avg=39.84` — ONE registry
 poll step ate ~40% of the game thread steady-state (with a menu open!). Root causes: all ~33 adapters'
 `is_active()` polled every 100 ms; up to 3 `FindAllOf` per tick (each O(all UObjects), ~30-50 ms — the

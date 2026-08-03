@@ -69,8 +69,9 @@ function Pause.is_active()
     if not Core.on_screen(pause) then cached = nil return false end
     -- Only when genuinely OPEN (interactive, enum 0). During battle the pause widget stays
     -- resident as HitTestInvisible (enum 3); reading it then would shadow the tutorial/HUD.
-    local ok, v = pcall(function() return pause:GetVisibility() end)
-    if not (ok and tonumber(v) == 0) then cached = nil return false end
+    -- Strict: an unreadable enum must NOT claim (that is what the hand-rolled test this
+    -- replaced did). Via the substrate it also drops the fading close-animation ghost.
+    if not Core.pane_live(pause, true) then cached = nil return false end
 
     local sel = selected_label()          -- native per-item selection
     if sel then cached = sel return true end

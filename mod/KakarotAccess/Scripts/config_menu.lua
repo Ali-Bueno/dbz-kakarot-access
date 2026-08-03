@@ -167,6 +167,9 @@ end
 -- ---- per-tick step (game thread) --------------------------------------------
 
 local function step()
+    -- The dispatch grid this menu needs, declared BEFORE every early return so a bail-out can
+    -- never leave the fast grid pinned (pad_poll.lua: slow by default, fast only on demand).
+    PadPoll.demand_fast("config_menu", open or draining)
     if Transition.active() then force_release(); return end
 
     local snap = Input.read()
@@ -176,7 +179,15 @@ local function step()
     local modal = _G.__KakarotPadModal
     if modal and modal ~= "config" then prev_btn = snap.buttons; return end
 
-    local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
+    -- NATIVE LATCH FIRST, level compare as the fallback (2026-08-03, the form screen_map has
+    -- always used). The bare two-tick compare this used to be could only see a button that was
+    -- still HELD at dispatch time, so a tap that started and ended between two dispatches was
+    -- lost outright — already possible whenever the busy guard dropped a tick, and routine now
+    -- that the bus runs a 100 ms grid by default. `Input.pressed` answers from the accumulator
+    -- the game's own XInput call feeds at frame rate, so the press survives any grid.
+    local function pressed(mask)
+        return Input.pressed(mask) or ((snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0)
+    end
 
     if draining then
         local neutral = snap.buttons == 0 and snap.rt < REL_TH and snap.lt < REL_TH

@@ -714,8 +714,24 @@ end
 -- as the counterpart of 1, which is the frame still CONSTRUCTING and deliberately absent
 -- here, and it has never once been observed. This set comes from the game's own state
 -- machine; a wrong entry re-opens a bug that cost a session.
-local BOARD_LIVE_MODES = { [2] = true, [7] = true, [9] = true, [12] = true,
+-- 2 MOVED OUT of the live set 2026-08-03, into BOARD_OPENING_MODES below. Adding it here
+-- fixed the report above and caused the opposite one ("el menú de emblemas ya no se lee"),
+-- and the claim trace named it outright: `claim=board board=true grid=true mode_v=2`, one
+-- tick after the watch lane had found the grid. The two reports are not in conflict — they
+-- expose that mode 2 is PROVISIONAL. Input is not bound yet at 2, so the mode machine
+-- genuinely does not know whether the board or the emblem GRID (which renders UNDERNEATH
+-- it) is the screen the player is on; treating "don't know" as "the board owns it" is what
+-- shadowed the grid into silence, the same failure as 2026-07-15 by a different route.
+local BOARD_LIVE_MODES = { [7] = true, [9] = true, [12] = true,
                            [13] = true, [14] = true, [16] = true, [17] = true }
+
+-- Modes where the board FRAME is up but input is not bound, so the board only owns the
+-- screen if nothing deeper does. A live grid WITH SLOTS is the discriminator the mode
+-- machine cannot provide: if it is there, the player is in the emblem grid and the board
+-- is its backdrop; if it is not, the board is genuinely mid-open and claims exactly as it
+-- did before. The input-bound modes above keep absolute precedence over the grid — that
+-- ordering is the 2026-07-03 lesson and is untouched.
+local BOARD_OPENING_MODES = { [2] = true }
 
 function Commu.is_active()
     tick = tick + 1
@@ -798,6 +814,18 @@ function Commu.is_active()
                             renew_grid()
                         end
                     end
+                elseif BOARD_OPENING_MODES[mode_v or -1] then
+                    -- Provisional mode (see BOARD_OPENING_MODES): ask the grid first. Same
+                    -- shape as mode 10 above, opposite default — there the grid owns input
+                    -- and the board is the fallback; here the board is opening and the grid
+                    -- only wins if it is actually up with slots to read.
+                    grid = grid_host()
+                    if grid then
+                        grid_slots, grid_byai = slots()
+                        if #grid_slots > 0 then m = "grid" end
+                    end
+                    if not m then m = "board" end
+                    handoff_armed = false
                 elseif BOARD_LIVE_MODES[mode_v or -1] then
                     m = "board"
                     handoff_armed = false

@@ -228,18 +228,46 @@ end
 local rejects = 0
 local REJECT_LOG_EVERY = 200
 
--- SELF-DISABLING GUARD. `GetAddress` is overridden only on the UObject family; on any other
--- RemoteObject UE4SS raises `Call to RemoteObject:GetAddress on polymorphic type is not allowed`,
--- and that error PIERCES pcall — it unwinds to UE4SS's callback boundary, killing the caller's
--- whole tick mid-function with nothing catchable anywhere. On 2026-07-25 exactly one such call
--- site (the array check in Core.array_of) silenced seven menus for a whole session.
--- The call site is fixed, but a guard whose failure mode is "several screens die silently forever"
--- must not depend on nobody ever making that mistake again. So the attempt is TRANSACTIONAL: mark
--- it pending before the call, clear it after. If the tick dies, the mark survives in _G and the
--- next call concludes the last attempt was fatal, disables the pre-check for the session and SAYS
--- SO. Worst case becomes one lost tick plus a log line, instead of a broken mod.
+-- SELF-HEALING GUARD. `Mem.raw_addr`'s `GetAddress` can be unwound by a C++ throw that PIERCES
+-- pcall, leaving this function dead mid-flight with nothing catchable anywhere. There are TWO
+-- causes, and they need OPPOSITE policies:
+--
+--  (a) A NON-UObject handle. `GetAddress` is overridden only on the UObject family; on anything
+--      else UE4SS raises `Call to RemoteObject:GetAddress on polymorphic type is not allowed`.
+--      That is a MOD BUG, it fires on every call from the offending site, and it is what the
+--      original transactional mark was written for (2026-07-25: one such call site, the array
+--      check in Core.array_of, silenced seven menus for a whole session).
+--  (b) UE4SS LOSING ITS OWN lua_State. `process_lua_function` throws `The lua state '<ptr>' has
+--      no instance inside lua_instances unordered map` (LuaMadeSimple.cpp:872) when the game
+--      thread reads `static std::unordered_map lua_instances` (:11 — no mutex, and nothing ever
+--      erases from it) while the async thread inserts into it. EVERY `ExecuteInGameThread` call
+--      does one such insert (LuaMod.cpp:3057-3091 → make_hook_state → Lua::new_thread →
+--      lua_instances.emplace, OUTSIDE the mutex taken at :3080), so this mod generates one per
+--      dispatch forever. The miss is a TRANSIENT false negative — the entry is present before,
+--      during and after — and it lands on an arbitrary handle, typically a perfectly live one.
+--
+-- The original policy (one unwound call disables the pre-check for the whole session) is right for
+-- (a) and catastrophic for (b). On 2026-08-01 a single (b) turned the mod's only out-of-VM memory
+-- guard OFF three minutes into a session; the game then ran unguarded for two hours and died of
+-- exactly the dangling-handle class this guard exists to stop, because with Mem.alive neutralised
+-- `Core.valid` decays to a bare `IsValid` — which dereferences before its own lookup (see the
+-- block comment above). One survivable, already-logged engine hiccup cost the whole session.
+--
+-- So the mark stays TRANSACTIONAL, but recovery is a STREAK, not a hair trigger: an unwound
+-- attempt is cleared, counted, logged, and the pre-check STAYS ON. Only CONSECUTIVE failures —
+-- with no completed check in between — disable it. That is the signature of (a) and is
+-- unreachable by (b). Any completed check resets the streak.
 local guard = _G.__KakarotAliveGuard
-if not guard then guard = { pending = false, disabled = false }; _G.__KakarotAliveGuard = guard end
+if not guard then
+    guard = { pending = false, disabled = false, trips = 0, streak = 0 }
+    _G.__KakarotAliveGuard = guard
+end
+
+-- A repeating bad call site (a) raises on EVERY call and reaches this within one tick of adapter
+-- work, so the streak — not its exact length — is the discriminator. Kept small so (a) still
+-- degrades quickly; (b) was observed once in a two-hour session, i.e. ~500k dispatches apart, so
+-- it cannot chain even one step of this.
+local MAX_ALIVE_STREAK = 8
 
 -- MANUAL KILL SWITCH (Ctrl+Shift+G, 2026-07-25). Separate from `guard.disabled`, which is the
 -- automatic self-protection. This one exists because the pre-check's failure mode is invisible: if
@@ -264,10 +292,25 @@ function Mem.alive(obj)
     if not _G.__KakarotPrecheck then return true end   -- Ctrl+Shift+G: off = pre-2026-07-25 behaviour
     if guard.disabled then return true end
     if guard.pending then
-        guard.disabled = true
-        print("[KakarotAccess] memory pre-check DISABLED: GetAddress raised THROUGH pcall — a "
-            .. "non-UObject handle reached Mem.alive. Reads continue unguarded; find the caller.\n")
-        return true
+        -- The PREVIOUS attempt never reached its `pending = false`, so a throw unwound through it.
+        -- Clear the mark and carry on with the pre-check still armed — see the streak rationale
+        -- above. Only a run of these with no completed check in between is evidence of a bad
+        -- handle rather than the engine's lua_instances race.
+        guard.pending = false
+        guard.trips = guard.trips + 1
+        guard.streak = guard.streak + 1
+        if guard.streak >= MAX_ALIVE_STREAK then
+            guard.disabled = true
+            print(string.format("[KakarotAccess] memory pre-check DISABLED after %d CONSECUTIVE "
+                .. "unwound attempts (%d this session): a non-UObject handle is reaching "
+                .. "Mem.alive on every call. Reads continue unguarded; find the caller.\n",
+                guard.streak, guard.trips))
+            return true
+        end
+        print(string.format("[KakarotAccess] memory pre-check: attempt %d unwound by an "
+            .. "uncatchable throw (streak %d of %d) — guard STAYS ON. Isolated trips are the "
+            .. "UE4SS lua_instances race, not a bad handle; only a full streak disables it.\n",
+            guard.trips, guard.streak, MAX_ALIVE_STREAK))
     end
     -- ORDER MATTERS (2026-07-31, crash audit RANK 5). The address is taken FIRST, inside the
     -- transactional guard, and only then handed to the offset probe: GetAddress is the call that
@@ -280,6 +323,9 @@ function Mem.alive(obj)
     local a = Mem.raw_addr(obj)
     local off = class_off(obj, a)
     guard.pending = false
+    -- Reaching here means the attempt COMPLETED, which is exactly what the streak measures. Reset
+    -- it so only an UNBROKEN run of unwound attempts can ever disable the pre-check.
+    guard.streak = 0
     if a == nil then return true end                      -- handle cannot answer → do not block
     a = math.tointeger(a)
     if a == nil then return true end                      -- not an address we can read → open

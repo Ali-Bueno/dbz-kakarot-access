@@ -54,6 +54,10 @@ local Dialogue = {}
 --     at the START of one the world gate underneath it has not closed yet either (the
 --     minimap is still up for a moment) — so nothing gated the radar at all. That is the
 --     player crash "the moment an in-engine dialogue cutscene started" (2026-07-31).
+--     BUT a scene surface is NOT sufficient on its own: the same subtitle surface also
+--     carries the party's chatter while you walk around, which is gameplay and must keep
+--     its cues. The claim below is therefore released again once free roam proves itself —
+--     see AMBIENT_GRACE_S, which explains why it is a timer and not simply a second test.
 local SCENE_SURFACE = {
     ["Xcmn_Subtitles_C"] = true,    -- cutscene subtitles (Blueprint)
     ["ATUISubtitles"]    = true,    -- ...same surface via the native class
@@ -77,6 +81,28 @@ local MUTE_HOLD_POLLS = 5                                  -- ui_registry.lua:78
 local MUTE_HOLD_S = MUTE_HOLD_POLLS * Core.POLL_MS / 1000  -- ui_core.lua:22 POLL_MS
 local scene_until = 0        -- os.clock() at which the scene claim expires
 
+-- AMBIENT CHATTER IS NOT A SCENE (2026-08-03, user report: "the radar goes silent when
+-- characters talk while moving during gameplay; during dialogues and cutscenes yes, during
+-- gameplay no"). The surface list above cannot tell the two apart, and no list can: this game
+-- draws the SAME subtitle surface for a cutscene and for a conversation the party holds while
+-- you keep walking, and the story-call pop-up is a gameplay overlay by its nature.
+--
+-- The game's own discriminator is the MINIMAP — up while free-roaming, hidden the moment a menu,
+-- battle or cutscene takes over (Core.free_roam, ui_core.lua:1571). But it CANNOT simply replace
+-- the surface test, and that is the whole subtlety: at the START of a cutscene the minimap is
+-- still up for a moment, and that moment is exactly the crash window this mute was built to
+-- cover (see the note above — the mute's falling edge is what runs Nav.release_world_refs).
+--
+-- So the two signals are combined by TIME rather than either one winning: a scene surface still
+-- arms the mute IMMEDIATELY, untouched, and the mute is RELEASED only once free roam has held
+-- CONTINUOUSLY for this long — by which point a real cutscene has taken the minimap down and an
+-- ambient conversation has not. The cost is a brief mute at the start of ambient chatter instead
+-- of one lasting the whole conversation, and the safety case keeps the coverage it had.
+-- The magnitude is not picked either: it is MUTE_HOLD_S, i.e. the registry's own debounce for
+-- how long a flapping engine signal must persist before it is believed.
+local AMBIENT_GRACE_S = MUTE_HOLD_S
+local roam_since = nil       -- os.clock() when free roam last became continuous under a claim
+
 Dialogue.nav_mute = false    -- default = the overworld case; see commit_nav_mute
 
 -- The SINGLE writer, called on every is_active evaluation (and from reset). `src` is the
@@ -87,17 +113,68 @@ Dialogue.nav_mute = false    -- default = the overworld case; see commit_nav_mut
 -- while the registry still points `active` at us, and once it stops (`a == nil`) it returns
 -- false regardless — from there the radar is gated by nav_tracker's own world gate, which
 -- is the pre-existing protection for the body of a cutscene (the minimap is hidden there).
-local function commit_nav_mute(src)
+-- `tick` is a PARAMETER, not the file-local of the same name: that local is declared below this
+-- function, so reading it here would compile to a global access — nil at runtime, raising on
+-- every poll from above the loop's pcall. It is the mistake the globals lint exists to catch.
+local function commit_nav_mute(src, tick)
     local now = os.clock()
-    if src and SCENE_SURFACE[src] then scene_until = now + MUTE_HOLD_S end
+    -- ARM ONLY WHILE THE MINIMAP IS DOWN (2026-08-03, second user report on the same
+    -- behaviour: "it still mutes after dialogues during gameplay, about two seconds, that
+    -- cannot happen"). The previous cut armed on the surface alone and released 0.5 s later
+    -- through the ambient path — measured in the log as five arms in three minutes of walking
+    -- around, each an audible gap in the beacon. The grace was doing its job; the job was
+    -- wrong. `Core.free_roam` is the game's own "the player is in control" signal, and it is
+    -- the SAME predicate `nav_tracker`'s world gate already runs on, so while it is true the
+    -- radar is going to dereference those actors regardless of what this flag says — muting
+    -- buys nothing and costs the gap. The moment the minimap drops, this arms on that very
+    -- tick and everything below behaves exactly as before for the whole scene.
+    --
+    -- KNOWINGLY TRADED AWAY: the few frames at the start of a cutscene where the subtitle is
+    -- already up and the minimap has not gone yet. That window was the mute's original
+    -- purpose (2026-07-31) — but it was a REASONED fix for a crash that was never reproduced
+    -- with it off, and the cost is a confirmed, repeated, audible one. If crashes at cutscene
+    -- starts come back, this is the first thing to revert, and the log line below names it.
+    if src and SCENE_SURFACE[src] and not Core.free_roam(tick) then
+        scene_until = now + MUTE_HOLD_S
+    end
     local mute = now < scene_until
+    local ambient = false
+    -- HOLD THE CLAIM FOR AS LONG AS THE SCENE ACTUALLY RUNS (2026-08-03, user report + log).
+    -- MUTE_HOLD_S is the registry's ~0.5 s debounce, but the gaps between two subtitle lines of
+    -- one cutscene are 1-3 SECONDS, so the claim expired between almost every pair of lines: the
+    -- log shows this flag flapping true/false about twenty times per cutscene, every release
+    -- reading `no surface` — i.e. the hold timing out, not a real end of scene. That matters
+    -- because every FALLING edge runs `Nav.release_world_refs()`, so the radar dropped and
+    -- re-acquired its target over and over ("the radar untracks and re-tracks by itself"), and
+    -- those re-acquisition scans land on the game thread mid-cutscene (the audio hitches).
+    -- The minimap is down for the WHOLE scene, so `not free_roam` is the signal that the scene is
+    -- still running, and refreshing the claim on it bridges the gaps the surface hold cannot.
+    if mute and not Core.free_roam(tick) then
+        roam_since = nil
+        scene_until = now + MUTE_HOLD_S
+    elseif mute then
+        -- Free roam under a scene claim. Held long enough, this cannot be the opening moment of
+        -- a cutscene (the minimap would be gone by now) — it is gameplay chatter. See
+        -- AMBIENT_GRACE_S. Only sampled while a claim is held, so the ordinary case costs
+        -- nothing; the timer therefore starts with the claim, which is exactly what it measures.
+        roam_since = roam_since or now
+        if now - roam_since >= AMBIENT_GRACE_S then
+            -- EXPIRE the claim, do not merely answer false: `mute` is recomputed from
+            -- `scene_until` on every tick, so leaving it in the future would flip straight back
+            -- next tick and reintroduce the flapping this whole block exists to stop.
+            scene_until, mute, ambient = 0, false, true
+        end
+    else
+        roam_since = nil
+    end
     if mute ~= Dialogue.nav_mute then
         -- One line per TRANSITION, never per tick: this edge silences the radar AND drops
         -- its world-actor caches, so a false fire has to be visible instead of inferred.
         -- Strictly rarer than the `screen ->` commit line the registry already prints on
-        -- this same cadence, because the hold absorbs the short gaps.
-        print(string.format("[KakarotAccess] dialogue nav_mute -> %s (%s)\n",
-            tostring(mute), src or "no surface"))
+        -- this same cadence, because the hold absorbs the short gaps. The reason is named
+        -- as well as the surface, so "the radar went quiet" reports stay one grep away.
+        print(string.format("[KakarotAccess] dialogue nav_mute -> %s (%s)\n", tostring(mute),
+            ambient and "free roam: ambient chatter" or src or "no surface"))
     end
     Dialogue.nav_mute = mute
 end
@@ -406,7 +483,7 @@ function Dialogue.is_active()
     tick = tick + 1
     local line, w, src = read_surface()
     -- EVERY evaluation, including the ones that answer false.
-    commit_nav_mute(src)
+    commit_nav_mute(src, tick)
     if line and w then trace_line(src, w, line) end
     cached = line
     return cached ~= nil
@@ -423,7 +500,7 @@ function Dialogue.reset()
     -- commits — the one moment this whole change exists to cover. Committing with no
     -- surface claim restores the default the instant the hold expires and never latches a
     -- stale one, which is what "restore the default" has to mean for a debounced flag.
-    commit_nav_mute(nil)
+    commit_nav_mute(nil, tick)
 end
 
 function Dialogue.update()

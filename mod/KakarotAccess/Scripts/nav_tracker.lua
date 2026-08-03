@@ -31,6 +31,10 @@ local Registry = require("ui_registry")
 local Transition = require("transition")
 local Ray = require("raycast")
 local Mem = require("mem")
+-- NOTE: pad_poll (the shared tick bus) is required INSIDE Nav.start/Nav.stop, not here. This
+-- file's main chunk sits at Lua's hard ceiling of 200 locals, so one more top-level `local`
+-- fails to compile outright ("too many local variables") — the lint catches it, but the cheaper
+-- lesson is not to add one. `require` is a cached table lookup after the first call.
 
 local Nav = {}
 
@@ -276,7 +280,10 @@ local preempt = {
 -- quiet while a resume is pending. Companion targets (grp == nil) are not resumable
 -- through the picker and keep the old behavior.
 local resume_pick = nil        -- { key, label, grp, stateful, tries }
-local RESUME_TRIES = 10        -- attempts (one per SCAN_EVERY*3 ticks, ~3 s) before giving up
+local RESUME_TRIES = 10        -- attempts before giving up. The FIRST lands as soon as the
+                               -- shared snapshot is ready (usually the tick after the world
+                               -- returns); retries are spaced SCAN_EVERY*3 ticks (~4.5 s) and
+                               -- an attempt that found no snapshot at all does not count.
 
 local last_enemy_key = nil     -- enemy proximity alert: edge-gate per enemy actor
 local last_enemy_d = 0
@@ -320,17 +327,30 @@ end
 -- between scans while the widget doesn't exist yet.
 local mm_cache = nil
 local mm_retry = 0
-local MM_RETRY_TICKS = 50    -- ~5 s between acquisition scans
+local MM_RETRY_TICKS = 10    -- ~1 s between acquisition attempts. Was 50 (~5 s), chosen when
+                             -- this WAS a raw FindAllOf; `Core.cached_live` now resolves it
+                             -- through the screen directory (a pointer read) and owns the cost
+                             -- of the scan fallback itself — a budget slot plus its own absent
+                             -- backoff. A second, longer lockout stacked on top of that only
+                             -- delays the one signal every other gate in this file depends on.
 
 local function minimap()
     if Core.valid(mm_cache) then return mm_cache end
     mm_cache = nil
     if ui_muted() then return nil end
     if tick < mm_retry then return nil end
-    mm_retry = tick + MM_RETRY_TICKS
     -- cached_live resolves this through the screen directory (UIFieldManager.MapMng
     -- .MinimapIns — a pointer read), so acquisition costs no object scan at all.
+    --
+    -- Arm the backoff ONLY ON A MISS (2026-08-03). It used to be written BEFORE the probe
+    -- ran, so a single unlucky attempt — the HUD root not yet re-resolved after a load, which
+    -- is precisely when this is first called — locked the minimap out for a full 5 s. And
+    -- `world_alive()` is false for every one of those ticks, so as far as the rest of this
+    -- file is concerned the world does not exist yet: no auto-acquire, no beacon, nothing.
+    -- That is the largest single contributor to "the radar takes a long time to start
+    -- tracking after loading a save".
     mm_cache = Core.cached_live("AT_UIMiniMapRadar")
+    if not mm_cache then mm_retry = tick + MM_RETRY_TICKS end
     return mm_cache
 end
 
@@ -596,7 +616,7 @@ local function best_candidate(px, py, pz, want_pri)
         navi_icons = {}
     end
     if navi_icons == nil or (tick >= navi_next and not Core.scan_quiet()) then
-        navi_icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
+        navi_icons = Core.findall("AT_UIMiniMapNaviIcon")
         navi_next = tick + RESCAN_CLASSES
     end
     local best, best_pri, best_d2 = nil, 0, math.huge
@@ -707,7 +727,7 @@ local function human_nav_data()
     if Core.valid(human_mesh) then return human_mesh end
     human_mesh = nil
     pcall(function()
-        for _, a in pairs(FindAllOf("RecastNavMesh") or {}) do
+        for _, a in pairs(Core.findall("RecastNavMesh")) do
             if Core.valid(a) then
                 local nm = a:GetFName():ToString()
                 if nm:find("Human", 1, true) then human_mesh = a return end
@@ -988,7 +1008,21 @@ end
 
 -- ---- the radar tick -----------------------------------------------------------------
 
-local function drop_target()
+-- `why` is DIAGNOSTIC ONLY and optional: the deliberate drops (arrival, B, a fresh pick) pass
+-- nothing and stay silent, because the player asked for those and can hear the result. The two
+-- AUTOMATIC ones name themselves, because an unasked-for drop is followed by a re-acquisition
+-- that RE-ANNOUNCES the objective, and three rounds of reasoning about "the radar untracks by
+-- itself while I walk" (2026-08-03) produced two fixes and one regression without ever seeing
+-- which branch fired. One line per drop, never per tick, and it carries the state that decides
+-- the branch — whether the handle was already gone, and whether the scan that "missed" was
+-- allowed to look at all.
+local function drop_target(why)
+    if why and target then
+        print(string.format(
+            "[KakarotAccess] nav drop target (%s) key=%s actor=%s missing=%d quiet=%s t=%.2f\n",
+            why, tostring(target.key), target.actor ~= nil and "live" or "NIL",
+            target_missing, tostring(Core.scan_quiet()), os.clock()))
+    end
     target, route, route_idx = nil, nil, 0
     arrived, target_missing = false, 0
     companion_idx = 0   -- a dropped manual target reverts to quest mode
@@ -1576,6 +1610,18 @@ local function step()
     if not world_alive() then
         if not gated_prev then
             gated_prev = true
+            -- TRANSITION LOG (2026-08-03, diagnostic). This edge runs `release_world_refs`, i.e.
+            -- it nils every world handle the tracker holds — `target.actor` included, which then
+            -- needs a SUCCESSFUL scan to be repaired. If it fires spuriously while the player is
+            -- just walking, the objective is dropped and re-acquired seconds later, and a
+            -- re-acquisition RE-ANNOUNCES: the open "the radar untracks by itself and starts
+            -- tracking again" report. The gate has three distinct closing conditions and the
+            -- fixes so far have been guesses about which one fires, so name it. One line per
+            -- transition, never per tick.
+            print(string.format("[KakarotAccess] nav world gate -> CLOSED (%s) t=%.2f\n",
+                (ui_muted() and "ui muted")
+                or (not Core.valid(mm_cache) and "minimap widget gone")
+                or "minimap off screen", os.clock()))
             Audio.stop()
             -- DROP THE WORLD-ACTOR CACHES ON THE FALLING EDGE. A field battle or a cutscene
             -- is NOT a Transition: it closes this gate with no LoadMap, so the map-switch
@@ -1595,13 +1641,35 @@ local function step()
         -- when there is no target, so dropping the condition costs nothing.
         if world_gone >= WORLD_DROP_TICKS then
             remember_pick()   -- a battle stole it; re-acquire when the world is back
-            drop_target()
+            drop_target("world-gone")
             chain_wait = nil  -- the sweep's reached actor may have died with the fight
         end
         return
     end
-    world_gone = 0
-    if gated_prev then gated_prev = false end
+    if gated_prev then
+        gated_prev = false
+        -- Paired with the CLOSED line above: the tick count tells a real battle or cutscene
+        -- (many ticks) apart from a one-tick flicker of the minimap, which is the difference
+        -- between "the world went away" and "we believed it did".
+        print(string.format("[KakarotAccess] nav world gate -> open after %d ticks t=%.2f\n",
+            world_gone, os.clock()))
+        -- RISING EDGE: scan on THIS tick instead of waiting for the next multiple of
+        -- SCAN_EVERY. `tick` free-runs while every gate is shut, so that modulo carries an
+        -- arbitrary phase across a battle or a load — up to 1.4 s of silence with control
+        -- already back. Same defect the manual resume had; on the module table because this
+        -- file is at Lua's 200-local ceiling.
+        --
+        -- A WINDOW, NOT ONE SHOT (2026-08-03, "re-tracking after a battle still takes 2-4 s or
+        -- more"). One immediate scan is not enough: right after a fight the quest marker's own
+        -- icon is usually not back yet, so that scan finds nothing and every retry then waits a
+        -- full SCAN_EVERY — two or three of those IS the reported delay. Retry every nav tick
+        -- until something is acquired, bounded. The bound is DERIVED, not picked:
+        -- `LOST_SCANS * SCAN_EVERY` is this file's own statement of how long a target may be
+        -- unfindable before it is given up on, so it is exactly as long as looking for one is
+        -- worth. It ends the moment a target is acquired.
+        Nav.auto_until, Nav.auto_t0 = tick + LOST_SCANS * SCAN_EVERY, os.clock()
+    end
+    world_gone = 0   -- after the edge block: the line above reports how long the gate was shut
 
     local pawn = player_pawn()
     if not pawn then return end
@@ -1635,28 +1703,46 @@ local function step()
     end
 
     -- Re-acquire a hand-picked target stolen by a battle/level change: search the
-    -- picker's own enumeration for the remembered category+key (every 3rd scan —
-    -- list_targets is the full picker sweep, too heavy for every scan tick). While a
+    -- picker's own enumeration for the remembered category+key — from the SHARED
+    -- SNAPSHOT, never a fresh sweep, so this costs nothing on the tick control comes
+    -- back and the first attempt no longer waits out a window. While a
     -- resume is pending the quest auto-scan below stays quiet, so the story marker
     -- can't replace the user's pick during the window; if the pick is gone for good
     -- (RESUME_TRIES misses) the auto-scan resumes as before.
-    if resume_pick and not target and tick % (SCAN_EVERY * 3) == 0 then
-        resume_pick.tries = resume_pick.tries + 1
-        local found = nil
-        for _, c in ipairs(Nav.list_targets()) do
-            if c.key == resume_pick.grp then
-                for _, it in ipairs(c.items) do
-                    if it.key == resume_pick.key then found = it break end
+    if resume_pick and not target and tick >= (resume_pick.next or 0) then
+        -- NEVER sweep inline here (2026-08-03, user report: "after a battle or leaving a menu
+        -- the radar takes a while to pick the last target back up"). This called
+        -- `Nav.list_targets()` directly — ~17 unbudgeted FindAllOf, ~1.2 s of blocked game
+        -- thread — on the first tick after the world came back, i.e. exactly when the player
+        -- has just regained control. It also never called `Nav.sweep_partial()`, leaving the
+        -- build open (see the self-healing guard there). The shared snapshot with `no_build`
+        -- arms explore_tick's CHUNKED builder instead, which runs every nav tick whether or not
+        -- explore mode is on, and answers within a tick or two at no cost to this one.
+        local snap = Nav.targets_cached(true)
+        if snap then
+            -- Cadence measured from the LAST ATTEMPT rather than a modulo on a free-running
+            -- counter. `tick % (SCAN_EVERY * 3)` put the first attempt at a random phase inside
+            -- a 4.5 s window — and its own comment said "~3 s", stale since SCAN_EVERY changed
+            -- under it. Now the first attempt lands on the first tick the snapshot is ready and
+            -- only the retries are spaced out.
+            resume_pick.next = tick + SCAN_EVERY * 3
+            resume_pick.tries = resume_pick.tries + 1
+            local found = nil
+            for _, c in ipairs(snap) do
+                if c.key == resume_pick.grp then
+                    for _, it in ipairs(c.items) do
+                        if it.key == resume_pick.key then found = it break end
+                    end
+                    break
                 end
-                break
             end
-        end
-        if found then
-            resume_pick = nil
-            Nav.set_manual_target(found.actor, found.key, Nav.item_label(found),
-                found.grp, found.stateful, true)   -- keep_sweep: resume, not a fresh pick
-        elseif resume_pick.tries >= RESUME_TRIES then
-            resume_pick = nil
+            if found then
+                resume_pick = nil
+                Nav.set_manual_target(found.actor, found.key, Nav.item_label(found),
+                    found.grp, found.stateful, true)   -- keep_sweep: resume, not a fresh pick
+            elseif resume_pick.tries >= RESUME_TRIES then
+                resume_pick = nil
+            end
         end
     end
 
@@ -1674,13 +1760,41 @@ local function step()
     -- chunk is at Lua's 200-local cap). Absent store = default on.
     local cfg = _G.__KakarotSettings
     local autotrack = (cfg == nil) or cfg.autotrack_enabled()
-    if autotrack and tick % SCAN_EVERY == 0 and (fresh
+    -- Expire a re-acquire window that never found anything, so the next one reports its OWN
+    -- elapsed time rather than a leftover, and the per-tick retries stop at the bound.
+    --
+    -- The expiry is LOGGED, and it is the other half of the `nav re-acquired` line: measured
+    -- 2026-08-03, a SHORT gate closure (9 ticks) re-acquired in 0.08 s, while a 208-tick one
+    -- (a 20 s cutscene) produced no line at all — the window ran out. Those are two different
+    -- worlds and only one of them is ours to fix, so the line carries the discriminator:
+    -- `icons` is the size of the navi-icon pool. Empty means the game has not rebuilt its HUD
+    -- yet and no amount of looking would have helped; non-empty means the icons were back and
+    -- none of them resolved to a marker, which WOULD be ours.
+    if Nav.auto_until and tick >= Nav.auto_until then
+        print(string.format(
+            "[KakarotAccess] nav re-acquire window expired after %.2f s (icons=%d, target=%s)\n",
+            os.clock() - (Nav.auto_t0 or os.clock()),
+            navi_icons and #navi_icons or -1, target and "held" or "none"))
+        Nav.auto_until, Nav.auto_t0 = nil, nil
+    end
+    if autotrack and (tick % SCAN_EVERY == 0
+        or (Nav.auto_until and tick < Nav.auto_until)) and (fresh
         or (not resume_pick and not auto_suppressed and not (target and target.manual))) then
         -- The fresh preempt biases once; `preempt.focus` is the standing context and therefore
         -- applies to EVERY auto-scan, which is what carries a multi-phase side story from one
         -- objective to the next without the player opening the picker.
         local best = best_candidate(px, py, pz, fresh and preempt.pri or preempt.focus)
         if best then
+            -- Close the re-acquire window and MEASURE it. This line is the whole point of the
+            -- window being a hypothesis rather than a hunch: it says how long the marker
+            -- actually took to come back after a battle, so "still slow" can be answered with a
+            -- number instead of a fourth guess. Printed only when a window was open, so it is
+            -- one line per battle/objective change, never per tick.
+            if Nav.auto_until then
+                print(string.format("[KakarotAccess] nav re-acquired after %.2f s key=%s\n",
+                    os.clock() - (Nav.auto_t0 or os.clock()), tostring(best.key)))
+                Nav.auto_until, Nav.auto_t0 = nil, nil
+            end
             if fresh then
                 preempt.scans, preempt.pri = 0, nil   -- consumed, whatever happens below
                 if not target or target.key ~= best.key then
@@ -1704,14 +1818,68 @@ local function step()
                 end
             else
                 target_missing = 0
+                -- RE-ADOPT THE FRESH HANDLE (2026-08-03, "the radar is still slow to start
+                -- after a battle"). `release_world_refs` nils `target.actor` on every
+                -- world-gate close — a battle, a cutscene — deliberately, because the actor
+                -- may not survive it, while keeping the rest of the record so nothing has to
+                -- be re-announced. But this branch is the "same objective as before" case and
+                -- it updated NOTHING, so the one thing the record was missing was the one
+                -- thing the sweep had just produced: the radar came back from a battle holding
+                -- a nil actor, and could not guide to it. It could not recover either —
+                -- `target_missing` only counts up when the sweep finds NOTHING, and here it
+                -- finds the objective every time.
+                -- Silent by design: this is the "merely re-resolving the same spot" case the
+                -- announce above already declines to speak. The route is dropped with it
+                -- because it was pathed against the handle that just died.
+                if target.actor == nil and best.actor ~= nil then
+                    target.actor = best.actor
+                    route, route_idx = nil, 0
+                end
             end
         elseif fresh then
             -- No marker yet (it can lag the HUD text) — burn one try, touch nothing.
             preempt.scans = preempt.scans - 1
             if preempt.scans == 0 then preempt.pri = nil end
         elseif target and not target.manual then
-            target_missing = target_missing + 1
-            if target_missing >= LOST_SCANS then drop_target() end
+            -- ASK ABOUT THE TARGET WE HOLD, NOT ABOUT THE SWEEP'S YIELD (2026-08-03). Settled by
+            -- the diagnostic added the same day, which named it in one line:
+            --   `nav drop target (lost-scans) key=… actor=live missing=3 quiet=false`
+            -- The world gate was open, the scan WAS allowed, and the tracked actor was LIVE —
+            -- yet the objective was dropped and then re-acquired, which re-announces. That is
+            -- the whole of "the radar untracks by itself while I walk".
+            --
+            -- `best_candidate` returns nil only when BOTH its source loops yield nothing, and
+            -- every way that happens is a per-tick transient: the navi icon fails `icon_in_use`
+            -- because one of its sub-widgets is momentarily not on screen, its `TargetActor`
+            -- pointer is unreadable for a tick, or `actor_pos` raises during a transform update.
+            -- The minimap-icon fallback loop only runs when no navi icon exists, so it is not a
+            -- safety net here. Three such blips inside 4.5 s is not rare.
+            --
+            -- The counter's real question is "has my objective gone away?", and an empty
+            -- candidate sweep is weak evidence for that while we are holding a live handle to
+            -- the thing itself. So ask the handle. The genuine case this must still catch — the
+            -- objective completes and the game destroys its marker — makes the actor invalid or
+            -- unpositionable, and still counts exactly as before. Ditto the post-gate-close case
+            -- where the handle was nil'd: nothing to ask, so it counts and LOST_SCANS hands the
+            -- objective back to ordinary acquisition. The previous cut gated this on
+            -- `Core.scan_quiet()` instead, which is now redundant: whether we bothered to LOOK
+            -- for candidates says nothing either way about the actor we already have.
+            if target.actor ~= nil and Core.valid(target.actor)
+                and actor_pos(target.actor) then
+                target_missing = 0
+            else
+                -- The handle is gone or unreadable. Note the `target.actor == nil` half is not
+                -- optional: leaving it out was a REGRESSION the same day ("after the battle it
+                -- never tracked again, I had to restart tracking by hand").
+                -- `release_world_refs` nils the handle at every world-gate close, and BOTH paths
+                -- that restore it need a candidate — re-adoption when the key matches, a fresh
+                -- target when it does not — so a target that is never counted and never dropped
+                -- is stuck for good, with a manual re-pick the only way out. Counting here is
+                -- what hands it back to ordinary acquisition, and the coast on `target.lx`
+                -- keeps the beacon alive through that window exactly as designed.
+                target_missing = target_missing + 1
+                if target_missing >= LOST_SCANS then drop_target("lost-scans") end
+            end
         end
     end
 
@@ -2085,10 +2253,22 @@ local function explore_tick()
     -- mode is on, so this must not depend on it. Measured into the same telemetry as
     -- explore_rescan, which is what makes Nav.targets_build_ms a derivation rather than a guess.
     if Nav.targets_want then
-        Nav.targets_want = nil
         local t0 = os.clock()
-        Nav.targets_snap, Nav.targets_snap_at = Nav.list_targets(), os.clock()
+        -- BOXED (2026-08-03): this build may stop when it has spent its slice of the tick and
+        -- continue on the next one. Keep `targets_want` set until it completes, and publish
+        -- nothing before then — a partial list would open the picker on a short set of targets.
+        local list = Nav.list_targets(true)
         local dt = (os.clock() - t0) * 1000
+        if Nav.sweep_partial() then
+            Nav.explore_sweep_chunks = (Nav.explore_sweep_chunks or 0) + 1
+        else
+            Nav.targets_want = nil
+            Nav.targets_snap, Nav.targets_snap_at = list, os.clock()
+            -- Chunks are counted so targets_build_ms can still bound the WHOLE build rather than
+            -- one slice of it; a pad caller that waited only one slice would give up too early.
+            Nav.explore_sweep_last_chunks = (Nav.explore_sweep_chunks or 0) + 1
+            Nav.explore_sweep_chunks = 0
+        end
         if dt > TICK_MS and dt > (Nav.explore_sweep_max or 0) then
             Nav.explore_sweep_max = dt
             print(string.format("[KakarotAccess] picker sweep blocked the game thread %.0f ms\n", dt))
@@ -2176,54 +2356,40 @@ end
 
 function Nav.explore_on() return explore_on end
 
--- ---- loop management (same generation/busy-guard pattern as ui_core.loop) ------------
+-- ---- loop management (a stepper on the shared tick bus — see pad_poll.lua) ------------
 
 function Nav.start()
     if running then return end
     running = true
-    _G.__KakarotNavGen = (_G.__KakarotNavGen or 0) + 1
-    local myGen = _G.__KakarotNavGen
-    local busy = false
-    LoopAsync(TICK_MS, function()
-        if _G.__KakarotNavGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                -- busy cleared on ENTRY: an uncatchable C++ error killing this callback
-                -- must not leave the guard stuck and the radar silent for the session
-                -- (see ui_core.loop for the full rationale).
-                busy = false
-                -- This loop is the only one that touches UObjects without going through
-                -- Core.begin_scan_tick, so it polls the world epoch itself — otherwise, with
-                -- the menu reader toggled off (Ctrl+M stops the registry loop), the radar
-                -- would keep walking cached actors with the transition gate never arming.
-                Core.poll_world()
-                -- Cost telemetry (like ui_core.loop's step stats): this loop runs
-                -- OUTSIDE the registry step, so its game-thread cost was invisible to
-                -- the Ctrl+F5 numbers until the 2026-07-16 mods.txt A/B forced the
-                -- question "what else is unmeasured?".
-                local t0 = os.clock()
-                local ok, err = pcall(step)
-                if not ok then print("[KakarotAccess] nav step error: " .. tostring(err) .. "\n") end
-                -- Passive explore radar runs in its OWN pcall so an error here can never
-                -- take down the beacon tick (or vice versa).
-                local ok2, err2 = pcall(explore_tick)
-                if not ok2 then print("[KakarotAccess] nav explore error: " .. tostring(err2) .. "\n") end
-                local dt = (os.clock() - t0) * 1000
-                local st = _G.__KakarotNavStats
-                if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotNavStats = st end
-                st.n = st.n + 1
-                st.ms = st.ms + dt
-                if dt > st.max then st.max = dt end
-            end)
-        end
-        return false
+    require("pad_poll").register_every("nav", TICK_MS, function()
+        -- This subsystem is the only one that touches UObjects without going through
+        -- Core.begin_scan_tick, so it polls the world epoch itself — otherwise, with
+        -- the menu reader toggled off (Ctrl+M retires the registry stepper), the radar
+        -- would keep walking cached actors with the transition gate never arming.
+        Core.poll_world()
+        -- Cost telemetry (like the registry step's stats): this runs OUTSIDE the
+        -- registry step, so its game-thread cost was invisible to the Ctrl+F5 numbers
+        -- until the 2026-07-16 mods.txt A/B forced the question "what else is
+        -- unmeasured?".
+        local t0 = os.clock()
+        local ok, err = pcall(step)
+        if not ok then print("[KakarotAccess] nav step error: " .. tostring(err) .. "\n") end
+        -- Passive explore radar runs in its OWN pcall so an error here can never
+        -- take down the beacon tick (or vice versa).
+        local ok2, err2 = pcall(explore_tick)
+        if not ok2 then print("[KakarotAccess] nav explore error: " .. tostring(err2) .. "\n") end
+        local dt = (os.clock() - t0) * 1000
+        local st = _G.__KakarotNavStats
+        if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotNavStats = st end
+        st.n = st.n + 1
+        st.ms = st.ms + dt
+        if dt > st.max then st.max = dt end
     end)
 end
 
 function Nav.stop()
     running = false
-    _G.__KakarotNavGen = (_G.__KakarotNavGen or 0) + 1  -- kills the loop next fire
+    require("pad_poll").unregister("nav")
     Audio.stop()
 end
 
@@ -2279,7 +2445,7 @@ local function companions(px, py, pz)
     local me = player_pawn()
     local me_key = me and tostring(me:GetAddress()) or ""
     local out = {}
-    for _, c in pairs(FindAllOf("AT_Character") or {}) do
+    for _, c in pairs(Core.findall("AT_Character")) do
         -- Exclude field ENEMIES (SpawnType != 0): Shift+F5 must cycle party members,
         -- not the mob you're about to fight (they're AT_Character too).
         if Core.valid(c) and tostring(c:GetAddress()) ~= me_key
@@ -2556,8 +2722,9 @@ end
 
 -- TTL-shared view of list_targets, for the two callers that must not pay for it on demand
 -- (crash audit RANK 3, 2026-07-31). list_targets issues ~17 raw FindAllOf calls — the file's own
--- measurement is ~68 ms each, ~1.2 s for the sweep — and it takes no scan slot and never routes
--- through timed_findall, so __KakarotScanStats cannot even see it. Two callers turned that into a
+-- measurement is ~68 ms each, ~1.2 s for the sweep — and it takes no scan slot. It DOES route
+-- through the meter since 2026-08-03 (`Core.findall` in `Nav.SW.class_list`), so the Ctrl+F5 dump
+-- and the ghost ledger now see it; the budget exemption stands. Two callers turned that into a
 -- felt freeze: explore mode re-sweeps every few seconds while the player is simply walking around,
 -- and radar_menu.do_open runs it SYNCHRONOUSLY on the shared 20 ms pad dispatch, so opening the R3
 -- picker in a dense area locks the game on the keypress. They now share one snapshot, so whichever
@@ -2593,7 +2760,8 @@ function Nav.targets_cached(no_build)
         Nav.targets_want = true
         return nil
     end
-    local list = Nav.list_targets()
+    local list = Nav.list_targets()   -- NOT boxed: a synchronous caller cannot use a partial list
+    Nav.sweep_partial()               -- closes the build (always false on the unboxed path)
     Nav.targets_snap, Nav.targets_snap_at = list, t
     return list
 end
@@ -2603,10 +2771,161 @@ end
 -- actually MEASURED this session (explore_sweep_max, fed by both sweep sites). Floored at one more
 -- nav tick so a session that has never swept still waits a whole tick.
 function Nav.targets_build_ms()
-    return TICK_MS + math.max(Nav.explore_sweep_max or 0, TICK_MS)
+    -- CHUNK-AWARE (2026-08-03): a boxed build now spans several nav ticks, so this must cover the
+    -- WHOLE build and not one slice of it, or the pad caller gives up early and opens the picker
+    -- on a stale set. `explore_sweep_last_chunks` is what the last COMPLETED build actually took —
+    -- measured like everything else here — floored at 1 so a session that has never swept behaves
+    -- exactly as it did before.
+    local chunks = math.max(Nav.explore_sweep_last_chunks or 1, 1)
+    return TICK_MS + chunks * math.max(Nav.explore_sweep_max or 0, TICK_MS)
 end
 
-function Nav.list_targets()
+-- The longest a pad caller should EVER wait for a build that is still making progress, as
+-- opposed to the estimate above of how long it should take. The two are different questions
+-- and conflating them is what made the picker say "nothing to track" on the first R3 of a
+-- session while the main quest was actively guiding (user, 2026-08-03): `targets_build_ms`
+-- derives from telemetry that BY DEFINITION does not exist yet the first time it is called —
+-- no build has completed, so `explore_sweep_last_chunks` and `explore_sweep_max` both floor
+-- and it answers 200 ms — while a cold chunked build genuinely spans ~15 classes at ~65 ms,
+-- i.e. the better part of a second. The caller gave up at 200 ms, `Nav.targets_snap` is only
+-- published when the WHOLE build completes, so it opened on an empty list.
+--
+-- DERIVED, not picked: EXPLORE_RESCAN_MS is this file's own statement of how stale a target
+-- list may be before it must be re-swept, so it is equally the longest a FRESH one can be
+-- worth waiting for. Past it the nav loop is gated (a menu, a cutscene, a load) and waiting
+-- longer cannot help.
+function Nav.targets_wait_cap_ms()
+    return EXPLORE_RESCAN_MS
+end
+
+-- ---- the sweep's scan indirection (2026-08-03) --------------------------------------------
+--
+-- ONE place where every class list the sweep needs is obtained, so two separate problems each get
+-- their fix without touching the ten straight-line blocks below.
+--
+-- (1) MANAGERS INSTEAD OF SCANS. The first in-gameplay dump of this game (2026-08-03; every
+--     earlier one was taken at the title screen, which is why nobody had seen this) showed the
+--     GameMode carries a component per subsystem, each already holding the very list this sweep
+--     was walking the whole object table to rebuild. All the members below are REAL TArrays —
+--     checked twice, header layout AND live `ArrayProperty` reflection — because a fixed C array
+--     would collapse to element 0 and `GetArrayNum` on it is the uncatchable abort. Acquisition is
+--     FindAllOf-once-and-cache, exactly the pattern `ui_directory` already uses for MenuManager:
+--     no new UE4SS surface, and each manager is a confirmed singleton under the GameMode.
+--
+-- (2) A TIME BOX. A `FindAllOf` has unbounded DURATION and this mod has only ever bounded its
+--     FREQUENCY. `ui_core.lua:1185-1191` already records what the cost of that looks like — "the
+--     second freeze (mid-session, no crash, log just stops) matches a game-thread deadlock against
+--     the async loader" — and it was fixed for `StaticFindObject` only, while `FindAllOf` walks
+--     the same tables. A 578 ms `nav.explore` stall sat one second before the 2026-08-03 freeze.
+--     So a build now STOPS once it has spent its budget and RESUMES on the next nav tick, reusing
+--     what it already scanned. Same total work; never again in one unbroken block.
+--
+-- The equivalence of a manager list to the scan it replaces is ASSERTED BY THE ENGINE, not by us,
+-- so it is checked once per session with real data rather than assumed: the first use of each
+-- mapped class does both and logs the two counts. One extra scan per class per session buys the
+-- evidence, and a mismatch shows up as a log line instead of as targets silently going missing.
+-- ALL of this lives in ONE table on purpose. This file's main chunk sits at Lua's hard ceiling of
+-- 200 locals (the same wall `require("pad_poll")` hit on 2026-08-03), so a run of eight scalars
+-- and two functions simply does not compile. The lint catches it; the cheaper lesson is not to
+-- reach for a new top-level `local` in this file at all.
+Nav.SW = {
+    -- cls scanned by the sweep -> the GameMode component that already holds that list.
+    MANAGERS = {
+        ["ATWindRoad"]          = { mgr = "ATWindRoadManager",          list = "WindRoadList" },
+        ["PlacementObjectInfo"] = { mgr = "PlacementObjectInfoManager", list = "PlacementObjectInfoList" },
+        -- REVERTED 2026-08-03 on its own evidence: the first run logged
+        --   `sweep source QuestCharacter: manager QuestManager.QuestCharacterFindList = 13,
+        --    scan = 12  <- MISMATCH`
+        -- so `QuestCharacterFindList` is NOT the same set as the scan (it held one entry the
+        -- scan did not). Which set is the correct one for the radar is unknown, and a silently
+        -- different target list is exactly the failure this check exists to prevent, so the
+        -- class goes back to scanning until someone establishes what the extra entry is.
+        -- ["QuestCharacter"]   = { mgr = "QuestManager", list = "QuestCharacterFindList" },
+    },
+    mgr = {},         -- manager class -> object, or false = looked for and not present
+    checked = {},     -- manager class -> true once the equivalence line has been logged
+    -- Accumulated across the ticks of ONE build; nil between builds. This IS the resume: a class
+    -- already scanned in this build is served from here, so continuing costs nothing already paid.
+    lists = nil,
+    t0 = 0,
+    partial = false,
+    -- The time box applies ONLY to the deferred build on the nav loop — the path whose 578 ms
+    -- stall is in the trail. The handful of synchronous callers (chain_to_next, the beacon resume,
+    -- the F5 dump) still get a complete list in one call, exactly as today: they are rare, they
+    -- cannot use a partial answer, and bounding them was never what the evidence asked for.
+    boxed = false,
+    -- One nav tick of scanning per nav tick of wall clock. Derived rather than picked: this loop
+    -- has TICK_MS to spend, and a sweep that outruns its own loop period is the shape that
+    -- produced the stall. At ~65 ms a scan this admits one or two classes per tick, so a cold
+    -- build settles over a handful of ticks instead of blocking for 1.2 s in one go.
+    BUDGET_S = TICK_MS / 1000,
+}
+
+function Nav.SW.manager_list(cls)
+    local spec = Nav.SW.MANAGERS[cls]
+    if not spec then return nil end
+    local m = Nav.SW.mgr[spec.mgr]
+    if m == false then return nil end             -- looked for this session and it is not there
+    if not Core.valid(m) then
+        m = nil
+        -- Budgeted like every other acquisition scan in the mod: a miss just retries later.
+        if not Core.take_scan_slot() then return nil end
+        for _, o in pairs(Core.findall(spec.mgr)) do
+            if Core.valid(o) then m = o break end
+        end
+        Nav.SW.mgr[spec.mgr] = m or false
+        if not m then return nil end
+    end
+    local arr, n = Core.array_of(m, spec.list)
+    if not arr or not n then return nil end
+    local out = {}
+    for i = 1, n do
+        local e = arr[i]
+        if Core.valid(e) then out[#out + 1] = e end
+    end
+    if not Nav.SW.checked[spec.mgr] then
+        Nav.SW.checked[spec.mgr] = true
+        local scanned = 0
+        for _, a in pairs(Core.findall(cls)) do
+            if Core.valid(a) then scanned = scanned + 1 end
+        end
+        print(string.format("[KakarotAccess] sweep source %s: manager %s.%s = %d, scan = %d%s\n",
+            cls, spec.mgr, spec.list, #out, scanned,
+            (#out == scanned) and "" or "  <- MISMATCH, the manager list is not the same set"))
+    end
+    return out
+end
+
+-- Every class the sweep needs goes through here. Returns a (possibly empty) list, never nil.
+function Nav.SW.class_list(cls)
+    if Nav.SW.lists == nil then return Core.findall(cls) end      -- not inside a build: as before
+    local have = Nav.SW.lists[cls]
+    if have then return have end
+    local got = Nav.SW.manager_list(cls)
+    if got == nil then
+        -- Must scan. Stop if this build has already had its slice of the tick — but only once
+        -- something has been scanned, so a build always makes progress and can never livelock.
+        if Nav.SW.boxed and next(Nav.SW.lists) ~= nil and (os.clock() - Nav.SW.t0) >= Nav.SW.BUDGET_S then
+            Nav.SW.partial = true
+            return {}
+        end
+        got = Core.findall(cls)
+    end
+    Nav.SW.lists[cls] = got
+    return got
+end
+
+-- Call IMMEDIATELY after Nav.list_targets(): true when the time box cut the build short, so the
+-- partial result must NOT be published as the snapshot and the caller has to ask again next tick.
+-- False also CLOSES the build, which is why it must be called on every path — leaving one open
+-- would serve the next build stale lists from a level that may since have streamed out.
+function Nav.sweep_partial()
+    if Nav.SW.partial then return true end
+    Nav.SW.lists = nil
+    return false
+end
+
+function Nav.list_targets(boxed)
     -- ITS OWN MARK (2026-07-31). This is the mod's single most expensive and most dangerous
     -- operation — 17 unbudgeted FindAllOf plus a dereference of every candidate — and it is
     -- reachable from BOTH the 100 ms nav loop and (before today) the 20 ms pad dispatch. The
@@ -2619,6 +2938,21 @@ function Nav.list_targets()
     if not pawn then return {} end
     local px, py, pz = actor_pos(pawn)
     if not px then return {} end
+
+    -- OPEN, or CONTINUE, a build. `sweep_lists` deliberately survives between ticks: that is what
+    -- makes the time box a RESUME rather than a restart, so continuing costs nothing this build
+    -- has already paid for. Opened after the gates above so an early return never leaves one open.
+    -- SELF-HEALING (2026-08-03). Only a boxed build that reported PARTIAL may be resumed;
+    -- anything else still open here was left behind by a caller that did not call
+    -- `Nav.sweep_partial()`, and THREE of the five call sites did exactly that. Reusing it is
+    -- not merely stale — `class_list` returns a cached list without re-scanning, so after one
+    -- such call the sweep never scanned again and kept serving actor handles gathered before
+    -- a battle or a level change: the "radar takes a while to pick its target back up" report,
+    -- and the dangling-handle class this mod is built to avoid. Discarding here makes the
+    -- contract structural instead of a rule every caller has to remember.
+    if Nav.SW.lists ~= nil and not Nav.SW.partial then Nav.SW.lists = nil end
+    if Nav.SW.lists == nil then Nav.SW.lists = {} end
+    Nav.SW.t0, Nav.SW.partial, Nav.SW.boxed = os.clock(), false, boxed and true or false
 
     local seen = {}
     local groups = {}
@@ -2728,7 +3062,7 @@ function Nav.list_targets()
 
     -- 1) active navi guidance (quest arrows) — always quest-classified
     do
-        local icons = FindAllOf("AT_UIMiniMapNaviIcon") or {}
+        local icons = Nav.SW.class_list("AT_UIMiniMapNaviIcon")
         for _, icon in pairs(icons) do
             if Core.valid(icon) and icon_in_use(icon) then
                 -- Gated hop (was `pcall(function() return icon.TargetActor end)`): the pcall
@@ -2770,7 +3104,7 @@ function Nav.list_targets()
     -- reaches ALL loaded POIs at any distance — shops, fishing, fruit/ore gathering, training,
     -- sites — the same set the area map shows. Owner = the POI actor; MapIconType is set even
     -- when bShowMapIcon is false (the game hides FAR icons). add_target dedupes by address.
-    for _, comp in pairs(FindAllOf("ATMapIconComponent") or {}) do
+    for _, comp in pairs(Nav.SW.class_list("ATMapIconComponent")) do
         if Core.valid(comp) then
             local owner, t
             pcall(function() owner = comp:GetOwner() end)
@@ -2782,7 +3116,7 @@ function Nav.list_targets()
     -- component. Find those and classify their owner as ENEMIES_BASE (EMapIcon 32). Scan the base
     -- AND the known subclass (a native-base FindAllOf can return nothing when a subclass exists).
     for _, cls in ipairs({ "ATEnemiesBaseBehaviour", "ATExterminationBastionComponent" }) do
-        for _, comp in pairs(FindAllOf(cls) or {}) do
+        for _, comp in pairs(Nav.SW.class_list(cls)) do
             if Core.valid(comp) then
                 local owner
                 pcall(function() owner = comp:GetOwner() end)
@@ -2812,7 +3146,7 @@ function Nav.list_targets()
         -- (dump 2026-07-06). add_target dedupes by address when both scans hit.
         local iddump, id_seen = (NPC_ID_DUMP and {} or nil), {}
         for _, cls in ipairs({ "QuestCharacter", "QuestCharacterBase_C" }) do
-            for _, npc in pairs(FindAllOf(cls) or {}) do
+            for _, npc in pairs(Nav.SW.class_list(cls)) do
                 if Core.valid(npc) and npc_present(npc) then
                     add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
                     if iddump then
@@ -2941,7 +3275,7 @@ function Nav.list_targets()
             { cls = "PlacementObjectInfo", item = true, state = true },
             { cls = "AccessPointItemBase", state = true },
         }) do
-            for _, a in pairs(FindAllOf(c.cls) or {}) do
+            for _, a in pairs(Nav.SW.class_list(c.cls)) do
                 if Core.valid(a) and visible_actor(a)
                     and (not c.state or not point_taken(a)) then
                     local cn = "?"
@@ -2965,7 +3299,7 @@ function Nav.list_targets()
     -- 4b) wind tunnels (AATWindRoad — the flight-boost spline routes; the actor origin
     -- is the entrance). Direct scan: they carry a FieldPointComponent (WindPath), not a
     -- minimap icon. Requested 2026-07-06.
-    for _, a in pairs(FindAllOf("ATWindRoad") or {}) do
+    for _, a in pairs(Nav.SW.class_list("ATWindRoad")) do
         if Core.valid(a) then
             add_target(a, "sites", "cat_windroad", nil, "collectible")
         end
@@ -2982,7 +3316,7 @@ function Nav.list_targets()
     -- indoors IS the way out, and outdoors the same list reads as "ways in" — both useful. There
     -- are flags here whose meaning is not established (`bOnlyUsedInRoom`, `bUseDialog`), and
     -- guessing at them could hide the very door the player needs.
-    for _, a in pairs(FindAllOf("ATDoorVolume") or {}) do
+    for _, a in pairs(Nav.SW.class_list("ATDoorVolume")) do
         if Core.valid(a) then
             -- `AreaName` (FName @0x378) names the destination, so the picker can say WHERE the
             -- door goes instead of just "exit". It may be an internal identifier rather than
@@ -3012,7 +3346,7 @@ function Nav.list_targets()
             [3] = { grp = "hunt", noun = "cat_hunt" },
             [9] = { grp = "sites", noun = "radar_cat_sites" },
         }
-        for _, comp in pairs(FindAllOf("FieldPointComponent") or {}) do
+        for _, comp in pairs(Nav.SW.class_list("FieldPointComponent")) do
             if Core.valid(comp) then
                 local t
                 pcall(function() t = tonumber(Core.member(comp, "FieldPointIconType")) end)
@@ -3034,7 +3368,7 @@ function Nav.list_targets()
     -- to the world map"), so these are quest-critical: wide-cap source (they're few
     -- and far) + eligible for the empty-group rescue.
     for _, cls in ipairs({ "Portal", "LevelNavigator" }) do
-        for _, a in pairs(FindAllOf(cls) or {}) do
+        for _, a in pairs(Nav.SW.class_list(cls)) do
             if Core.valid(a) then
                 add_target(a, "sites", "cat_portal", nil, "portal")
             end
@@ -3059,7 +3393,7 @@ function Nav.list_targets()
     -- declared on this tree and reading them is the uncatchable abort. Picker only,
     -- NOT the proximity alert (passive deer everywhere would make it spam).
     for _, cls in ipairs({ "AT_MobBase", "AnimalMob_Pawn_C" }) do
-        for _, a in pairs(FindAllOf(cls) or {}) do
+        for _, a in pairs(Nav.SW.class_list(cls)) do
             if Core.valid(a) and is_animal(a) then
                 local hidden = false
                 pcall(function() hidden = Core.member(a, "bHidden") end)
@@ -3318,7 +3652,22 @@ function Nav.notify_objective_change(kind)
     -- defence in depth, because "armed" is a state no upstream bug should be able to pin.
     -- Re-arming was never the meaningful transition anyway: only going from spent to armed is.
     -- A second genuine change while armed still retargets through preempt.pri just below.
-    if preempt.scans <= 0 then preempt.scans = preempt.TRIES end
+    if preempt.scans <= 0 then
+        preempt.scans = preempt.TRIES
+        -- LOOK FOR THE MARKER ON THE NEXT NAV TICK, not on the next multiple of SCAN_EVERY
+        -- (2026-08-03, user: "the radar also takes a while when the objective changes"). `tick`
+        -- free-runs, so that modulo is an arbitrary 0-1.5 s of doing nothing between the game
+        -- issuing a new objective and the radar going to look for it — the third place in this
+        -- file where a modulo on a free-running counter was silently acting as a random delay.
+        --
+        -- Armed INSIDE this branch deliberately, and for exactly the reason the branch itself
+        -- exists: the zero->armed transition is the genuine event, while this callback can fire
+        -- as fast as the quest HUD reader polls. A flapping caller that pinned this window would
+        -- turn the 1.5 s cadence into a permanent per-tick marker walk — the scan storm the
+        -- 2026-07-31 fix above is written to prevent. One event, one bounded window (see the
+        -- world-gate edge for the derivation), and it closes as soon as a target is acquired.
+        Nav.auto_until, Nav.auto_t0 = tick + LOST_SCANS * SCAN_EVERY, os.clock()
+    end
     preempt.pri = want
     -- IDLE radar (no hand-picked target, no battle-interrupted resume pending): a
     -- freshly activated objective must be tracked and KEEP being tracked even if its
@@ -3667,6 +4016,35 @@ function Nav.dump()
                     rows[i][1], rows[i][2], rows[i][3]))
             end
             _G.__KakarotScanStats = nil
+        end
+        -- GHOST CLASSES — the offender list. A class still at found=0 after a session of
+        -- play is a name no object in this game ever answers to, yet every adapter that
+        -- names one pays a full FindAllOf (~65 ms) every ABSENT_BACKOFF for the whole
+        -- session. The perf note forbids tuning that backoff without this list ("it
+        -- starves event-less popups", 2026-07-17), and the four native/Blueprint TWIN
+        -- pairs the adapters carry (Choice_Win_C/AT_UIChoiceWin, Choice_Cmd_C/
+        -- AT_UIChoiceCmd, Xcmn_Subtitles_C/ATUISubtitles, Quest_Sub_Reward_C/
+        -- AT_UIQuestSubReward) can only be settled here: UE4SS's docs say FindAllOf
+        -- matches subclasses, this file's own 2026-07 comments record it returning
+        -- nothing for a native base, and one measured session decides which half is dead.
+        -- Unlike the scan stats above, the ledger is NOT reset by a dump: "never found"
+        -- is only meaningful over a whole session.
+        local led = Core.scan_ledger and Core.scan_ledger()
+        if led then
+            local ghosts, gms, gn = {}, 0, 0
+            for cls, g in pairs(led) do
+                if g.found == 0 then
+                    ghosts[#ghosts + 1] = { cls, g.n, g.ms }
+                    gn, gms = gn + g.n, gms + g.ms
+                end
+            end
+            table.sort(ghosts, function(x, y) return x[3] > y[3] end)
+            f:write(string.format("ghost classes: %d never found (%d scans, %.0f ms burned)\n",
+                #ghosts, gn, gms))
+            for i = 1, #ghosts do
+                f:write(string.format("  ghost %-40s n=%d ms=%.0f\n",
+                    ghosts[i][1], ghosts[i][2], ghosts[i][3]))
+            end
         end
         -- Speech-backend cost (speech.lua timed_say): each prism call runs on the game
         -- thread — cinematics are the densest speech state, so a slow backend shows

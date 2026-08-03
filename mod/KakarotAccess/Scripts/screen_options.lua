@@ -54,7 +54,7 @@ local function refresh_rows()
     if tick < rescan_next then return end
     rescan_next = tick + RESCAN_EVERY
     if not Core.take_scan_slot() then return end
-    for _, r in pairs(FindAllOf("Xlist_Bar03_C") or {}) do
+    for _, r in pairs(Core.findall("Xlist_Bar03_C")) do
         if Core.valid(r) and r:GetFullName():find("Start_Option_C", 1, true) then
             rows[#rows + 1] = r
         end

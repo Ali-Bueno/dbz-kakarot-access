@@ -43,13 +43,19 @@ local Menu = {}
 -- and no keyboard. Matching the platform's own definition of "released" fixes it at the source; a
 -- trigger the game already ignores cannot leak anything by being treated as released here.
 local REL_TH = 30
-local DOUBLE_TAP_TICKS = 20   -- ~400 ms at the 20ms pad tick: window for a 2nd R3 tap (= explore toggle)
+-- WALL CLOCK, NOT TICKS (2026-08-03). These two were counted in DISPATCHES (20 and 34) under the
+-- comment "~400 ms at the 20 ms pad tick" — an assumption that silently stopped holding whenever
+-- the dispatch grid changed, and it already had: the relax gate drops the bus to 100 ms during
+-- cutscene subtitles and map loads, so in that state the double-tap window was really TWO
+-- SECONDS. The bus is now on a 100 ms grid by DEFAULT (pad_poll.lua), which would have made that
+-- the normal case. A gesture window has to be measured in the units the player's hands work in.
+local DOUBLE_TAP_S = 0.40   -- window for a 2nd R3 tap (= explore toggle)
 -- A stick double-click is stiff and easily slower than the window above; when the 2nd tap
 -- lands just after the picker already auto-opened, we still treat it as the toggle (see the
 -- open branch) as long as it arrives within this grace of the FIRST tap and the player did
 -- not navigate the picker in between. Without this the slow 2nd tap only cancelled the
 -- accidentally-opened picker and the explore toggle never fired (never turned OFF).
-local DOUBLE_RESCUE_TICKS = 34   -- ~680 ms from tap 1: the slow-double rescue window
+local DOUBLE_RESCUE_S = 0.68   -- from tap 1: the slow-double rescue window
 
 local running = false
 local open = false        -- menu currently open (and pad blocked)
@@ -76,10 +82,9 @@ local drain_btn = nil     -- digital button state the stuck-detector last observ
 local cats = {}           -- [{ key, name, items={{actor,key,dist,noun},...} }]
 local ci, ii = 1, 1       -- current category / item index
 local prev_btn = 0        -- previous button bitmask (edge detection)
-local tk = 0              -- step counter (double-tap timing)
-local last_r3_tk = nil    -- tick of the previous R3 press
-local pending_open_tk = nil   -- R3 pressed; holding to see if a 2nd tap makes it a toggle
-local open_wait_tk = nil      -- tick we started waiting on the nav loop's deferred target build
+local last_r3_at = nil        -- os.clock() of the previous R3 press
+local pending_open_at = nil   -- R3 pressed; holding to see if a 2nd tap makes it a toggle
+local open_wait_at = nil      -- when we started waiting on the nav loop's deferred target build
 -- Opened from the KEYBOARD. Decides one thing only: whether "no pad snapshot" means the
 -- picker must be torn down (pad-opened: the pad went away mid-menu) or is the normal state
 -- (keyboard-opened on a machine with no pad at all).
@@ -121,11 +126,25 @@ local function do_open()
     -- than leave the player pressing R3 at nothing.
     local list = Nav.targets_cached(true)
     if not list then
-        open_wait_tk = open_wait_tk or tk
-        if (tk - open_wait_tk) * PadPoll.TICK_MS <= Nav.targets_build_ms() then return false end
+        open_wait_at = open_wait_at or os.clock()
+        local waited = (os.clock() - open_wait_at) * 1000
+        -- WAIT ON THE BUILD'S OWN SIGNAL, not only on an estimate (2026-08-03, user: the
+        -- FIRST R3 of a session always said "nothing to track", the second showed everything).
+        -- `Nav.targets_want` stays true for the whole chunked build and is cleared the instant
+        -- it publishes, so it is the build stating its own state; `targets_build_ms` cannot
+        -- know it on a cold session because it derives from telemetry no build has produced
+        -- yet, floors to 200 ms, and we gave up ~1 s early — on {} — and announced that there
+        -- was nothing to track while the quest marker was actively guiding. The estimate stays
+        -- as the FLOOR (it covers the case where the loop has not noticed the request yet, so
+        -- `targets_want` is not set), and the cap bounds the case it was really written for:
+        -- the nav loop gated or stuck, where `targets_want` would never clear at all.
+        if waited <= Nav.targets_build_ms()
+            or (Nav.targets_want and waited <= Nav.targets_wait_cap_ms()) then
+            return false
+        end
         list = Nav.targets_snap or {}
     end
-    open_wait_tk = nil
+    open_wait_at = nil
     Input.block(true)
     blocked = true
     open = true
@@ -226,7 +245,7 @@ local function handle_kb(cmd)
     if #cats == 0 then return end
     -- A real picker session: a later R3 must read as cancel, not as the second half of an
     -- explore double-tap (same reason the pad navigation clears it).
-    last_r3_tk = nil
+    last_r3_at = nil
     local n = #cats
     if cmd == "cat_next" then ci = ci % n + 1; ii = 1; announce_item(true) return end
     if cmd == "cat_prev" then ci = (ci - 2) % n + 1; ii = 1; announce_item(true) return end
@@ -242,7 +261,14 @@ end
 -- ---- per-tick step (game thread) ----------------------------------------------------
 
 local function step()
-    tk = tk + 1
+    -- The dispatch grid this menu needs, declared BEFORE every early return so a bail-out can
+    -- never leave the fast grid pinned (pad_poll.lua: slow by default, fast only on demand). The
+    -- ARMED double-tap window counts as needing it: tap 1 survives any grid because the native
+    -- latch caught it, but tap 2 has to be TIMED against tap 1, and two taps landing inside one
+    -- drain window collapse into a single latched bit (input_bridge.c ORs rising edges, it does
+    -- not count them). So once a first tap lands, the fast grid is what makes the second legible.
+    PadPoll.demand_fast("radar_menu",
+        open or draining or last_r3_at ~= nil or pending_open_at ~= nil)
     -- Transition gate FIRST (pure Lua + native pad calls only): a map switch is in
     -- progress — close the menu, drop the actor refs in `cats`, and NEVER leave the
     -- pad blocked across a level change.
@@ -252,7 +278,7 @@ local function step()
         blocked, open, draining, kb_open = false, false, false, false
         cats = {}
         prev_btn = 0
-        last_r3_tk, pending_open_tk = nil, nil
+        last_r3_at, pending_open_at = nil, nil
         if _G.__KakarotPadModal == "radar" then _G.__KakarotPadModal = nil end
         return
     end
@@ -296,7 +322,7 @@ local function step()
         Input.kb_block(0)
         blocked, draining = false, false
         prev_btn = 0
-        last_r3_tk, pending_open_tk = nil, nil
+        last_r3_at, pending_open_at = nil, nil
         if not kb_open then open = false end
         -- The keyboard picker still needs the field safety the pad path gets below: a
         -- battle or cutscene starting while it is open must close it.
@@ -310,11 +336,16 @@ local function step()
     local modal = _G.__KakarotPadModal
     if modal and modal ~= "radar" then
         prev_btn = snap.buttons
-        last_r3_tk, pending_open_tk = nil, nil
+        last_r3_at, pending_open_at = nil, nil
         return
     end
 
-    local function pressed(mask) return (snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0 end
+    -- Native latch first, level compare as the fallback — see the note in config_menu.lua: the
+    -- bare two-tick compare lost any tap that began and ended between two dispatches, which the
+    -- 100 ms default grid would have made routine.
+    local function pressed(mask)
+        return Input.pressed(mask) or ((snap.buttons & mask) ~= 0 and (prev_btn & mask) == 0)
+    end
 
     -- Draining: menu closed, waiting for a fully neutral pad before handing control
     -- back — so the A/R3/B that closed it isn't delivered to the game.
@@ -347,21 +378,22 @@ local function step()
         -- L3 held? this is the config-menu chord (config_menu.lua) — ignore R3 entirely
         -- so it neither opens the picker nor starts an explore double-tap.
         if pressed(B.RIGHT_THUMB) and not Input.down(snap, B.LEFT_THUMB) and Nav.field_ready() then
-            -- open_wait_tk belongs to the PREVIOUS tap's deferred open: clear it on both
+            local now = os.clock()
+            -- open_wait_at belongs to the PREVIOUS tap's deferred open: clear it on both
             -- branches so a new press never inherits a stale wait and opens on an empty list.
-            if last_r3_tk and (tk - last_r3_tk) <= DOUBLE_TAP_TICKS then
-                last_r3_tk, pending_open_tk, open_wait_tk = nil, nil, nil
+            if last_r3_at and (now - last_r3_at) <= DOUBLE_TAP_S then
+                last_r3_at, pending_open_at, open_wait_at = nil, nil, nil
                 Nav.toggle_explore()
             else
-                last_r3_tk, pending_open_tk, open_wait_tk = tk, tk, nil
+                last_r3_at, pending_open_at, open_wait_at = now, now, nil
             end
-        elseif pending_open_tk and (tk - pending_open_tk) > DOUBLE_TAP_TICKS then
+        elseif pending_open_at and (os.clock() - pending_open_at) > DOUBLE_TAP_S then
             -- Stay armed while do_open waits on the deferred target build, so this branch retries
             -- next tick instead of dropping the press. Cleared either way once it resolves.
             if not Nav.field_ready() then
-                pending_open_tk, open_wait_tk = nil, nil
+                pending_open_at, open_wait_at = nil, nil
             elseif do_open() then
-                pending_open_tk = nil
+                pending_open_at = nil
             end
         end
         prev_btn = snap.buttons
@@ -376,34 +408,35 @@ local function step()
     end
 
     if pressed(B.A) then                        -- A / Cross -> select + track
-        last_r3_tk, pending_open_tk = nil, nil
+        last_r3_at, pending_open_at = nil, nil
         do_close("select")
-    elseif pressed(B.RIGHT_THUMB) and last_r3_tk and (tk - last_r3_tk) <= DOUBLE_RESCUE_TICKS then
+    elseif pressed(B.RIGHT_THUMB) and last_r3_at
+        and (os.clock() - last_r3_at) <= DOUBLE_RESCUE_S then
         -- Slow explore double-tap: tap 1 auto-opened the picker; this tap 2 completes the
         -- toggle instead of merely cancelling the (unwanted) picker. Only when the player
-        -- did NOT navigate the picker in between (navigation clears last_r3_tk below).
-        last_r3_tk, pending_open_tk = nil, nil
+        -- did NOT navigate the picker in between (navigation clears last_r3_at below).
+        last_r3_at, pending_open_at = nil, nil
         do_close("cancel")
         Nav.toggle_explore()
     elseif pressed(B.RIGHT_THUMB) or pressed(B.B) then   -- R3 again / B -> close
-        last_r3_tk, pending_open_tk = nil, nil
+        last_r3_at, pending_open_at = nil, nil
         do_close(pressed(B.B) and "stop" or "cancel")
     elseif #cats > 0 then
         local n = #cats
         if pressed(B.RIGHT_SHOULDER) then      -- R1 -> next category
-            last_r3_tk = nil                   -- real picker session: a later R3 = cancel
+            last_r3_at = nil                   -- real picker session: a later R3 = cancel
             ci = ci % n + 1; ii = 1; announce_item(true)
         elseif pressed(B.LEFT_SHOULDER) then   -- L1 -> previous category
-            last_r3_tk = nil
+            last_r3_at = nil
             ci = (ci - 2) % n + 1; ii = 1; announce_item(true)
         else
             local m = #cats[ci].items
             if m > 0 then
                 if pressed(B.DPAD_DOWN) then
-                    last_r3_tk = nil
+                    last_r3_at = nil
                     ii = ii % m + 1; announce_item(false)
                 elseif pressed(B.DPAD_UP) then
-                    last_r3_tk = nil
+                    last_r3_at = nil
                     ii = (ii - 2) % m + 1; announce_item(false)
                 end
             end

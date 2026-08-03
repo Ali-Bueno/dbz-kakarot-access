@@ -807,6 +807,19 @@ function Core.array_of(owner, name, strict)
     return arr, n
 end
 
+-- Session-persistent scan ledger — cls -> { n, ms, found }, where `found` is the most
+-- instances a scan of that class has EVER returned this session. A class still at
+-- found=0 after a session of play is a GHOST: a name an adapter asks for that this game
+-- never instantiates, paying a full ~65 ms FindAllOf every ABSENT_BACKOFF forever.
+--
+-- Deliberately NOT reset by the Ctrl+F5 dump (unlike __KakarotScanStats below, which is
+-- a per-window cost sample): "never found" only means anything measured over a whole
+-- session. This ledger IS the offender list the perf note demands before ABSENT_BACKOFF
+-- is touched at all — "do NOT blind-tune ABSENT_BACKOFF without an offender list (it
+-- starves event-less popups)", 2026-07-17. Cleared only by a mod reload.
+local scan_ledger = {}
+function Core.scan_ledger() return scan_ledger end
+
 -- FindAllOf, timed: every full-object scan is accounted in _G.__KakarotScanStats so the
 -- Ctrl+F5 dump can attribute step cost to scans vs widget walks with data, not guesses.
 local function timed_findall(cls_name)
@@ -826,7 +839,24 @@ local function timed_findall(cls_name)
     if not b then b = { n = 0, ms = 0 } s.by[cls_name] = b end
     b.n = b.n + 1
     b.ms = b.ms + dt
+    local g = scan_ledger[cls_name]
+    if not g then g = { n = 0, ms = 0, found = 0 } scan_ledger[cls_name] = g end
+    g.n = g.n + 1
+    g.ms = g.ms + dt
+    local got = #r
+    if got > g.found then g.found = got end
     return r
+end
+
+-- The timed scan, for the call sites that cannot use the cache. Some lookups are
+-- genuinely raw by design (the nav sweep's actor classes, the navi-icon pool with its own
+-- 10 s cadence) — but until 2026-08-03 they were also INVISIBLE to the telemetry, which
+-- nav_tracker's own comment admitted: "it takes no scan slot and never routes through
+-- timed_findall, so __KakarotScanStats cannot even see it". A blind spot in the meter is
+-- worse than a blind spot in the cache: it makes the offender list lie by omission. This
+-- entry point adds accounting ONLY — no budget, no backoff, no behaviour change.
+function Core.findall(cls_name)
+    return timed_findall(cls_name)
 end
 
 -- First live (runtime, not archetype/CDO) instance of a class. PREFERS the shared
@@ -1087,6 +1117,25 @@ local function directory_list(cls_name, no_scan)
     return d.resolve(cls_name, no_scan)
 end
 
+-- "Is this a PLAYABLE world?" — the `mm` root (the gameplay GameMode's MenuManager) exists
+-- only in playable worlds and never at boot or on the title level, which `ui_directory`
+-- documents and `ui_registry` already trusts for its cutscene-quiet gate. Exposed here so a
+-- boot-only adapter can refuse to probe during gameplay: `Gametitle_C` and
+-- `AT_UIXcmnAgreement` cannot exist once a save is loaded, yet the 2026-08-03 dump caught
+-- them scanning 137 and 122 times for 18.1 s of game thread — 21% of ALL the time this
+-- session burned on classes that were never there. A directory-mapped class falls back to
+-- scanning when its own root is unreachable (the correct behaviour: an unreachable root
+-- cannot assert absence), so the title family scans forever exactly while it cannot possibly
+-- be on screen. This is the positive test, not the negative one: it says "we are in
+-- gameplay", never "the title is gone", and it fails to FALSE on any doubt, which leaves the
+-- previous behaviour intact.
+function Core.gameplay_world()
+    local d = dir_mod()
+    if not d then return false end
+    local ok, r = pcall(d.root_ok, "mm")
+    return (ok and r) and true or false
+end
+
 -- Real-time tick clock (100ms units). Backoffs used to run on each ADAPTER's private tick
 -- counter, which only advances when that adapter is polled — with the sticky registry
 -- (ui_registry) idle adapters are polled less often, so their counters would stretch every
@@ -1126,6 +1175,55 @@ local function jitter(cls_name)
     j = h % 16
     jitter_cache[cls_name] = j
     return j
+end
+
+-- Escalating backoff for a class that has NEVER been present, driven BY the offender list.
+--
+-- MEASURED, 2026-08-03 (Ctrl+F5, a 6.8-minute session of ordinary play): 1982 scans costing
+-- 119.5 s of game thread, of which **84.8 s — 71% — went to 42 classes that were never once
+-- found**. At ~60 ms a scan (worst 455 ms) and a flat 4 s cadence, those 42 want ~10 scans/s
+-- while the budget serves 2 per tick, so every REAL screen queues behind them. That is what
+-- the same dump's `ui step ms: max=925.0` is made of, and it is the mechanism behind both
+-- player reports: menus taking about a second before they can be navigated, and the radar
+-- being slow to resume tracking after a battle or a menu.
+--
+-- The perf note's rule ("do NOT blind-tune ABSENT_BACKOFF without an offender list — it
+-- starves event-less popups") is honoured, not broken: the ban was on tuning it BLIND, and
+-- every input here comes from the ledger. Three safeties, in order of how much they matter:
+--   * A class the ledger has EVER seen (found > 0) never escalates. `found` is a session
+--     high-water mark, not a streak, so one single sighting disarms this permanently.
+--   * QUIET_EXEMPT never escalates. That table is precisely the list of surfaces which
+--     appear with no user press — the "event-less popups" the rule was written about.
+--   * The boost window (a pad press, a screen commit) still bypasses the backoff entirely,
+--     so any screen the player OPENS is detected exactly as fast as before. This only ever
+--     slows the no-event fallback, from 4 s to at most 16 s.
+local GHOST_SCANS   = 6   -- empty scans per escalation step (all of them empty by definition)
+local GHOST_MAX_MUL = 4   -- 4 s -> 8 s -> 16 s, then flat
+
+-- PREDICATE classes: consulted constantly as "what state is the game in", not read as
+-- screens, and other machinery is gated on the answer. They must never escalate, and the
+-- reason they would have is subtle enough to be worth spelling out: the directory resolves
+-- all three by pointer, so their SCAN is only the fallback and therefore only ever runs when
+-- the screen is genuinely absent — which leaves them sitting in the ghost ledger at
+-- `found = 0` looking exactly like dead weight. They are the opposite: the minimap is the
+-- free-roam predicate AND the nav loop's world gate, so backing its fallback off to 16 s
+-- right after a load — when the directory roots have just been flushed and the pointer path
+-- is the one thing that cannot answer yet — would stall the whole radar. Found by tracing
+-- "the radar takes a long time to start tracking after loading a save" (2026-08-03).
+local NEVER_ESCALATE = {
+    ["AT_UIMiniMapRadar"]     = true, -- Core.free_roam + nav_tracker's world gate
+    ["Start_Top_C"]           = true, -- Core.ring_open
+    ["Battle_Hud_P_Main_C"]   = true, -- the battle predicate (ui_registry, screen_community)
+}
+
+local function absent_backoff(cls_name)
+    local g = scan_ledger[cls_name]
+    if not g or g.found > 0 or QUIET_EXEMPT[cls_name] or NEVER_ESCALATE[cls_name] then
+        return ABSENT_BACKOFF
+    end
+    local mul = 2 ^ math.floor(g.n / GHOST_SCANS)
+    if mul > GHOST_MAX_MUL then mul = GHOST_MAX_MUL end
+    return ABSENT_BACKOFF * mul
 end
 
 -- ---- resurrect probe: re-find a recreated screen WITHOUT FindAllOf -----------------
@@ -1284,7 +1382,7 @@ function Core.cached_live(cls_name, tick)
     if c then
         if PROBE_ENABLED then remember_path(cls_name, c) end
     else
-        live_backoff[cls_name] = tick + ABSENT_BACKOFF + jitter(cls_name)
+        live_backoff[cls_name] = tick + absent_backoff(cls_name) + jitter(cls_name)
     end
     return c
 end
@@ -1455,7 +1553,7 @@ function Core.cached_all(cls_name, tick)
             -- that consumes the recorded paths is actually on.
             if alive and PROBE_ENABLED then remember_from_list(cls_name, c) end
             all_next[cls_name] = tick + (alive and REFRESH_EVERY
-                or ((#c > 0 and DEAD_BACKOFF or ABSENT_BACKOFF) + jitter(cls_name)))
+                or ((#c > 0 and DEAD_BACKOFF or absent_backoff(cls_name)) + jitter(cls_name)))
             return c
         end
         c = c or {}
@@ -1577,7 +1675,18 @@ end
 -- CLAUDE.md §8): ESlateVisibility Visible(0) — a parked pooled widget keeps rendering
 -- under another state — AND RenderOpacity > ~0 (close animations fade to 0 while the
 -- visibility flags lag). Both pcall-guarded: an unreadable signal counts as live.
-function Core.pane_live(h)
+--
+-- `strict` inverts ONLY the visibility half: an unreadable enum then counts as NOT live.
+-- Three adapters (pause, title, palette) had each hand-rolled their own
+-- `pcall(GetVisibility) == 0` for exactly this, and every one of them was a documented
+-- fix — the title must not blurt "Main menu" over the intro movie, where the widget is
+-- on screen as HitTestInvisible, and the pause pane stays resident during battle. Copying
+-- the substrate's test minus its opacity half into three files is how the fishresult
+-- lesson repeated itself ("when a fix is about the shared substrate, put it in the
+-- substrate"), so the option lives here instead. Fail-closed is right for these three and
+-- only these three: the cost of a wrong claim is a screen shadowing everything below it,
+-- the cost of a wrong refusal is one silent tick on a pane that could not answer anyway.
+function Core.pane_live(h, strict)
     -- The playbook makes this the mandatory liveness test for EVERY pooled-pane adapter, and
     -- an adapter calls it with the handle it cached on entry — i.e. precisely the handle most
     -- likely to have been freed since. Yet until 2026-07-26 it went straight to a method call
@@ -1590,6 +1699,7 @@ function Core.pane_live(h)
     if not Core.valid(h) then return false end
     local ok, v = pcall(function() return h:GetVisibility() end)
     if ok and tonumber(v) ~= nil and tonumber(v) ~= 0 then return false end
+    if strict and not (ok and tonumber(v) == 0) then return false end
     local ok2, op = pcall(function() return h:GetRenderOpacity() end)
     if ok2 and type(op) == "number" and op < 0.05 then return false end
     return true
@@ -1887,44 +1997,36 @@ end
 -- a fullscreen movie, etc.), those queued steps pile up into a backlog that then runs
 -- late and in bursts — felt as long delays when navigating a menu. So we only queue a
 -- new step once the previous one has finished, keeping the reader on the CURRENT state.
+-- The menu reader's periodic step. Since 2026-08-02 this does NOT own a LoopAsync: it registers
+-- on the shared tick bus (pad_poll.lua), which explains there why five separate LoopAsync loops
+-- were a per-second data race inside UE4SS rather than merely five loops. The generation guard
+-- that used to retire a stale loop here is gone with it — the bus owns retirement, and
+-- re-registering the same name replaces the old closure outright.
 function Core.loop(step, should_run)
-    _G.__KakarotUiGen = (_G.__KakarotUiGen or 0) + 1
-    local myGen = _G.__KakarotUiGen
-    local busy = false
-    LoopAsync(Core.POLL_MS, function()
-        if _G.__KakarotUiGen ~= myGen then return true end
-        -- Stop polling when the owner disables the reader (Registry.stop → Ctrl+M
-        -- "reader off"): returning true ends this LoopAsync. Registry.start re-arms
-        -- it with a fresh Core.loop. Without this the loop kept announcing after off.
-        if should_run and not should_run() then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                -- Clear the queue guard on ENTRY, not exit: some engine errors on this
-                -- game are C++ exceptions pcall cannot catch — they kill this callback
-                -- mid-flight, and a still-true `busy` would silence the loop for the
-                -- whole session (seen live 2026-07-04 with the radar menu). Clearing
-                -- here keeps the anti-pile-up purpose (the game thread runs this
-                -- atomically, so at most one extra step queues while we run).
-                busy = false
-                -- One FindAllOf budget per poll tick (see Core.cached_live) — bounds the
-                -- per-tick scan cost so simultaneous back-off expiries can't spike.
-                Core.begin_scan_tick()
-                -- Step timing telemetry (read via Ctrl+F5's nav dump): the max/avg
-                -- game-thread cost of one reader tick, to pin lag spikes with data.
-                local t0 = os.clock()
-                local ok, err = pcall(step)
-                local dt = (os.clock() - t0) * 1000
-                local st = _G.__KakarotStepStats
-                if not st then st = { max = 0, n = 0, sum = 0 } _G.__KakarotStepStats = st end
-                if dt > st.max then st.max = dt end
-                st.n = st.n + 1
-                st.sum = st.sum + dt
-                if not ok then print("[KakarotAccess] UI step error: " .. tostring(err) .. "\n") end
-            end)
-        end
-        return false
-    end)
+    -- Lazily required: pad_poll requires THIS module at its top level, so a top-level require
+    -- here would be a cycle — `package.loaded` is not set until a module returns, so the second
+    -- require would re-execute this file from the top. By the time anything calls Core.loop both
+    -- modules have long since finished loading.
+    local Poll = require("pad_poll")
+    -- `should_run` is handed to the bus unchanged: when the owner disables the reader
+    -- (Registry.stop → Ctrl+M "reader off") the stepper retires itself, and Registry.start
+    -- re-arms it with a fresh Core.loop. Without it the reader kept announcing after off.
+    Poll.register_every("ui", Core.POLL_MS, function()
+        -- One FindAllOf budget per poll tick (see Core.cached_live) — bounds the
+        -- per-tick scan cost so simultaneous back-off expiries can't spike.
+        Core.begin_scan_tick()
+        -- Step timing telemetry (read via Ctrl+F5's nav dump): the max/avg
+        -- game-thread cost of one reader tick, to pin lag spikes with data.
+        local t0 = os.clock()
+        local ok, err = pcall(step)
+        local dt = (os.clock() - t0) * 1000
+        local st = _G.__KakarotStepStats
+        if not st then st = { max = 0, n = 0, sum = 0 } _G.__KakarotStepStats = st end
+        if dt > st.max then st.max = dt end
+        st.n = st.n + 1
+        st.sum = st.sum + dt
+        if not ok then print("[KakarotAccess] UI step error: " .. tostring(err) .. "\n") end
+    end, nil, should_run)
 end
 
 return Core

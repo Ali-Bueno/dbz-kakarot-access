@@ -414,36 +414,24 @@ function Quest.start()
     -- stepper is defined BELOW this function: a direct local reference here would compile to a
     -- global read and be nil at runtime, which is the mistake the globals lint exists to catch.
     Quest.start_pad()
-    _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
-    local myGen = _G.__KakarotQuestGen
-    local busy = false
-    LoopAsync(TICK_MS, function()
-        if _G.__KakarotQuestGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                busy = false   -- cleared on entry (see ui_core.loop rationale)
-                local t0 = os.clock()
-                local ok, err = pcall(step)
-                if not ok then print("[KakarotAccess] quest step error: " .. tostring(err) .. "\n") end
-                -- Cost telemetry (own loop, outside the registry step — printed by
-                -- the Ctrl+F5 dump; the last unmeasured game-thread work).
-                local dt = (os.clock() - t0) * 1000
-                local st = _G.__KakarotQuestStats
-                if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotQuestStats = st end
-                st.n = st.n + 1
-                st.ms = st.ms + dt
-                if dt > st.max then st.max = dt end
-            end)
-        end
-        return false
+    PadPoll.register_every("quest", TICK_MS, function()
+        local t0 = os.clock()
+        local ok, err = pcall(step)
+        if not ok then print("[KakarotAccess] quest step error: " .. tostring(err) .. "\n") end
+        -- Cost telemetry (outside the registry step — printed by the Ctrl+F5 dump).
+        local dt = (os.clock() - t0) * 1000
+        local st = _G.__KakarotQuestStats
+        if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotQuestStats = st end
+        st.n = st.n + 1
+        st.ms = st.ms + dt
+        if dt > st.max then st.max = dt end
     end)
 end
 
 function Quest.stop()
     running = false
     Quest.stop_pad()
-    _G.__KakarotQuestGen = (_G.__KakarotQuestGen or 0) + 1
+    PadPoll.unregister("quest")
 end
 
 -- Diagnostic dump (dumps/dump_quest.txt), appended on every F10 press while DUMP is

@@ -263,9 +263,21 @@ local function step()
         -- "Main menu, Continue" in the short gaps between boot dialogs (Checking system
         -- data / do not turn off / Saving data) where it's briefly the only screen up.
         local need = (cur and cur.confirm_ticks) or CONFIRM_TICKS
-        if cur ~= pending then pending, pending_n = cur, 1 return end
-        pending_n = pending_n + 1
-        if pending_n < need then return end
+        -- `confirm_ticks = 1` used to be INERT (fixed 2026-08-03). The first-sighting branch
+        -- returned unconditionally, so a candidate could never commit before its SECOND tick
+        -- and `= 1` behaved exactly like the default 2. Five adapters set it believing they had
+        -- opted out of the debounce — fishing, saveload, skillcustom, skilltree and every
+        -- screen_list instance (items, dragon balls) — and each was paying a 100 ms tax it had
+        -- declined. The playbook's rule is explicit that a deliberately-opened sub-screen sets
+        -- it to 1 because the global debounce exists only for screens that FLASH AT BOOT, so
+        -- honour that: one tick means commit on sight.
+        if cur ~= pending then
+            pending, pending_n = cur, 1
+            if pending_n < need then return end
+        else
+            pending_n = pending_n + 1
+            if pending_n < need then return end
+        end
         -- Context change confirmed: reset both so nothing leaks across the switch and the
         -- newly focused screen announces its current control fresh.
         local prev = active

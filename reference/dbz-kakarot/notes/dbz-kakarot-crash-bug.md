@@ -1,5 +1,244 @@
 # dbz-kakarot-crash-bug
 
+> **2026-08-03 — THE INSERT RATE CAME DOWN 5× WITHOUT COSTING THE D-PAD ANYTHING, BECAUSE THE MOD
+> ALREADY OWNED THE FIX AND THREE FILES NEVER ADOPTED IT.** Follow-up to the entry below. The
+> question was whether the `lua_instances` race could be starved further than the loop merge
+> managed (~77 → ~50 inserts/s) without slowing the 20 ms pad dispatch.
+>
+> **THE ANSWER WAS ALREADY IN `input_bridge.c`.** The native latch is fed by the IAT hook on the
+> GAME's own `XInputGetState` call, at render-frame rate, into an interlocked accumulator
+> (`note_buttons`, `:220-224`), and Lua only DRAINS it (`l_take_edges`, `:467-470`). Its own
+> comment states the consequence outright: *"A press cannot be lost however late or irregular the
+> drain is; at worst it is served a frame or two later."* So the dispatch rate was never what
+> caught presses — **except** that only `quest_read` and `map_travel` ever asked `Input.pressed`.
+> `config_menu:179`, `radar_menu:317` and `screen_status:237` each rolled a private two-tick LEVEL
+> compare, which can only see a button still HELD at dispatch time. Those three were the entire
+> reason the bus "needed" 50 Hz — and they were already losing any tap that began and ended
+> between two dispatches, which the busy guard makes possible today.
+>
+> **PRE-EXISTING BUG FOUND ON THE WAY.** `radar_menu`'s double-tap window was counted in
+> DISPATCHES — `DOUBLE_TAP_TICKS = 20` under the comment "~400 ms at the 20 ms pad tick". The
+> relax gate already drops the bus to 100 ms during cutscene subtitles and map loads, so **in that
+> state the window was really 2 seconds**, not 400 ms. Same for `DOUBLE_RESCUE_TICKS` and
+> `do_open`'s `(tk - open_wait_tk) * PadPoll.TICK_MS`. A gesture window measured in ticks is a
+> latent bug the moment anything can change the tick rate; measure gestures in wall time.
+>
+> **SHIPPED (SOURCE-ONLY, UNVERIFIED IN GAME):**
+> 1. The three holdouts now use `Input.pressed(mask) or (level compare)` — the belt-and-braces form
+>    `screen_map`'s `ft_pressed` always used.
+> 2. `radar_menu`'s three windows converted to `os.clock()` seconds (`DOUBLE_TAP_S = 0.40`,
+>    `DOUBLE_RESCUE_S = 0.68`); `tk` deleted.
+> 3. `pad_poll.lua` is **slow by default**: a 100 ms grid, lifted to 20 ms only while a stepper
+>    calls `Poll.demand_fast(name, true)`. The four pad menus declare their demand at the TOP of
+>    their step, above every early return, so a bail-out can never pin the fast grid.
+>    `Poll.unregister` clears the demand for the same reason. `relax` OUTRANKS the demand (a menu
+>    open across a load rides the slow grid, like every other consumer there), which is also what
+>    keeps the old relax gate meaningful instead of dead: its grid and the new default are the
+>    same 100 ms, so the only thing it still decides is whether fast may win.
+>    Steady-state dispatch: **~10/s in ordinary play, 50/s only while a d-pad menu is open.**
+>    The `DUE_SLACK_S` half-tick added the day before is now load-bearing rather than defensive —
+>    the 100 ms grid IS the aliasing case for the 100 ms registry stepper.
+>
+> **RESOLVED THE SAME DAY — THE PER-FRAME BLUEPRINT TICK EXISTS AND IS NAMED:**
+> **`/Game/System/BP_ATGameModeMain.BP_ATGameModeMain_C:ReceiveTick`** (`float DeltaSeconds`).
+> Declared at `CXXHeaderDump\BP_ATGameModeMain.hpp:11`, object-dump line 155301. Everything the
+> hook needs, verified against a fresh IN-GAMEPLAY capture (2026-08-03, map `Area11_P`):
+> - **Blueprint bytecode** — the class carries `UberGraphFrame` + `ExecuteUbergraph_BP_ATGameModeMain`,
+>   so `RegisterHook` takes UE4SS's `script_hook` path (`LuaMod.cpp:3463`), which holds
+>   `m_thread_actions_mutex` AND wraps the call in `TRY` (`:3587`). That is the SAFE branch — the
+>   native branch (`:111-215`/`:216-360`) has neither and would be worse than what we have.
+> - **Singleton, always alive during gameplay** — exactly 1 live instance (`BP_ATGameModeMain_C_0`
+>   in `Area11_P:PersistentLevel`), engine-guaranteed; and it does real per-tick work
+>   (`UpdateDitherOcclusionMPCParameters`), so it is not a vestigial stub.
+> - **Rejected alternatives, recorded so nobody re-evaluates them:** `Icon_New_C:Tick` swings
+>   between 0 and 51+ concurrent instances depending which list menu is open — a genuinely bad
+>   target; `Fish_Pawn_C`, `Ani005p1c01_Skeleton_AnimBP_C` and `TownTalkAnimBlueprint_C` all had
+>   0 live instances; the 9 Blueprint behaviour-tree nodes override only `ReceiveTickAI`, never
+>   `ReceiveTick`. Second-best real candidate: `AT_GameHUD_BP_C:ReceiveDrawHUD(int32, int32)`
+>   (`AT_GameHUD_BP.hpp`), also Blueprint, also 1 live instance, on the HUD-draw path.
+> - **BEFORE BUILDING ON IT, check the map question:** a GameMode is PER MAP. `BP_ATGameModeMain_C`
+>   is the field/gameplay one; the title screen uses `BP_GameModeTitle_C` (and native
+>   `AATTitleGameMode`, `AT.hpp:14115`), so the hook does not fire there — fine in itself, but the
+>   mod must keep a fallback heartbeat rather than assume the hook is always live, and battle or
+>   other sub-maps may well use a different GameMode again. Verify before removing the tick bus.
+>
+> **…AND IT CRASHED THE GAME AT BOOT ON THE FIRST TRY — `ENABLED = false` until diagnosed.**
+> `EXCEPTION_ACCESS_VIOLATION reading 0x00000010` (the `UObjectBase::ClassPrivate` read), on launch.
+> **The black box localised it in one read, which is the point of having one:** `crash_trail.bin`
+> held **0 marks for that session**, and `dispatch()`'s very first statement is `Mem.mark`, so the
+> process died before any dispatch ran; `UE4SS.log` stops at UE4SS's own `Event loop start`, right
+> after "Lua loaded. Accessibility active."; and `Poll.pump` calls `Hook.arm` ABOVE the mark. No
+> "tick hook installed" line, so `RegisterHook` was never reached — which leaves the
+> `StaticFindObject` existence probe, i.e. **the half of the design that existed to be the safe one.**
+> Hypothesis, NOT proven: at boot `class_off` has not derived CLASS_OFF yet, so `Mem.alive` fails
+> OPEN by design, `Core.valid` degrades to a bare `IsValid()`, and `IsValid` dereferences whatever
+> the lookup returned during async load. **Lesson: "the probe is safer than the thing it guards" is
+> a claim about steady state; at BOOT the mod's own guards are not armed yet, and every safety
+> argument that leans on them is void.** When retried: arm from `Core.free_roam` (gameplay = class
+> loaded = pre-check armed), never from boot, and do not probe by object path at all.
+> **Second defect, caught in the same pass:** `pad_poll`'s `require("tick_hook")` was a HARD
+> require, so the "deleting this file is the rollback" its own header promised would instead have
+> produced a mod that fails to load — total silence for a blind player. Now `pcall`'d. **A rollback
+> path that has never been exercised is not a rollback path.**
+>
+> **IMPLEMENTED the same day, in `tick_hook.lua`** (its own file, on the `header_hook.lua`
+> precedent: if hooking ever destabilises this game the rollback is deleting the file). Shape:
+> - `pad_poll.Poll.pump` is now the ONE game-thread entry point and owns the cadence gate, because
+>   the two drivers arrive at different rates — the hook on the game's frame cadence, the loop at
+>   `TICK_MS` — and only a wall-clock gate makes the result identical either way. Fast grid =
+>   every call (~16.7 ms from the hook, BETTER than the 20 ms the loop could offer); slow grid =
+>   an exact 100 ms gate.
+> - The LoopAsync became a **watchdog**: it queues NOTHING while `_G.__KakarotTickBeat` is
+>   advancing, and takes over after `HOOK_GRACE_TICKS` (5) quiet ticks. The comparison is an
+>   integer read plus an integer compare — no C call on the shared `lua_State`, which is the only
+>   access class that worker thread is allowed.
+> - **The hook closure captures nothing**: it bumps the beat and calls `_G.__KakarotTickFn`. That
+>   is what makes Ctrl+Shift+R safe — a reload swaps the function behind the global while the
+>   installed hook (which cannot be re-registered without leaking a second one) keeps calling live
+>   code. `_G.__KakarotTickInstalled` prevents a second registration.
+> - **Existence probe BEFORE `RegisterHook`, and this ordering is load-bearing.** UE4SS's
+>   `RegisterHook` binding calls `throw_error` on an unresolved path, and that C++ throw pierces
+>   pcall — from inside the dispatch it would have aborted the remaining steppers on every retry,
+>   twice a second, for as long as the player sat at the title screen. `Core.valid(StaticFindObject
+>   (path))` has no such failure mode (a miss is a null cpp object, and the handles the validity
+>   test faults on are FREED ones, which StaticFindObject cannot return — mem.lua:192-195).
+> - Retry is local and **never expires**, deliberately NOT `Mem.find_object`: that resolver gives
+>   up past a deadline, which is right for an object that should already exist and wrong here,
+>   where absence is the expected state for the whole time the player is at the title screen.
+> - The lint earned its keep again: it rejected the first draft's bare `o:IsValid()`.
+>
+> **CORRECTIONS TO THE PARAGRAPH THIS REPLACES (it was wrong twice):**
+> - **Do NOT set `LoadAllAssetsBefore*=1`.** The installed `UE4SS-settings.ini` keeps both at `0`
+>   with a comment recording that raising them is a FATAL `AutoDebugMainUI_C` crash on this game.
+>   It was also unnecessary: the flag force-loads assets that are NOT resident, whereas the whole
+>   point here is to capture what IS resident during gameplay.
+> - **The dumps were not "gone".** A `CXXHeaderDump\` from 2026-07-21 was present in the game
+>   folder all along — it was simply captured AT THE TITLE SCREEN, which is why `AT_GameHUD_BP_C`
+>   and `BP_ATGameModeMain_C` both dumped as `class X_C {}; // Size: 0x0` and the search came back
+>   empty. The fresh in-gameplay capture resolved **1,750 `_C` classes with zero broken stubs**
+>   (the only 9 remaining zero-size entries are Unreal's own `Default__*` placeholder types).
+>   **A dump is only as good as the game state it was taken in — record that state with it.**
+>
+> **[SUPERSEDED — kept for the reasoning] THE COMPLETE FIX EXISTS BUT IS BLOCKED ON A DUMP PASS.**
+> Source-verified: **`ExecuteInGameThread` is the ONLY Lua API in `LuaMod.cpp` that allocates a
+> state per call.** All 17 other `make_hook_state` sites sit inside `register_function` bodies,
+> i.e. registration time; `RegisterHook`'s state is created once at `:2977` and stored by
+> reference in `LuaUnrealScriptFunctionData`, so its dispatchers do ZERO inserts. A `RegisterHook`
+> heartbeat on a per-frame UFunction would therefore take the steady-state insert rate to **zero**
+> — and with no `LoopAsync` queued, `process_delayed_actions` executes no Lua at all, leaving the
+> game thread as the sole Lua executor, which kills the shared-`global_State` concurrency too.
+> Two conditions, one met and one not:
+> - **MET:** `Enabling custom events` appears in all four user logs, and `ProcessInternal` resolves
+>   (`0x7ff6b6e07db0`); `ProcessLocalScriptFunction` is `0x0`, which did not block it.
+> - **NOT MET:** no per-frame **Blueprint** UFunction is known in this game. The BP branch is the
+>   one that matters — `script_hook` (`:3463`) takes `m_thread_actions_mutex` AND wraps the call in
+>   `TRY` (`:3587`), while the NATIVE branch (`:111-215`/`:216-360`) has **neither**, making it
+>   worse than what we have. Across all 216 dumps in the repo there is exactly one BP `Tick`:
+>   `Icon_New_C:Tick`, the "new" badge on Options-menu rows — alive only while Options is open.
+>   No `ReceiveTick`, no `BlueprintUpdateAnimation`, no `ReceiveDrawHUD` anywhere.
+> Two signals arguing it may not exist at all: the game's own widget base `UATUIUserWidget` (131
+> subclasses) exposes `SetForceTick(bool)`, i.e. this game gates widget ticking explicitly; and
+> `header_hook.lua` already established that its UI navigation is C++-direct, not ProcessEvent.
+> **To settle it:** regenerate the dumps (they are absent from the repo AND the game folder — see
+> STATUS.md) with Ctrl+H (`LoadAllAssetsBeforeGeneratingCXXHeaders=1`, revert after) and Ctrl+J on
+> the battle HUD / a character screen, and look for an own-class `Tick`/`ReceiveTick` sitting next
+> to an `UberGraphFrame` + `ExecuteUbergraph_*` pair. If one exists, it replaces the whole adaptive
+> grid; if it does not, the adaptive grid is the answer and this question is closed.
+
+> **2026-08-02 — FOUR CRASHES, ONE ENGINE BUG UNDERNEATH: `ExecuteInGameThread` RACES UE4SS'S OWN
+> `lua_instances` MAP, AND OUR GUARD TURNED ONE SURVIVABLE HIT INTO A DEAD SESSION.** Evidence: four
+> `UE4SS.log`s and three `crash_trail.bin`s from one player. **Only ONE log contains a Lua error at
+> all**; the other three end mid-loop with nothing logged. That asymmetry is the whole story, and it
+> is why "read the log first" nearly sent this the wrong way.
+>
+> | Log | Span | Lua error | Pre-check | Trail |
+> |---|---|---|---|---|
+> | `UE4SS (2).log` | 22:09 → 00:09 (2 h) | **yes**, 22:12:44 | **DISABLED** | one of the two long ones |
+> | `UE4SS (3).log` | 00:13 → 01:50 | no | ok (3 rejects, `cls=0`, all distinct addrs) | the other long one |
+> | `UE4SS.log` | 22:52 → 23:11 | no | ok (1 reject, `cls=0x1FFFFFFF7`) | `crash_trail.bin` (302,392 marks) |
+> | `UE4SS (1).log` | 02:02 → 02:22 | no | clean | — |
+>
+> `crash_trail.bin` ↔ `UE4SS.log` is certain (the trail ends looping `ui.update screen_characters`;
+> the log's last line is `screen -> screen_characters`). The two long trails cannot be told apart —
+> both end identically in free roam on `pad.tick`, so it does not matter. No session reloaded the mod.
+>
+> **ROOT CAUSE, SOURCE-VERIFIED against RE-UE4SS @ `7d6f790` (the build in the banner).** The one
+> logged error was:
+> `Error: [process_lua_function] The lua state '0x1bdc56cfbc8' has no instance inside lua_instances
+> unordered map`, with the traceback's TOP frame `[C]: in metamethod 'index'` and the bottom frame our
+> `ExecuteInGameThread` callback (`ui_core.lua:1912`). The chain:
+> - `ExecuteInGameThread` creates a **brand-new `lua_State` on every call** — `LuaMod.cpp:3057-3091`
+>   → `make_hook_state` (`:701-705`, whose dedup `if (!mod->m_hook_lua)` is **commented out**) →
+>   `Lua::new_thread` → `lua_newthread` + `lua_instances.emplace` (`LuaMadeSimple.cpp:761-762`).
+> - `lua_instances` is `static std::unordered_map<lua_State*, ...>` (`LuaMadeSimple.cpp:11`) with **no
+>   mutex anywhere in the TU and no `erase` anywhere at all** — append-only for the process lifetime.
+> - The `emplace` runs on the **async thread and OUTSIDE** the mutex taken at `:3080`, while the
+>   **game thread** reads the same map (`contains`/`find`, `:872`/`:877`) from `process_lua_function`
+>   — the dispatcher behind *every* `__index` metamethod and every UE4SS function.
+> - A read that loses that race calls `throw_error` (`:813-819`) → `throw std::runtime_error`. **Lua
+>   is compiled as C** (`LuaRaw/xmake.lua` lists `.c` files; `ldo.c:55-77` therefore takes the
+>   `setjmp` branch, with no `catch(...)` in the VM), so the C++ throw **pierces `pcall`**. This is
+>   the source-level proof of the "uncatchable throw" rule the playbook already carried.
+> - It was **caught and logged** because the `ExecuteInGameThread` path has a `TRY(...)` at
+>   `LuaMod.cpp:2938` (`ExceptionHandling.hpp:23-31` produces exactly that `Error: {}` line). The game
+>   survived it. Paths with **no** catch are `lua_unreal_script_function_hook_pre/post`
+>   (`LuaMod.cpp:111-215` / `216-360`, Lua called at `:202`/`:357`) — i.e. `RegisterHook`.
+>
+> **THE AMPLIFIER — OUR BUG, AND THE ONE THAT ACTUALLY COST THE SESSION.** `Mem.alive` marked a
+> transactional `guard.pending = true`, called `Mem.raw_addr`, then cleared it. The throw unwound
+> straight past the clear, so `pending` stayed true **forever**; the next call read that, set
+> `guard.disabled = true` and returned `true` for everything from then on. The mod's only guard that
+> runs OUTSIDE the scripting VM was off **three minutes into a two-hour session**, which puts
+> `Core.valid` back to a bare `IsValid` — the call that dereferences before its own lookup. The game
+> then ran unguarded for two hours and died of exactly the dangling-handle class the guard exists to
+> stop. `guard` lives in `_G` and nothing ever reset `disabled`, so not even Ctrl+Shift+R recovered it.
+>
+> **THE MESSAGE BLAMED THE WRONG THING, which is why "the caller" was never found.** It read *"a
+> non-UObject handle reached Mem.alive — find the caller"*. There was no such caller: the object was a
+> live `UGameInstance` (`ui_directory.lua:213`, the world-epoch root) and the failure happened in the
+> `__index` metamethod, **before the UObject was touched at all**. A diagnostic that names one cause
+> for a symptom with two causes is worse than no diagnostic — it ends the investigation.
+>
+> **FIXED (SOURCE-ONLY, UNVERIFIED IN GAME):**
+> 1. `mem.lua` — the guard is now **self-healing**. An unwound attempt is cleared, counted and
+>    logged, and the pre-check **stays on**. Only `MAX_ALIVE_STREAK` (8) *consecutive* unwound
+>    attempts, with no completed check between them, disable it — the signature of a genuinely bad
+>    handle (which raises on every call) and unreachable by the race (observed once in ~500k
+>    dispatches). Any completed check resets the streak. Both log lines now name both causes.
+> 2. `pad_poll.lua` is now the mod's **single tick bus**: one `LoopAsync` + one
+>    `ExecuteInGameThread` for everything. `Poll.register_every(name, period_ms, fn, on_error,
+>    should_run)` joins the existing per-tick `Poll.register`. The four subsystems that each owned a
+>    `LoopAsync` — `Core.loop` (100 ms), `Nav` (100 ms), `Battle` (250 ms), `Quest` (300 ms) — are now
+>    steppers on it, and their `_G.__Kakarot*Gen` generation guards are gone (the bus owns
+>    retirement; re-registering a name replaces the closure). **~77 `lua_newthread` + unsynchronized
+>    `emplace` per second → ~50**, and four of the five race generators removed. Dispatch runs pad
+>    steppers first (input latency), then the periodic ones, in registration order — deterministic,
+>    because `pairs()` is not and the quest/battle steps read verdicts the registry step computes.
+>    Due-ness is **wall-clock** (`next_at`), so a dispatch dropped by `busy` or the relax gate delays
+>    a step instead of shifting the cadence, with half a bus tick of slack so a 100 ms stepper cannot
+>    alias to 200 ms on the 100 ms relaxed grid.
+>
+> **NOT FIXED, and it is the bigger one.** Merging the loops *reduces* the race, it does not remove
+> it: the bus still calls `ExecuteInGameThread` 50×/s, so 50 unsynchronized inserts/s remain, and two
+> threads still execute Lua on one shared `global_State` (allocator, incremental GC, string table)
+> with no mutual exclusion — the substrate this file already flagged at the 07-29 entry. That is the
+> best available explanation for the three crashes with **no** Lua error and a working pre-check, and
+> it fits the two-hour fuse better than the map race does. Going lower means slowing the 20 ms pad
+> loop, which is an input-latency trade the player has to choose.
+>
+> **DEAD ENDS / CORRECTIONS, so nobody re-runs them:**
+> - **`RegisterHook` is NOT live in this mod.** `header_hook.lua:34` `Hook.install()` has been a
+>   no-op since 2026-07-02; the `RegisterHook` call survives only in `_install_experimental()`, which
+>   nothing calls. So the one uncatchable path UE4SS leaves open is not one we are standing on. (A
+>   subagent asserted it was live off a raw grep hit — check whether the *caller* exists.)
+> - The final crash is `0xe06d7363`, a **C++ throw**, not the `0xc0000005` a dangling deref gives.
+>   The structural candidate is `get_function_ref` at `LuaMod.cpp:2937`, which sits **outside** the
+>   `TRY` on the next line — same throw, no handler. **Inferred, not proven**: the user's dump has no
+>   symbols.
+> - `nav_tracker.lua`'s main chunk is at Lua's hard ceiling of **200 locals**. Adding one top-level
+>   `local` fails to compile outright; `require("pad_poll")` is called inside `Nav.start`/`Nav.stop`
+>   for that reason. `tools/lint-lua.ps1` catches it, and did.
+
 > **2026-07-31 (c) — THE STREAMER'S TRAIL NAMED THE SITE OUTRIGHT: DIED INSIDE `pad.tick`, INSIDE THE
 > RADAR PICKER'S OWN DEFERRED TARGET SWEEP.** `crash_trail.bin` decoded with
 > `tools/read-crash-trail.ps1`: 201,275 marks (~11 minutes), ordinary free-roam walking, last op

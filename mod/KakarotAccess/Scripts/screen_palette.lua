@@ -153,9 +153,9 @@ function Palette.is_active()
     -- claimed the tick, and the next tick faulted again — 23 flips in 10 s in the user's log,
     -- audible as the whole screen re-announcing over and over (2026-07-28).
     if not nodes then state = nil return false end
-    local he
-    pcall(function() he = tonumber(host:GetVisibility()) end)
-    if he ~= 0 then state = nil return false end
+    -- Strict pane_live: same enum test this used to hand-roll (unreadable = not open),
+    -- plus the substrate's fade check.
+    if not Core.pane_live(host, true) then state = nil return false end
     local msg = nodes.msg and box_text(nodes.msg) or nil
     local sel = selected_bar()
     local name

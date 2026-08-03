@@ -43,13 +43,20 @@ local gate_name = nil    -- focused option first seen while settling; a differen
 
 function Title.is_active()
     tick = tick + 1
+    -- Cheap precondition, FIRST (2026-08-03). The title screen cannot exist in a playable
+    -- world, but `Gametitle_C` is directory-mapped under the TITLE root — and a mapped class
+    -- whose root is unreachable correctly falls back to scanning, so during gameplay this
+    -- adapter paid a full FindAllOf every backoff for the whole session: the measured dump
+    -- caught 137 scans / 9.6 s, every one of them empty and none of them possible.
+    if Core.gameplay_world() then return false end
     gt = Core.cached_live("Gametitle_C", tick)   -- cheap: cached ref, no per-tick scan
     if not Core.on_screen(gt) then return false end
     -- Only when the title is truly INTERACTIVE (ESlateVisibility.Visible == 0). During the
     -- intro cinematic the title is on-screen but HitTestInvisible (enum 3) — rendered, not
-    -- usable — so we must not blurt "Main menu" over the movie.
-    local ok, v = pcall(function() return gt:GetVisibility() end)
-    return ok and tonumber(v) == 0
+    -- usable — so we must not blurt "Main menu" over the movie. Strict, for that reason:
+    -- an unreadable enum must not claim. The substrate adds the fade check for free, which
+    -- also keeps us quiet while the title fades in.
+    return Core.pane_live(gt, true)
 end
 
 function Title.reset()

@@ -230,11 +230,19 @@ local pad_running = false
 local pad_prev = 0        -- button mask last seen, for edge detection
 
 local function pad_step()
-    if Transition.active() or Registry.active_adapter() ~= Status then pad_prev = 0 return end
+    local mine = not Transition.active() and Registry.active_adapter() == Status
+    -- The dispatch grid this page needs, declared BEFORE the early return so a screen change can
+    -- never leave the fast grid pinned (pad_poll.lua: slow by default, fast only on demand).
+    PadPoll.demand_fast("status_pad", mine)
+    if not mine then pad_prev = 0 return end
     local snap = Input.read()
     if not snap then pad_prev = 0 return end
     local B = Input.BTN
-    local function pressed(m) return (snap.buttons & m) ~= 0 and (pad_prev & m) == 0 end
+    -- Native latch first, level compare as the fallback — see the note in config_menu.lua: the
+    -- bare two-tick compare lost any tap that began and ended between two dispatches.
+    local function pressed(m)
+        return Input.pressed(m) or ((snap.buttons & m) ~= 0 and (pad_prev & m) == 0)
+    end
     if pressed(B.DPAD_DOWN) then
         Status.step(1)
     elseif pressed(B.DPAD_UP) then

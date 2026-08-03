@@ -12,13 +12,16 @@
 -- "<enemy name> N percent" (queued, never interrupting combat lines). 0 = the side
 -- fell. State resets when the battle HUD leaves the screen.
 --
--- Same loop pattern as nav_tracker (generation + busy guard, transition gate first).
+-- Runs as a periodic stepper on the shared tick bus (pad_poll.lua), like nav_tracker and the
+-- quest narrator; transition gate first, inside step(). It owned a LoopAsync of its own until
+-- 2026-08-02 — see the bus's header for why five of those were a per-second race inside UE4SS.
 
 local Core = require("ui_core")
 local Mem = require("mem")            -- crash black box only (Mem.mark)
 local Speech = require("speech")
 local I18n = require("i18n")
 local Transition = require("transition")
+local PadPoll = require("pad_poll")   -- shared tick bus (dispatch + schedule only, no logic)
 
 local Battle = {}
 
@@ -135,37 +138,25 @@ end
 function Battle.start()
     if running then return end
     running = true
-    _G.__KakarotBattleGen = (_G.__KakarotBattleGen or 0) + 1
-    local myGen = _G.__KakarotBattleGen
-    local busy = false
-    LoopAsync(TICK_MS, function()
-        if _G.__KakarotBattleGen ~= myGen then return true end
-        if not busy then
-            busy = true
-            ExecuteInGameThread(function()
-                busy = false   -- cleared on ENTRY (see ui_core.loop rationale)
-                local t0 = os.clock()
-                local ok, err = pcall(step)
-                if not ok then
-                    print("[KakarotAccess] battle monitor error: " .. tostring(err) .. "\n")
-                end
-                -- Cost telemetry (own loop, outside the registry step — printed by
-                -- the Ctrl+F5 dump; the last unmeasured game-thread work).
-                local dt = (os.clock() - t0) * 1000
-                local st = _G.__KakarotBattleStats
-                if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotBattleStats = st end
-                st.n = st.n + 1
-                st.ms = st.ms + dt
-                if dt > st.max then st.max = dt end
-            end)
+    PadPoll.register_every("battle", TICK_MS, function()
+        local t0 = os.clock()
+        local ok, err = pcall(step)
+        if not ok then
+            print("[KakarotAccess] battle monitor error: " .. tostring(err) .. "\n")
         end
-        return false
+        -- Cost telemetry (outside the registry step — printed by the Ctrl+F5 dump).
+        local dt = (os.clock() - t0) * 1000
+        local st = _G.__KakarotBattleStats
+        if not st then st = { n = 0, ms = 0, max = 0 } _G.__KakarotBattleStats = st end
+        st.n = st.n + 1
+        st.ms = st.ms + dt
+        if dt > st.max then st.max = dt end
     end)
 end
 
 function Battle.stop()
     running = false
-    _G.__KakarotBattleGen = (_G.__KakarotBattleGen or 0) + 1
+    PadPoll.unregister("battle")
     sides = {}
 end
 

@@ -783,12 +783,14 @@ end
 local travel_running = false
 
 local function ft_step()
-    if Transition.active() then ft_idle() return end
     local s = state
-    if not s or Registry.active_adapter() ~= Map then
-        ft_idle()
-        return
-    end
+    -- The dispatch grid this screen needs, declared BEFORE every early return so a screen change
+    -- can never leave the fast grid pinned (pad_poll.lua: slow by default, fast only on demand).
+    -- The travel list's d-pad and its hold-to-repeat are the reason the fast grid exists at all.
+    -- (The two early returns this replaces both did exactly `ft_idle(); return`.)
+    local mine = not Transition.active() and s ~= nil and Registry.active_adapter() == Map
+    PadPoll.demand_fast("map_travel", mine)
+    if not mine then ft_idle() return end
     if not s.world then
         -- AREA map: no travel list to drive here, but the info key answers on this screen too —
         -- X re-reads the POI under the cursor, which area_poi() otherwise speaks only when the

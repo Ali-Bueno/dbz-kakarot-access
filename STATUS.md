@@ -4,6 +4,495 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
+**Last updated:** 2026-08-03 (g) — **THE POST-BATTLE RADAR: THE SWEEP FOUND THE OBJECTIVE EVERY
+TIME AND THREW THE ANSWER AWAY BECAUSE IT WAS THE SAME ONE.** 1 Lua file (`nav_tracker.lua`).
+**SOURCE-ONLY, UNVERIFIED IN GAME.** Lint clean over 75 files.
+
+**VERIFIED IN GAME 2026-08-03 (user), from the (f) batch:** the R3 picker now opens with the full
+lists on the first press of a session (about a second on a cold cache, which is it waiting for the
+sweep instead of guessing), and **the radar no longer goes quiet during gameplay dialogue**. Both
+fixes stand. Still reported: the radar is slow to start again after a battle.
+
+**And that last one was a one-line bug, found by reading rather than measuring.**
+`Nav.release_world_refs()` nils `target.actor` on every world-gate close — a battle, a cutscene —
+deliberately, because the actor may not survive it, while keeping the rest of the record so a
+surviving objective never has to be re-announced. The auto-scan then re-finds the objective and:
+
+```lua
+if not target or target.key ~= best.key then
+    target = best        -- new objective: fresh handle
+else
+    target_missing = 0   -- SAME objective: updates nothing at all
+end
+```
+
+So the one field the record was missing was the one field the sweep had just produced. The radar
+came back from every battle holding a **nil actor** for a target it believed it had, and could not
+recover on its own either: `target_missing` only counts up when the sweep finds NOTHING, and here it
+found the objective on every pass. Fixed by re-adopting the fresh handle in that branch (and
+dropping the route with it, since it was pathed against the handle that just died). Silent by
+design — this is the "merely re-resolving the same spot" case the announce beside it already
+declines to speak.
+
+**Same batch, reported before it was tested: "the radar is also slow when the objective changes."**
+Third appearance of the same shape. Between the game issuing a new objective
+(`Nav.notify_objective_change`, armed by the quest HUD reader) and the radar going to look for its
+marker sits `tick % SCAN_EVERY == 0` on a free-running counter — an arbitrary 0–1.5 s of doing
+nothing. The arm now also sets `Nav.auto_now`, so the marker walk happens on the next nav tick.
+Placed INSIDE the existing `preempt.scans <= 0` branch on purpose, and for that branch's own reason:
+the callback can fire as fast as the quest HUD polls (300 ms), so a flapping caller that pinned this
+flag would turn a 1.5 s cadence into a marker walk every nav tick — the scan storm the 2026-07-31
+"arm from zero only" fix exists to prevent. One event, one immediate scan.
+**Running tally of that defect**: the manual resume (d), the world-gate reopen (e), and now the
+objective change. A modulo on a counter that keeps ticking while the thing it gates is blocked is
+not a cadence, it is a random delay — worth a sweep for any that remain.
+**VERIFIED IN GAME (user):** the story objective now tracks noticeably faster.
+
+**"Sometimes the radar untracks by itself, then tracks again and announces the objective at me
+again" — and this one was CAUSED by the mute fix in (f), which is why it appeared only now.**
+Quiet mode does not defer the navi-icon refresh, it **empties the pool** (`navi_icons = {}`, the
+release beside the rescan), so while a passive overlay owns the screen `best_candidate` is blind by
+construction and returns nothing however present the marker is. `target_missing` counted every one
+of those, three of them (~4.5 s) dropped the target, and the moment quiet lifted it was re-acquired
+— which re-announces, because after a drop the announce test sees a new key. It never surfaced
+before because ambient chatter used to MUTE the nav loop entirely; now that the loop runs through
+chatter (`Dialogue.scan_quiet = true` is still set, only the mute changed), it started counting.
+**Fixed** by not counting a scan we declined to make. RULE, and it is the general one: **evidence you
+refused to collect is not evidence of absence** — any counter that drops state on "not found" must
+first ask whether it actually looked.
+
+**…and the first cut of that fix was itself a REGRESSION, caught the same day** (user: "after the
+battle it never tracked again, I had to restart tracking by hand"). Suppressing the counter whenever
+the scan was blind removed the only escape hatch for a target whose HANDLE had been nil'd:
+`release_world_refs` nils `target.actor` at every world-gate close, and both paths that restore it —
+re-adoption when the key matches, a fresh target when it does not — need a candidate the blind scan
+cannot produce. So the target could no longer be repaired AND no longer be dropped: permanently
+stuck, manual re-pick the only way out. The guard now carries both halves — skip the count only
+while `target.actor` is still valid, i.e. only while there is something to protect; with the handle
+gone, counting resumes and `LOST_SCANS` hands the objective back to ordinary acquisition, with the
+`target.lx` coast covering the window. LESSON: **a "stop dropping state" fix must be checked against
+the state that could only ever be repaired BY the drop.** The suppressed path was load-bearing.
+
+**BOTH RADAR SYMPTOMS SURVIVED THE FIXES, SO THE GUESSING STOPS HERE (2026-08-03, diagnostics
+only).** Post-battle re-acquisition is still slow and the self-untrack/re-announce still happens
+while simply walking. Three rounds of reasoning produced two fixes and one regression without ever
+observing WHICH branch fires, which is the exact failure mode this repo has a rule about. So this
+batch adds no behaviour, only evidence — three transition lines, none of them per-tick:
+- `nav world gate -> CLOSED (<reason>)` naming which of the gate's three conditions closed it —
+  `ui muted` / `minimap widget gone` / `minimap off screen`. This edge runs `release_world_refs`,
+  which nils `target.actor`, so a spurious close is the leading hypothesis for both symptoms: the
+  gate has **no debounce on the falling edge**, and the playbook's own rule is that any signal
+  derived from engine state flaps and the costly edge must be debounced.
+- `nav world gate -> open after N ticks` — N separates a real battle from a one-tick flicker.
+- `nav drop target (world-gone | lost-scans) key=… actor=live|NIL missing=N quiet=…` on the two
+  AUTOMATIC drops only; deliberate ones (arrival, B, a fresh pick) stay silent because the player
+  asked for those. An unasked-for drop is what re-announces.
+**ONE SESSION LATER THE LOG SETTLED IT, AND IT FALSIFIED THE HYPOTHESIS.** The line:
+
+```
+nav drop target (lost-scans) key=1988316711648 actor=live missing=3 quiet=false
+```
+
+World gate OPEN, scanning ALLOWED, tracked actor **live** — and the objective dropped anyway. The
+gate lines in the same log show only legitimate closes (`open after 519 ticks` = a 52 s cutscene,
+`open after 10 ticks` = a load); there was no one-tick flicker at all, so the falling-edge debounce
+this batch was written to justify would have fixed nothing. Worth stating plainly: three rounds of
+reasoning had produced two fixes and a regression, and one log line ended it.
+(Benign, in case it is seen again: `open after 0 ticks` with no preceding CLOSED is the map-transition
+hook setting `gated_prev` directly, bypassing the branch that prints.)
+
+**Root cause.** `best_candidate` returns nil only when BOTH its source loops yield nothing, and
+every way that happens is a per-tick transient — the navi icon fails `icon_in_use` because one of
+its sub-widgets is momentarily off screen, its `TargetActor` pointer is unreadable for a tick, or
+`actor_pos` raises during a transform update. The minimap-icon fallback loop only runs when no navi
+icon exists, so it is no safety net. Three blips inside 4.5 s is not rare. Also ruled out by the
+same trace, and worth recording so nobody re-derives them: there is **no distance cap on quests**
+(`if grp ~= "quests"`, "Quests: no limit at all" — so walking cannot push the marker across one),
+and `preempt.focus` cannot empty the set (it steers which candidate wins, never whether one exists).
+
+**VERIFIED IN GAME (user): the random self-untracking is GONE.** What remains is only the
+post-battle re-acquisition, still 2–4 s or more.
+
+**Post-battle, next hypothesis — and this one is instrumented so it can be refuted.** The rising
+edge armed ONE immediate scan (`Nav.auto_now`). That is not enough: right after a fight the quest
+marker's own navi icon is usually not back yet, so that scan finds nothing and every retry then
+waits a full `SCAN_EVERY` — two or three of those IS the reported delay. It is now a bounded WINDOW
+(`Nav.auto_until`): retry every nav tick until something is acquired, for at most
+`LOST_SCANS * SCAN_EVERY` (4.5 s) — derived, not picked, because that is this file's own statement
+of how long a target may be unfindable before it is given up on. The window closes the instant a
+target is acquired, and closing it prints **`nav re-acquired after X.XX s key=…`**.
+**MEASURED, same day: `nav re-acquired after 0.08 s`** after a 9-tick gate closure — the window
+does what it was written to do, and the user confirms the delay is shorter.
+**But the log also shows the case that is NOT solved**: a 208-tick closure (a 20 s cutscene, target
+dropped by `world-gone` meanwhile) produced no `re-acquired` line at all — the 4.5 s window ran out.
+Two possibilities and they are not both ours: the game had not rebuilt its HUD yet, or the icons were
+back and nothing resolved. The expiry now logs the discriminator —
+`nav re-acquire window expired after X.XX s (icons=N, target=…)` — where an EMPTY icon pool means no
+amount of looking would have helped, and a non-empty one means the miss is ours. Next report settles
+it; do not extend the window bound before that line has been read.
+
+**Fixed by changing the question.** `target_missing` was counting "the sweep found nothing", which
+is weak evidence about our objective while we are holding a live handle to the thing itself. It now
+asks the handle: valid and positionable → not missing; nil, invalid or unpositionable → count, and
+`LOST_SCANS` still drops it. The genuine case is untouched — an objective that completes has its
+marker destroyed, so the actor fails exactly as before. The `Core.scan_quiet()` gate from the
+previous cut is gone as redundant: whether we bothered to LOOK for candidates says nothing either
+way about the actor we already have. GENERAL RULE: **when you hold the thing, ask the thing — not
+the search that would have found it.**
+
+**Still open: the post-battle start is "a little" slow.** Improved by the handle re-adoption but not
+gone. Best remaining hypothesis, unconfirmed and NOT coded: post-battle chatter sets `scan_quiet`,
+and with the target dropped during a long fight (`world_gone >= WORLD_DROP_TICKS`) the blind
+marker scan cannot re-acquire until the chatter ends. Allowing ONE icon refresh under quiet when
+there is no target at all would fix it, at the cost of a 65 ms scan inside a scene — measure before
+coding it.
+
+**Last updated:** 2026-08-03 (f) — **THE RADAR MUTE WAS ASKING THE WRONG QUESTION, AND THE PICKER
+WAS WAITING ON A MEASUREMENT THAT CANNOT EXIST YET.** 3 Lua files (`screen_dialogue.lua`,
+`radar_menu.lua`, `nav_tracker.lua`). **SOURCE-ONLY, UNVERIFIED IN GAME.** Lint clean over 75 files.
+User feedback on (e): radar much better after a map load, still slow after a battle; **the first R3
+picker of a session always says "nothing to track"** while the main quest is actively being tracked,
+and the second shows everything; **the radar still mutes for a couple of seconds after gameplay
+dialogue** ("that cannot happen").
+
+**The mute: the grace was working, the question was wrong.** The log settles the magnitude — five
+arms in three minutes of walking, each 0–1 s, every one released as `free roam: ambient chatter`
+(the one 30 s mute in the same log was a real scene, minimap down, correct). The (d) design armed on
+the SURFACE and only then decided, over `AMBIENT_GRACE_S`, whether it had been chatter; the gap is
+that decision window, and it is audible every time. **Now it arms only while `Core.free_roam` is
+FALSE.** The argument: that is the same predicate `nav_tracker`'s own world gate runs on, so while
+the minimap is up the radar is going to dereference those actors regardless of this flag — muting
+buys no safety there and costs the gap. The instant the minimap drops, the mute arms on that tick
+and every later behaviour (the hold that bridges the 1–3 s gaps between subtitle lines, the ambient
+release) is untouched. **KNOWINGLY TRADED AWAY** and recorded in the file: the few frames at a
+cutscene's start where the subtitle is up and the minimap has not gone yet. That window was the
+mute's original purpose (2026-07-31) — but it was a REASONED fix for a crash never reproduced with
+it off, against a confirmed, repeated, audible cost. First thing to revert if cutscene-start crashes
+return.
+**This is also the best candidate for "still slow after a battle"** (unconfirmed): battle results
+and toasts both set `nav_mute = false`, so they never gated the radar — but post-battle CHATTER is a
+dialogue surface and armed exactly this mute.
+
+**The picker's "nothing to track": it gave up 1 s early on a deadline it could not compute.**
+`Nav.targets_build_ms()` derives the wait from `explore_sweep_last_chunks` / `explore_sweep_max` —
+telemetry produced by a COMPLETED build, which by definition does not exist on the first open of a
+session. Both floor, it answers 200 ms, and a cold chunked build is ~15 classes at ~65 ms. Since
+`Nav.targets_snap` is published only when the WHOLE build finishes, the picker opened on `{}` and
+announced there was nothing to track — with the quest marker actively guiding, because the picker
+has no fast path for the current target either. The second open works purely because the first
+attempt's build finished in the background. **Fixed** by waiting on `Nav.targets_want`, which the
+build sets for its whole duration and clears the moment it publishes — the build's own statement
+about itself instead of an estimate. The old estimate stays as the FLOOR (it covers the ticks before
+the nav loop has noticed the request) and a new `Nav.targets_wait_cap_ms()` bounds the case the
+estimate was really for — a gated or stuck nav loop — derived from `EXPLORE_RESCAN_MS`, this file's
+own statement of how stale a target list may be, so nothing is picked.
+
+**Last updated:** 2026-08-03 (e) — **THE EMBLEMS REGRESSION WAS A PRECEDENCE BUG, NOT THE SCAN
+CHANGE — AND THE RADAR'S COLD START HAD A 5-SECOND LOCKOUT ARMED BEFORE THE PROBE EVEN RAN.**
+3 Lua files (`screen_community.lua`, `nav_tracker.lua`, `ui_core.lua`). **SOURCE-ONLY, UNVERIFIED
+IN GAME.** Lint clean over 75 files. User feedback on (d): menus a little faster, **Soul Emblems
+stopped reading**, radar still slow to start after a save load and after a battle.
+
+**The emblems regression: the log named it, and it was NOT the ghost backoff.** The obvious suspect
+was the new escalation starving the grid class — `screen_community` itself documents that exact
+failure from 2026-07-16. The log says otherwise: `watch Start_Commu_Emb_C: 1 found` — the watch lane
+bypassed the backoff and found the grid in ~1.8 s, exactly as designed. What it also caught:
+
+```
+commu claim=grid  board=false grid=true  rej=not-found
+screen -> screen_community
+commu claim=board board=true  grid=true  mode_v=2
+```
+
+The board appears one tick AFTER the grid and takes the screen. **Mode 2 was added to
+`BOARD_LIVE_MODES` on 2026-07-31** to fix the opposite report (the board refusing to read until a
+press moved it to 7). But mode 2 means *frame built and visible, input handlers not yet bound* — so
+it cannot say whether the board or the emblem GRID (which renders underneath it) is the screen the
+player is on, and treating "don't know" as "the board owns it" shadowed the grid into silence: the
+2026-07-15 bug by a new route. **Fixed** with a `BOARD_OPENING_MODES` set: at mode 2 the grid is
+asked first and wins if it is live with slots; otherwise the board claims exactly as before, so the
+07-31 report stays fixed. The input-bound modes (7/9/12/13/14/16/17) keep absolute precedence over
+the grid — that ordering is the 2026-07-03 lesson and is untouched. The same log supports the
+reading: when the player really was on the board it showed `mode_v=7` with `grid=false`.
+
+**Radar cold start, three causes, largest first.**
+1. **`minimap()` armed its 5 s retry lockout BEFORE running the probe** (`mm_retry = tick +
+   MM_RETRY_TICKS` above the `cached_live` call). One unlucky attempt — the HUD root not yet
+   re-resolved after a load, which is precisely when this is first called — locked the minimap out
+   for a full 5 s, and `world_alive()` is false for every one of those ticks, so the whole nav loop
+   is dead: no auto-acquire, no beacon. Now armed only on a MISS, and `MM_RETRY_TICKS` cut 50 → 10
+   (~1 s): the 5 s was chosen when this was a raw `FindAllOf`, whereas `Core.cached_live` now
+   resolves it by pointer through the directory and owns the fallback's cost itself.
+2. **The escalation was hitting the mod's own PREDICATE classes.** `AT_UIMiniMapRadar`,
+   `Start_Top_C` and `Battle_Hud_P_Main_C` are resolved by pointer, so their SCAN only ever runs
+   when the screen is genuinely absent — which parks them in the ghost ledger at `found = 0` looking
+   like dead weight while being the exact opposite. Backing the minimap's fallback off to 16 s right
+   after a load, when the directory roots have just been flushed and the pointer path is the one
+   thing that cannot answer, would stall the radar by itself. New `NEVER_ESCALATE` set in `ui_core`.
+3. **The auto-acquire carried an arbitrary phase across the gate.** `tick % SCAN_EVERY == 0` on a
+   counter that free-runs while every gate is shut = up to 1.4 s of silence after control is already
+   back. The rising edge of the world gate now sets `Nav.auto_now`, consumed by the first scan. Same
+   defect as the manual resume fixed in (d).
+
+**Last updated:** 2026-08-03 (d) — **THE MEASUREMENT CAME BACK AND IT IS BRUTAL: 71% OF ALL SCAN
+TIME GOES TO CLASSES THAT ARE NEVER THERE.** 6 Lua files (`ui_core.lua`, `ui_registry.lua`,
+`nav_tracker.lua`, `screen_title.lua`, `screen_agreement.lua`); no bridge rebuilt. **SOURCE-ONLY,
+UNVERIFIED IN GAME.** Lint clean over 75 files.
+
+**The dump (Ctrl+F5, 6.8 minutes of ordinary play).** Three lines carry the whole session:
+
+```
+ui step ms: max=925.0 avg=35.48 over 4102 ticks
+findall scans: n=1982 total_ms=119463 max_ms=455.0 avg_ms=60.3
+ghost classes: 42 never found (1397 scans, 84783 ms burned)
+```
+
+**119.5 s of game thread inside `FindAllOf` in a 410 s session — 29% — and 84.8 s of it (71%) spent
+on 42 classes that were never once present.** A single scan averages 60 ms and peaked at 455 ms;
+`SCANS_PER_TICK` is 2 on a 100 ms grid, so the scan machinery is allowed to spend up to 120% of a
+tick, and that is exactly what a 925 ms `ui step` max is. **This is the same root cause behind BOTH
+of today's player reports** — menus taking about a second before they can be navigated, and the
+radar being slow to resume tracking: a real screen's scan queues behind the ghosts.
+Worst offenders: `AT_UIQteMashAlert` 10.0 s, `Gametitle_C` 9.6 s, `AT_UIXcmnAgreement` 8.5 s,
+`Map_World_Icon_C` 6.5 s, the five `CompZ_Page_*`/`Memo` classes ~25 s together, the three
+`Start_Commu_*`/`AT_UICommunityStart` ~15.5 s.
+
+**Read the list with its caveat.** "Ghost" here means "no scan of that name ever returned an
+instance", which catches two different things: names the game truly never instantiates, and
+DIRECTORY-MAPPED classes whose scan is only the fallback — those legitimately scan just when the
+screen is absent, so they are wasted work too, but the fix for them is different. `AT_UIMiniMapRadar`
+is in the list while the radar plainly works, which is the tell.
+
+**Fixed (1): escalating backoff for proven ghosts.** `ui_core.absent_backoff` — a class the ledger
+shows has NEVER been found doubles its backoff every 6 empty scans, 4 s → 8 s → 16 s, then flat.
+Three carve-outs keep this inside the perf note's rule rather than breaking it: one single sighting
+(`found > 0`, a session high-water mark) disarms it permanently; `QUIET_EXEMPT` — the surfaces that
+appear with no user press, i.e. the "event-less popups" the rule was written about — never escalate;
+and the boost window still bypasses the backoff entirely, so a screen the player OPENS is detected
+exactly as fast as before. Only the no-event fallback slows down.
+
+**Fixed (2): the title family stops scanning during gameplay — 18.1 s of the 84.8.** `Gametitle_C`
+and `AT_UIXcmnAgreement` are the boot menu and the consent documents; they cannot exist once a save
+is loaded, yet they scanned 137 and 122 times. The reason is structural and worth remembering: a
+directory-mapped class whose OWN ROOT is unreachable correctly falls back to scanning (an
+unreachable root cannot assert absence) — so a title-rooted screen scans forever precisely while it
+is impossible. New `Core.gameplay_world()` (the `mm` root, which `ui_directory` documents as existing
+only in playable worlds and `ui_registry` already trusts) is now the first line of both adapters. It
+is the POSITIVE test — "we are in gameplay" — never "the title is gone", and it fails to false.
+
+**Fixed (3): the radar's sweep build was being left OPEN, and had been since the (b) batch.**
+`Nav.SW.lists` is cleared only by `Nav.sweep_partial()`, and **three of the five `list_targets`
+callers never called it**. `class_list` serves a cached list without re-scanning, so after ONE such
+call the sweep never scanned again and kept handing out actor handles gathered before the battle —
+both the "radar takes a while to pick the last target back up" report and a dangling-handle hazard.
+Now self-healing: only a build that reported PARTIAL may be resumed; anything else open at entry is
+discarded, so the contract is structural instead of a rule every caller must remember.
+
+**Fixed (4): the radar's resume is prompt and no longer sweeps inline.** It ran the full ~17-scan,
+~1.2 s sweep on the first tick after the world came back — the worst possible moment — and only on
+`tick % (SCAN_EVERY*3)`, a random phase inside a **4.5 s** window (its own comment claimed 3 s, stale
+since `SCAN_EVERY` moved). It now asks the shared snapshot with `no_build`, which arms `explore_tick`'s
+chunked builder (it runs every nav tick whether or not explore mode is on), makes its first attempt
+as soon as that answers, and does not burn one of its 10 tries on a tick where no list existed yet.
+
+**Fixed (5): `confirm_ticks = 1` was INERT — a 100 ms tax five adapters had explicitly declined.**
+The first-sighting branch in `ui_registry` returned unconditionally, so nothing could commit before
+its second tick and `= 1` behaved identically to the default 2. `screen_fishing`, `screen_saveload`,
+`screen_skillcustom`, `screen_skilltree` and every `screen_list` instance (items, dragon balls) set
+it. The playbook's rule — a deliberately-opened sub-screen sets it to 1, because the global debounce
+exists only for screens that FLASH AT BOOT — now actually holds.
+
+**Diagnosed, NOT changed:** the Z-Encyclopedia probes six scan-path classes in a fixed order with
+the page shown on open (`CompZ_Page_Contents00_C`) checked LAST, so at 2 scans/tick it needs 3 ticks
+just to reach it; `screen_palette` retries an incomplete collect only every 5 ticks (500 ms); the
+sticky sweep can add 200 ms when the screen underneath does not notice it has been covered. All
+three are real, and all three are dominated by the ghost queue — measure again before touching them.
+
+**Last updated:** 2026-08-03 (c) — **GHOST HUNT, PHASE 1: THE METER NOW SEES EVERY SCAN, AND IT
+NAMES THE CLASSES THAT NEVER EXIST.** 6 Lua files (`ui_core.lua`, `nav_tracker.lua`,
+`screen_options.lua`, `screen_pause.lua`, `screen_title.lua`, `screen_palette.lua`); no bridge
+rebuilt. **SOURCE-ONLY, UNVERIFIED IN GAME.** Lint clean over 75 files. **No behaviour change is
+intended anywhere in this batch** — it adds accounting, and moves three copies of one test into the
+substrate.
+
+**Why phase 1 is a measurement and not a fix.** A sweep of every scanning call site found **35
+classes that no `ui_directory` chain resolves**, across 19 adapters. Each class an adapter names but
+the game never instantiates costs a full `FindAllOf` (~65 ms) every `ABSENT_BACKOFF` (~4 s) for the
+whole session, and `ui_core`'s own comment records that a cluster of those expiring on one tick IS
+the periodic stutter. The two obvious moves — delete names, or widen the backoff — are both
+forbidden by evidence already in this repo. The perf note says outright: **"do NOT blind-tune
+ABSENT_BACKOFF without an offender list (it starves event-less popups)."** And the four
+native/Blueprint **TWIN pairs** the adapters carry (`Choice_Win_C`/`AT_UIChoiceWin`,
+`Choice_Cmd_C`/`AT_UIChoiceCmd`, `Xcmn_Subtitles_C`/`ATUISubtitles`,
+`Quest_Sub_Reward_C`/`AT_UIQuestSubReward`) cannot be settled by reading anything: **UE4SS's own
+docs say `FindAllOf` matches subclasses, while this repo's `nav_tracker` comments record it
+returning NOTHING for a native base when a subclass exists** (`:2925`, `:2951`). One half of each
+pair is dead weight; only a measurement says which half.
+
+**So the meter got fixed first.** (1) **`Core.findall`** — the timed scan, for the call sites that
+cannot use the cache. `timed_findall` only ever saw scans routed through
+`Core.cached_all`/`first_live`, which left the mod's single biggest scanner invisible to it;
+`nav_tracker`'s own comment admitted that `list_targets`' ~17 raw scans "never route through
+timed_findall, so `__KakarotScanStats` cannot even see it". The sweep (`Nav.SW.class_list` /
+`manager_list`), the navi-icon pool, `AT_Character`, `RecastNavMesh` and the Options rows all report
+now; the dev tools (F7 `discover`, F4 `dev_memdiff`, `ENEMY_PROBE`) deliberately still do not.
+Accounting only — no budget taken, no backoff written, no behaviour changed. (2) A session-persistent
+**scan ledger** (`Core.scan_ledger`) records, per class, the most instances a scan ever returned.
+**`found = 0` after a session of play = a ghost.** Unlike `__KakarotScanStats` it is NOT reset by a
+dump, because "never found" only means something across a whole session. (3) Ctrl+F5 prints a
+`ghost classes: N never found (M scans, X ms burned)` block, worst first. That block is exactly the
+offender list the perf note demands, and phase 2 is what spends it.
+
+**Also shipped: a liveness test that had been copied into three files went back into the
+substrate.** `screen_pause`, `screen_title` and `screen_palette` had each hand-rolled
+`pcall(GetVisibility) == 0` rather than calling `Core.pane_live` — the exact shape the fishresult
+lesson warns about ("when a fix is about the shared substrate, put it in the substrate") — and every
+copy silently dropped `pane_live`'s opacity half, so a pane fading out could still be read. They
+could not just call it as-is: `pane_live` fails OPEN on an unreadable enum and all three
+deliberately fail CLOSED, each for a documented reason (the title must not blurt "Main menu" over
+the intro movie, where the widget is on screen as HitTestInvisible; the pause pane stays resident
+through battle). So `Core.pane_live(h, strict)` grew that single option and the three adapters use
+it — same visibility contract as before, plus the fade check they were missing.
+
+**Known and NOT changed (phase 2 candidates, no user report yet):** four adapters decide `is_active`
+on a bare `host ~= nil` with no readable-text check — `screen_skilltree`, `screen_skillcustom`,
+`screen_status`, `screen_saveload` — which is the documented "holds the tick in silence and shadows
+everything below it" failure. They are listed rather than rewritten because that fix needs per-screen
+evidence, and rewriting four working screens blind is how the Options regression happened.
+
+**Next step:** one measured session (below), then the ghosts die with data behind it.
+
+**Last updated:** 2026-08-03 — **THE INSERT RATE CAME DOWN 5× MORE AND THE D-PAD LOST NOTHING,
+BECAUSE THE MOD ALREADY OWNED THE FIX AND THREE FILES NEVER ADOPTED IT.** 5 Lua files
+(`pad_poll.lua`, `config_menu.lua`, `radar_menu.lua`, `screen_status.lua`, `screen_map.lua`);
+**VERIFIED IN GAME 2026-08-03** (user): menus and the d-pad behave normally, cutscenes behave
+normally, and the log/trail confirm both mechanisms directly — `dialogue nav_mute -> true
+(Xcmn_Subtitles_C)` followed one second later by `-> false (free roam: ambient chatter)`, and
+dispatches spaced 100-125 ms apart in free roam instead of the old fixed 20 ms. Lint passes.
+Not separately observable and therefore still only reasoned: the `mem.lua` guard change (it only
+shows itself when a throw happens) and the tick hook (`ENABLED = false`, see below).
+
+The native latch in `input_bridge.c:220-224` is fed by the IAT hook on the **game's own**
+`XInputGetState`, at frame rate, into an interlocked accumulator — its comment says it outright:
+*"A press cannot be lost however late or irregular the drain is."* So the dispatch rate never
+caught presses. Except that only `quest_read` and `map_travel` asked `Input.pressed`;
+`config_menu:179`, `radar_menu:317` and `screen_status:237` each rolled a private two-tick LEVEL
+compare, which only sees a button still HELD at dispatch time. **Those three were the whole reason
+the bus "needed" 50 Hz** — and they were already dropping any tap that began and ended between two
+dispatches whenever the busy guard skipped a tick.
+
+**Shipped.** (1) The three holdouts now use `Input.pressed(mask) or (level compare)`, the form
+`screen_map`'s `ft_pressed` always used. (2) `radar_menu`'s gesture windows converted to
+`os.clock()` seconds (`DOUBLE_TAP_S = 0.40`, `DOUBLE_RESCUE_S = 0.68`); `tk` deleted. (3)
+`pad_poll.lua` is **slow by default** — a 100 ms grid, lifted to 20 ms only while a stepper calls
+`Poll.demand_fast(name, true)`; the four pad menus declare it at the TOP of their step, above every
+early return, and `Poll.unregister` clears it, so nothing can pin the fast grid. `relax` outranks
+the demand. **Steady state: ~10 dispatches/s in ordinary play, 50/s only while a d-pad menu is
+open** — versus 77/s before this batch began.
+
+**Pre-existing bug fixed on the way:** `radar_menu`'s double-tap window was counted in dispatches
+(`DOUBLE_TAP_TICKS = 20`, "~400 ms at the 20 ms pad tick"), but the relax gate already drops the bus
+to 100 ms during cutscenes and loads — so **in that state the window was really 2 seconds**.
+
+**THE COMPLETE FIX IS NOW UNBLOCKED — the per-frame Blueprint tick exists and is named** (details
+and caveats in the notes). A fresh IN-GAMEPLAY dump (2026-08-03, `Area11_P`) found
+**`/Game/System/BP_ATGameModeMain.BP_ATGameModeMain_C:ReceiveTick(float DeltaSeconds)`**
+(`BP_ATGameModeMain.hpp:11`): Blueprint bytecode (so `RegisterHook` takes UE4SS's mutex-protected,
+`TRY`-wrapped `script_hook` path), engine-guaranteed singleton, exactly 1 live instance, doing real
+per-tick work. `ExecuteInGameThread` is the only Lua API that allocates a state per call, so a
+heartbeat on this takes the insert rate to **zero** and leaves the game thread as the sole Lua
+executor. **IMPLEMENTED AND THEN DISABLED THE SAME DAY — IT CRASHED THE GAME AT BOOT**
+(`EXCEPTION_ACCESS_VIOLATION reading 0x00000010`, the `UObjectBase::ClassPrivate` read). Evidence
+is unambiguous about WHERE: `crash_trail.bin` recorded **0 marks** that session and `UE4SS.log`
+ends at UE4SS's own `Event loop start`, so the process died before the FIRST `dispatch()` — and the
+only new code above the first mark is `Hook.arm`'s `StaticFindObject` existence probe (`RegisterHook`
+was never reached; no "tick hook installed" line). Not yet proven WHICH call faulted; the working
+hypothesis is that at boot `Mem`'s class-pointer offset is not derived yet, so `Mem.alive`
+correctly fails OPEN, `Core.valid` degrades to a bare `IsValid()`, and `IsValid` dereferences
+whatever the lookup returned mid-async-load. `ENABLED = false` in `tick_hook.lua` until that is
+settled; **the FINDING is still correct — only the arming path is wrong.** When retried, arm from
+`Core.free_roam` (gameplay, class loaded, pre-check armed), never from boot, and do not probe by
+object path. Also fixed in the same pass: `pad_poll`'s `require("tick_hook")` was HARD, so the
+"delete the file to roll back" the header promised would have produced a mod that fails to load at
+all — it is `pcall`'d now. Original design below, still accurate for the parts that stay:
+in a new `tick_hook.lua` (its own file, like `header_hook.lua`,
+so deleting it is the rollback). `pad_poll.Poll.pump` is now the single game-thread entry point for
+both drivers and owns the cadence gate; the LoopAsync became a **watchdog** that queues NOTHING
+while the hook's beat counter is advancing and takes over after 5 quiet ticks. A GameMode is
+per-map (the title screen runs `BP_GameModeTitle_C`), which is exactly why the loop stays as the
+fallback rather than being replaced. Registration is retried until the Blueprint class loads, gated
+on a `Core.valid(StaticFindObject(path))` existence probe first — UE4SS's `RegisterHook` binding
+throws on an unresolved path and that throw pierces pcall, which would have aborted the rest of the
+steppers twice a second for as long as the player sat at the title screen. Watch for
+`tick hook installed on …` in the log; its absence means the fallback is driving, which is simply
+the behaviour of the previous batch.
+Two corrections worth keeping: **never set `LoadAllAssetsBefore*=1`** — the installed ini records it
+as a fatal `AutoDebugMainUI_C` crash, and it was not needed; and the earlier dumps were not missing,
+they were **captured at the title screen**, which is the only reason the search had come back empty.
+
+**Also fixed 2026-08-03 (user report): the radar went silent when characters talk while WALKING
+AROUND.** `screen_dialogue`'s `nav_mute` classified by SURFACE, and no surface list can work —
+this game draws the same subtitle surface for a cutscene and for the party's chatter during free
+roam, and the story-call pop-up is a gameplay overlay by nature. The game's own discriminator is
+the minimap (`Core.free_roam`), but it cannot just replace the surface test: at the START of a
+cutscene the minimap is still up for a moment, and that moment is exactly the crash window the
+mute exists to cover. So the two are combined by TIME — a scene surface still arms the mute
+immediately, and it is released again only once free roam has held continuously for
+`AMBIENT_GRACE_S` (= `MUTE_HOLD_S`, the registry's own debounce). Net: a brief mute at the start
+of ambient chatter instead of one lasting the whole conversation; the cutscene safety case is
+untouched. The transition log line now names the reason (`free roam: ambient chatter`) as well as
+the surface. Note `commit_nav_mute` takes `tick` as a PARAMETER — the file-local of that name is
+declared below it, so reading it directly would have compiled to a global.
+
+**Next step:** see the test plan under *Next step* below — the risk in this batch is timing, not
+crashes.
+
+**Last updated:** 2026-08-02 — **FOUR CRASHES, ONE ENGINE BUG UNDERNEATH: `ExecuteInGameThread`
+RACES UE4SS'S OWN `lua_instances` MAP, AND OUR GUARD TURNED ONE SURVIVABLE HIT INTO A DEAD SESSION.**
+Four `UE4SS.log`s + three `crash_trail.bin`s from one player; **only one log has a Lua error at all**.
+**SOURCE-ONLY, UNVERIFIED IN GAME** — 6 Lua files, no bridge rebuilt, but `pad_poll.lua` is now the
+mod's single loop so a **full RESTART** is needed, not Ctrl+Shift+R. Full write-up (with the UE4SS
+`file:line` chain) in [`reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md`](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md).
+
+**Root cause (source-verified vs RE-UE4SS `7d6f790`).** Every `ExecuteInGameThread` call creates a
+new `lua_State` (`LuaMod.cpp:3057-3091` → `make_hook_state` :701, dedup commented out → `lua_newthread`)
+and inserts it into `static std::unordered_map lua_instances` (`LuaMadeSimple.cpp:11`) — **no mutex,
+no `erase` anywhere** — on the **async thread, outside** the mutex taken at `:3080`, while the **game
+thread** reads that same map from `process_lua_function` (`:872`) on every reflected member access.
+Five loops = ~77 races/s forever. A lost read throws (`:813-819`), and because Lua is compiled as C
+(`setjmp`, no `catch`) the throw **pierces `pcall`**.
+
+**The amplifier — ours, and what actually cost the session.** `Mem.alive`'s transactional
+`guard.pending` was never cleared when the throw unwound past it, so the next call set
+`guard.disabled = true` **permanently**: the mod's only out-of-VM memory guard went off 3 minutes into
+a 2-hour session, `Core.valid` decayed to a bare `IsValid`, and the game ran unguarded until it died
+of exactly the dangling-handle class the guard exists to stop. The log line even blamed the wrong
+cause ("a non-UObject handle reached Mem.alive — find the caller"): the object was a live
+`UGameInstance` and the throw landed in the `__index` metamethod, before the UObject was touched.
+
+**Fixed.** (1) `mem.lua`: the guard is self-healing — an unwound attempt is logged and the pre-check
+**stays on**; only 8 *consecutive* unwound attempts disable it (the signature of a real bad handle,
+unreachable by the race). (2) `pad_poll.lua` is now the **single tick bus** — one `LoopAsync` + one
+`ExecuteInGameThread` for everything, with `Poll.register_every(name, period_ms, fn, on_error,
+should_run)`. `Core.loop`/`Nav`/`Battle`/`Quest` are steppers on it and their `_G.__Kakarot*Gen`
+guards are gone. **~77 → ~50 races/s**; pad steppers dispatch first, periodic ones after, in
+registration order, due by wall clock with half a tick of slack (a 100 ms stepper must not alias to
+200 ms on the relaxed grid).
+
+**Still open — the bigger half.** The bus still calls `ExecuteInGameThread` 50×/s, so 50
+unsynchronized inserts/s remain and two threads still execute Lua on one shared `global_State`
+(allocator + incremental GC) with no mutual exclusion. That is the best explanation for the **three**
+crashes that had no Lua error and a working pre-check, and it fits the two-hour fuse. Going lower
+means slowing the 20 ms pad loop — an input-latency trade that is the player's call.
+
+**Next step:** play this batch and watch for **timing** regressions, because the loop merge is the
+risky part, not the guard. Specifically: menus should still respond at 100 ms (if the reader feels
+half-speed, the due-slack is wrong), the R3 picker and map/status d-pads should feel unchanged, and
+the battle/objective narrators should still fire on time during cutscenes and loads (when the relax
+gate makes the dispatch grid 100 ms). If a crash still happens, grab `crash_trail.bin` + `UE4SS.log`
+before relaunching and check whether `memory pre-check` now logs *trips without a streak* — that
+line appearing at all confirms the `lua_instances` race is live on the player's machine.
+
 **Last updated:** 2026-07-31 (c) — **THE STREAMER'S CRASH TRAIL NAMED THE SITE OUTRIGHT: DIED INSIDE
 `pad.tick`, INSIDE THE RADAR PICKER'S OWN DEFERRED TARGET SWEEP.** Two threads this session: the
 crash trail below, and separate player feedback that the quest objective goes stale/unreadable.
@@ -897,6 +1386,168 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 | All other native offsets / class names | — | See `native_offsets.lua`, `dumps/`, and `code/` (Ghidra) |
 
 ## Next step
+
+**2026-08-03 (g): THE POST-BATTLE RADAR, AND THEN THE MEASUREMENT THAT IS STILL OWED.**
+Full RESTART.
+
+1. **Finish a battle with the radar tracking a quest objective.** It should resume guiding within
+   about a tick of regaining control, with no re-announcement (the objective did not change). Try it
+   with a HAND-PICKED target too (R3 → pick something → get into a fight): that path is the resume
+   lane, which is separate, so if only one of the two is still slow, say which.
+2. **Advance a quest so the objective CHANGES.** The radar should start guiding to the new marker
+   almost at once. Two caveats that are NOT bugs: the game sometimes spawns the marker seconds after
+   the HUD text changes (waiting on an NPC to trigger the step), and a marker that never appears
+   still burns the preempt's tries over ~15 s. What would be a bug is a consistent beat of silence
+   with the marker already there.
+3. **Ctrl+F5 after ~10 minutes** — this is still owed from (d) and it is the only way to know whether
+   the ghost work actually paid. Compare against `ui step ms: avg 35.48 / max 925`,
+   `findall scans: n=1982 / 119463 ms`, `ghost classes: 42 / 84783 ms`.
+4. **Soul Emblems** (from (e), still unconfirmed): the grid must read, and the board alone must still
+   read.
+
+**2026-08-03 (f): THREE REPORTED BEHAVIOURS, IN THIS ORDER.** Full RESTART.
+
+1. **The radar must NOT go quiet during gameplay chatter.** Walk around until the party talks. The
+   beacon should keep running throughout. Then confirm the opposite case still holds: during a real
+   CUTSCENE it must go quiet, and come back when control returns. The log prints one line per
+   transition — `dialogue nav_mute -> true (…)` — and there should now be none at all while the
+   minimap is up.
+2. **First R3 of a session.** It may take up to about a second to open on a cold cache (it is
+   waiting for the sweep instead of guessing), but it must open with the full lists. "Nothing to
+   track" is now only correct when there genuinely is nothing.
+3. **After a battle.** Say whether it improved — if it did, the mute was the cause; if it did not,
+   the next suspect is the resume path's chunked rebuild and that needs its own measurement.
+4. Still open from (e), please confirm: Soul Emblems reads the GRID, and the board alone still
+   reads. And the Ctrl+F5 comparison (`ui step ms` / `findall scans` / `ghost classes`) whenever
+   there is a quiet ten minutes.
+
+**2026-08-03 (e): THE TWO REPORTED BUGS, THEN THE SAME MEASUREMENT.** Full RESTART.
+
+1. **Soul Emblems must read again.** Open the emblems grid from the community flow and confirm it
+   announces the grid (emblem names / slots), not the board summary. Then open the BOARD on its own
+   and confirm it still reads — that is the 2026-07-31 report this must not undo. If either is
+   wrong, the claim trace names it in one line: grep the log for `commu claim=` and send the lines;
+   `claim=board … grid=true` is the grid being shadowed, `claim=grid` while you are on the board is
+   the new rule overshooting.
+2. **The radar after a save load, and after a battle.** It should pick up guidance within about a
+   second of regaining control, not several. These are two different paths (a load flushes the
+   directory roots, a battle does not), so please say which of the two is still slow if either is.
+3. **Ctrl+F5 after ~10 minutes** as before, and compare `ui step ms` / `findall scans` /
+   `ghost classes` against 35.48 avg, 119463 ms and 84783 ms.
+4. Unchanged from (d) and still worth a glance: the title screen must read on a fresh boot and after
+   quitting to title, and the five adapters that commit a tick earlier must not announce something
+   that only flashed.
+
+**2026-08-03 (d): PLAY IT, THEN MEASURE THE SAME THREE LINES AGAIN.** Full RESTART. This batch is
+meant to be FELT, unlike (c) — the two reported symptoms are what it targets.
+
+1. **The two reported symptoms.** After a battle and after closing a menu, the radar should pick
+   the last hand-picked target back up promptly instead of after a beat. And the skill tree, the
+   super-attack palette and the Z-Encyclopedia should start reading sooner.
+2. **Ctrl+F5 again after ~10 minutes**, same spread of activity, and send the dump. Compare:
+   `ui step ms` (avg was 35.48, max 925), `findall scans` (n=1982, 119463 ms) and `ghost classes`
+   (42 / 84783 ms). If the ghost total has not dropped by roughly half, the escalation is not
+   biting and the reason will be in which names are still at the top of the list.
+3. **The title screen is the one thing that could regress.** Quit to the title from a save, and
+   also restart the game to the title: the main menu and the boot consent screens must read exactly
+   as before. If the title has gone SILENT, `Core.gameplay_world()` is answering true when it must
+   not — say so and it is a one-line revert.
+4. **The five adapters that now commit a tick earlier** — items, dragon balls, save/load, super
+   attacks (skillcustom), skill tree, fishing. They should feel snappier; what would be wrong is
+   one of them announcing something that only flashed on screen.
+5. Anything that reads STALE radar targets (a picked target that no longer exists, a picker listing
+   things that are gone) is fix (3) being wrong — that one changes what the sweep is allowed to
+   reuse.
+
+**2026-08-03 (c): ONE MEASURED SESSION, THEN THE GHOSTS DIE.** Nothing in this batch should be
+audible. What it needs is a dump, not a verdict. It rides on top of the (b) batch below, which is
+still unverified — test them together, full RESTART.
+
+1. **Play normally for ~10 minutes, then press Ctrl+F5** and send the newest
+   `Scripts/dumps/dump_*.txt`. Two lines matter: `findall scans:` (now complete — it finally
+   includes the radar sweep) and the new `ghost classes:` block. Cover a normal spread on the way
+   — walk around, open the ring and a couple of submenus, talk to somebody, take a battle —
+   because a class can only prove itself NOT a ghost by being present at least once, so anything
+   never visited will show up as a false ghost.
+2. **The three re-gated screens must behave exactly as before.** The pause menu (in the field AND
+   during a battle, where it must stay silent), the title screen (must NOT speak over the intro
+   movie, must speak once the menu is up), and the item palette / customise screen.
+3. If a screen goes quiet that did not before, it is one of those three, and `Ctrl+G` will not
+   help (this is not a reflection gate) — just say which screen and when.
+
+**2026-08-03 (b): IN-GAME TEST OF THE RADAR SWEEP REWORK.** `nav_tracker.lua` + `pad_poll.lua`.
+Two changes behind one new indirection, `Nav.SW.class_list`, which every one of the sweep's ten
+class lookups now goes through: (1) three of them are served from the GameMode's own manager
+components instead of a `FindAllOf`; (2) the DEFERRED build (the nav-loop one) stops when it has
+spent a nav tick and RESUMES next tick, reusing what it already scanned — the synchronous callers
+are deliberately unchanged. Plus a per-dispatch time ceiling in `pad_poll` so the three
+`begin_scan_tick` callers the merge put in one callback can no longer produce one unbroken ~390 ms
+block. State hangs off `Nav.SW` because this file is at Lua's hard 200-local ceiling.
+
+1. **Watch for the equivalence lines.** On the first sweep of a session the log prints, once per
+   mapped class: `sweep source ATWindRoad: manager ATWindRoadManager.WindRoadList = N, scan = M`.
+   **N must equal M.** A `MISMATCH` suffix means the manager list is not the same set as the scan
+   and that class must go back to scanning — this is the check that makes the swap evidence-based
+   rather than assumed, so please copy those three lines out.
+2. **The R3 picker must still open with the full set.** Wind tunnels, gathering points and quest
+   NPCs are the three classes that changed source. Compare against what you remember; anything
+   missing points at (1).
+3. **Explore mode + R3 spam.** The build is now spread over several nav ticks, so the picker may
+   open a beat later on a cold cache — but it must never open on a SHORT list. `targets_build_ms`
+   was made chunk-aware for exactly this.
+4. **The stall should be gone.** The 578 ms `nav.explore` gap in the last trail is the thing this
+   targets; a fresh trail should show no gap anywhere near it.
+
+**2026-08-03: IN-GAME TEST OF THE ADAPTIVE DISPATCH GRID.** 5 Lua files on top of the 2026-08-02
+batch below; test them together, full RESTART. Everything here is about **input feel** — if any of
+these is wrong the symptom is a control that responds late or not at all, never a crash.
+
+1. **Every pad gesture, in order.** The R3 single tap (opens the picker), the R3 **double** tap
+   (toggles explore — this is the one most at risk, it now times against `os.clock()` instead of a
+   dispatch count), the slow-double rescue, L3+R3 (config menu), L3+Y (repeat objective), and the
+   travel-list and status-page d-pads including **hold-to-repeat**. All must feel as before.
+2. **A tap that starts and ends fast.** Flick R3 / the d-pad as briefly as you can. This used to be
+   droppable on three of the five steppers and should now always register — that is the change that
+   makes the slow grid safe.
+3. **The escalation seam.** The fast grid arrives up to one slow tick (~100 ms) AFTER a menu opens,
+   by design. Opening a menu and immediately hammering the d-pad is the worst case: the first input
+   or two ride the 100 ms grid. Confirm nothing is lost — delayed is fine, dropped is not.
+4. **A menu open across a cutscene or a load.** `relax` deliberately outranks the fast demand there,
+   so the d-pad drops to 100 ms for that stretch. Confirm it recovers when the scene ends.
+5. **Ordinary free roam and combat.** This is where the win is: nothing should have changed at all
+   from the player's side, while the dispatch rate is ~5× lower.
+6. **The tick hook (`tick_hook.lua`).** Look for `tick hook installed on …` in the log once you are
+   in gameplay — it should NOT appear at the title screen, and should appear within ~2 s of a save
+   loading. With it installed the mod's steady-state `ExecuteInGameThread` rate is ZERO. Then check
+   the handover both ways: go back to the title screen or through a map load (the hook's GameMode
+   is per-map, so its beat stops and the LoopAsync watchdog must pick the mod straight back up
+   within ~100 ms), and confirm nothing goes silent or doubles up. If the line never appears at
+   all, nothing is broken — the mod is simply running exactly as it did in the previous batch.
+
+**2026-08-02: IN-GAME TEST OF THE SINGLE TICK BUS AND THE SELF-HEALING MEMORY GUARD.** 6 Lua files
+(`mem.lua`, `pad_poll.lua`, `ui_core.lua`, `nav_tracker.lua`, `battle_monitor.lua`,
+`quest_objective.lua`); no bridge rebuilt. **Full RESTART required** — every loop moved.
+`tools/lint-lua.ps1` passes (syntax, globals, guards).
+
+The guard change is low risk; **the loop merge is the risky part**, and every check below is about
+timing rather than crashes:
+
+1. **Menu reading at full rate.** Open any menu and move the cursor. It must feel exactly as before.
+   If it feels ~half speed, the 100 ms stepper is aliasing to 200 ms on the dispatch grid — the
+   `DUE_SLACK_S` half-tick in `pad_poll.lua` is what prevents that.
+2. **Pad responsiveness under load.** The R3 radar picker, the L3+R3 config chord, the map travel
+   d-pad and the status-page d-pad. Pad steppers dispatch BEFORE the periodic ones precisely so a
+   narrator step can never sit between a press and its response — confirm nothing feels laggier.
+3. **The relax gate (the case most likely to regress).** During a cutscene with subtitles and during
+   a map load, `__KakarotPadRelax` drops the dispatch grid to 100 ms and the slow steppers now ride
+   that grid. The battle HP narrator (250 ms) and the objective narrator (300 ms) must still fire on
+   time there, and F10 / L3+Y must still repeat the objective mid-scene.
+4. **Reader off/on (Ctrl+M) and reload (Ctrl+Shift+R).** Off must silence the reader (the `ui`
+   stepper retires itself via `should_run`), on must bring it straight back, and a reload must not
+   leave two of anything running or any subsystem dead.
+5. **The new log line.** `memory pre-check: attempt N unwound … (streak 1 of 8) — guard STAYS ON`
+   appearing at all is confirmation that the `lua_instances` race is live on that machine — and,
+   unlike before, the session should now continue with the guard intact.
 
 **2026-07-31 (c): IN-GAME TEST OF THE CRASH-TRAIL FIX AND THE OBJECTIVE-ANNOUNCEMENT FIXES.** 6 Lua
 files plus `README.md`/`README.txt`/`package.ps1`; no bridge rebuilt. **Full RESTART required**

@@ -78,6 +78,11 @@ end
 
 function Agreement.is_active()
     tick = tick + 1
+    -- Same cheap precondition as screen_title, and for the same measured reason: these are
+    -- the boot-time consent documents, impossible once a save is loaded, yet the 2026-08-03
+    -- dump caught 122 scans / 8.5 s of `AT_UIXcmnAgreement` during gameplay (its host chain
+    -- starts at Gametitle_C, so it was paying that scan twice over).
+    if Core.gameplay_world() then return false end
     host = find_host()
     if not Core.valid(host) or not Core.on_screen(host) then return false end
     return Core.pane_live(host)
