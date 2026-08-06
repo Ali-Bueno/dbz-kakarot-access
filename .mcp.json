@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "kakarot": {
+      "command": "node",
+      "args": ["tools/kakarot-mcp/server.js"],
+      "env": {
+        "KAKAROT_GAME_DIR": "D:\\games\\steam\\steamapps\\common\\DRAGON BALL Z KAKAROT\\AT\\Binaries\\Win64"
+      }
+    }
+  }
+}

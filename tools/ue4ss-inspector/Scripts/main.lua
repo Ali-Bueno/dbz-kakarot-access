@@ -316,15 +316,42 @@ for name in pairs(M) do
 end
 
 -- 2. command file: write a line into inspector_cmd.txt, save, read inspector_out.txt
+--
+-- SEQUENCE TAGS. A line may be written as `#<seq> <command>`, in which case the output is bracketed
+-- by `<<<BEGIN seq>>>` / `<<<END seq>>>`. Two things that buys, both needed by an automated caller
+-- and harmless to a human typing into the file:
+--   * the answer is findable. inspector_out.txt is append-only and `watch` writes to it between
+--     commands, so "everything after my write" is not the same as "my answer".
+--   * the same command twice in a row actually runs twice. The dedup below compares whole lines, so
+--     a repeated `probe Foo` — the one command whose whole point is being run twice — was silently
+--     dropped. A unique seq makes every line distinct.
 local last_cmd = nil
+local busy = false
 LoopAsync(POLL_MS, function()
+    -- Backlog guard: LoopAsync fires on a worker thread and does not wait for the game thread, so
+    -- without this a caller writing commands faster than the game drains them piles up queued
+    -- dispatches and the markers stop bracketing anything (ue4ss-api-reference.md:144-149).
+    if busy then return false end
     local f = io.open(CMD_PATH, "r")
     if f then
         local line = f:read("*l")
         f:close()
         if line and line ~= "" and line ~= last_cmd then
             last_cmd = line
-            ExecuteInGameThread(function() dispatch(line, nil) end)
+            busy = true
+            ExecuteInGameThread(function()
+                local seq, rest = line:match("^#(%S+)%s+(.*)$")
+                -- The END marker must survive a raise inside dispatch, or an automated caller waits
+                -- out its whole timeout for an answer that is never coming and `busy` latches the
+                -- channel dead. `out` itself is pcall'd for the same reason (a full disk, a locked
+                -- file), leaving the console copy as the only trace but keeping the channel alive.
+                pcall(function()
+                    if seq then out("<<<BEGIN " .. seq .. ">>>") end
+                    dispatch(rest or line, nil)
+                end)
+                if seq then pcall(out, "<<<END " .. seq .. ">>>") end
+                busy = false
+            end)
         end
     end
     return false

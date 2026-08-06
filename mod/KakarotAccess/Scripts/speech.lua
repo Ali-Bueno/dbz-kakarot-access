@@ -99,7 +99,17 @@ end
 -- state: if the backend (NVDA IPC / SAPI) blocks for tens of ms per call, every
 -- subtitle line is a felt hitch. This times each call into _G.__KakarotSpeechStats
 -- (printed by the Ctrl+F5 dump) so the next dump confirms or clears it with data.
+-- The last few lines actually handed to the backend, newest last. Diagnostics only: "the adapter
+-- owns the tick but the screen is silent" and "it is reading the WRONG row" are the two failures
+-- this mod keeps hitting, and both are one question — what did it just say? — that nothing could
+-- answer, because `pending` is a forward queue that gets drained, not a history. A fixed ring, so it
+-- allocates once and can never grow: this runs on the game thread inside the speech path.
+local RECENT_MAX = 12
+local recent, recent_n = {}, 0
+
 local function timed_say(text, interrupt)
+    recent_n = recent_n + 1
+    recent[(recent_n - 1) % RECENT_MAX + 1] = text
     local t0 = os.clock()
     prism.say(text, interrupt)
     -- Braille rides the same sink, so it is timed with it: it is a second backend call on the
@@ -164,6 +174,17 @@ function Speech.say(text, interrupt, no_requeue)
             pending[#pending + 1] = p
         end
     end
+end
+
+-- The last `n` spoken lines, NEWEST FIRST (dev_channel's `screen` command). Read-only diagnostics —
+-- nothing in the speech path may branch on this, or the history becomes state.
+function Speech.recent(n)
+    n = math.min(tonumber(n) or RECENT_MAX, RECENT_MAX, recent_n)
+    local list = {}
+    for i = 0, n - 1 do
+        list[#list + 1] = recent[(recent_n - 1 - i) % RECENT_MAX + 1]
+    end
+    return list
 end
 
 function Speech.stop()

@@ -211,31 +211,40 @@ RegisterKeyBind(Key.M, { ModifierKey.CONTROL }, function() App.toggle() end)
 -- unrelated. This bind is NOT dev-only — it is above the `if Build.debug` block and the README
 -- advertises it to players, so it shipped in every release. (The stop()/start() halves are pure
 -- Lua state plus bridge calls and were never the hazard; the reload is.)
+--
+-- Extracted from the keybind body (2026-08-06) so the dev command channel can drive the same reload
+-- with no keyboard and no focused window (dev_channel.lua). It is the SAME code, not a copy —
+-- a second reload path that drifted from this one would be the worst kind of bug to debug.
+-- CALL ONLY ON THE GAME THREAD, for the reason above: the keybind wraps it in ExecuteInGameThread,
+-- and the channel is already inside one.
+local function hot_reload()
+    App.stop()
+    for name in pairs(package.loaded) do
+        if not protected[name] then package.loaded[name] = nil end
+    end
+    -- PCALL'd (crash audit RANK 13, 2026-07-31). app.lua's top level requires ~25 adapter
+    -- modules and runs module-scope code, so an ordinary error in any of them — a half-saved
+    -- file, a renamed native_offsets field — used to propagate straight out of here: the
+    -- assignment never landed, `App` still pointed at the table whose loops had just been
+    -- stopped two lines above, App.start() never ran, and a blind player got TOTAL SILENCE
+    -- with nothing spoken and no way back but restarting the game. The old table's closures
+    -- are intact, so restarting it is a valid fallback.
+    local reload_ok, newApp = pcall(require, "app")
+    if reload_ok then
+        App = newApp
+    else
+        print("[" .. MOD .. "] reload FAILED, keeping the previous version: "
+            .. tostring(newApp) .. "\n")
+    end
+    App.start()
+    -- Say which of the two actually happened: a silent "Mod reloaded" over the OLD code is
+    -- exactly the report that wastes a debugging session.
+    Speech.say(reload_ok and "Mod reloaded" or "Reload failed, previous version restored", true)
+    return reload_ok
+end
+
 RegisterKeyBind(Key.R, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function()
-    ExecuteInGameThread(function()
-        App.stop()
-        for name in pairs(package.loaded) do
-            if not protected[name] then package.loaded[name] = nil end
-        end
-        -- PCALL'd (crash audit RANK 13, 2026-07-31). app.lua's top level requires ~25 adapter
-        -- modules and runs module-scope code, so an ordinary error in any of them — a half-saved
-        -- file, a renamed native_offsets field — used to propagate straight out of here: the
-        -- assignment never landed, `App` still pointed at the table whose loops had just been
-        -- stopped two lines above, App.start() never ran, and a blind player got TOTAL SILENCE
-        -- with nothing spoken and no way back but restarting the game. The old table's closures
-        -- are intact, so restarting it is a valid fallback.
-        local reload_ok, newApp = pcall(require, "app")
-        if reload_ok then
-            App = newApp
-        else
-            print("[" .. MOD .. "] reload FAILED, keeping the previous version: "
-                .. tostring(newApp) .. "\n")
-        end
-        App.start()
-        -- Say which of the two actually happened: a silent "Mod reloaded" over the OLD code is
-        -- exactly the report that wastes a debugging session.
-        Speech.say(reload_ok and "Mod reloaded" or "Reload failed, previous version restored", true)
-    end)
+    ExecuteInGameThread(hot_reload)
 end)
 
 -- === Developer / diagnostic keybinds — NOT shipped in releases =================
@@ -298,6 +307,21 @@ if Build.debug then
     -- starts reading again with the pre-check off, the pre-check was the cause. Together with Ctrl+G
     -- these two keys switch off everything the 2026-07-25 batch added to the read path.
     RegisterKeyBind(Key.G, { ModifierKey.CONTROL, ModifierKey.SHIFT }, function() App.toggle_precheck() end)
+
+    -- File-driven command channel (dev_channel.lua) — the same diagnostics as the keys above, minus
+    -- the keyboard. Every bind in this block needs the game window focused and a human at it, which
+    -- is precisely what stops an external tool (tools/kakarot-mcp) from asking the mod anything
+    -- about itself; a census or a nav dump then costs a round-trip through the player. Adds no
+    -- keybind and no work to any existing loop: it polls its own file every 500 ms.
+    -- pcall'd like the other optional installs — a broken dev tool must never stop the mod loading.
+    pcall(function()
+        require("dev_channel").install({
+            reload = hot_reload,
+            -- A GETTER, not App itself: hot_reload swaps the table, and a captured reference would
+            -- have the channel driving the stopped copy from the first reload onward.
+            app    = function() return App end,
+        })
+    end)
 end
 
 -- Global transition gate: "map switch in progress" makes every loop go inert and every

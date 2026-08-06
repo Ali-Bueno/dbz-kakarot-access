@@ -426,6 +426,16 @@ function Registry.active_adapter() return active end
 -- emblem watch twice per scene with no press anywhere).
 function Registry.hot() return tick_n <= hot_until end
 
+-- The active adapter's MODULE NAME (nil if none, "?" if it registered without one). `adapter_name`
+-- is otherwise private and only ever reached the crash breadcrumb, so the one question asked most
+-- often when a screen goes quiet — "which adapter owns the tick right now?" — could only be answered
+-- by grepping the log for a `screen ->` line that may be minutes old. Diagnostics only; nothing in
+-- the read path should branch on an adapter's name.
+function Registry.active_name()
+    if not active then return nil end
+    return adapter_name[active] or "?"
+end
+
 -- Registration-order index of the active adapter (nil if none) — for diagnostics
 -- (adapters are anonymous tables; the index maps back to the app.lua register order).
 function Registry.active_index()

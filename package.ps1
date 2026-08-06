@@ -180,7 +180,7 @@ Copy-Item $ScriptsSrc $StageScripts -Recurse
 # the debug keybinds, which are compiled out below).
 $DevJunk = 'dumps', 'dump.txt', 'probe.txt', 'dev_probe.txt', 'config.txt',
            'crash_trail.bin',
-           'discover.lua', 'dev_memdiff.lua', 'dev_log.lua',
+           'discover.lua', 'dev_memdiff.lua', 'dev_log.lua', 'dev_channel.lua',
            'tolk.dll'   # prism.dll does not import it (see $RequiredDlls); drop any stale copy
 foreach ($j in $DevJunk) {
     $p = Join-Path $StageScripts $j

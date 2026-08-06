@@ -1288,10 +1288,32 @@ Facts verified directly against the real install (`D:\games\steam\steamapps\comm
 - All 6 dumpers are global Lua functions callable live, confirmed in `Mods\Keybinds\Scripts\main.lua`: `DumpAllObjects()` (Ctrl+J), `GenerateSDK()` (Ctrl+H), `GenerateUHTCompatibleHeaders()` (Ctrl+Num9), `DumpStaticMeshes()` (Ctrl+Num8), `DumpAllActors()` (Ctrl+Num7), `DumpUSMAP()` (Ctrl+Num6). No need to close the game to dump.
 - `Mods\shared\types\` already exists with **1,361 .lua type files** for the game → autocomplete available in VSCode with the sumneko.lua extension (NEVER `require()` those files: they overwrite UE4SS's own globals!).
 - `Mods\mods.txt`: every universal mod is at 0 (`ConsoleEnablerMod`, `ConsoleCommandsMod`, `CheatManagerEnablerMod`, …). Setting `ConsoleEnablerMod : 1` gives the game's own console (`@`/`F10`) and `ConsoleCommandsMod : 1` gives the `set` / `summon` / `dump_object` commands.
-- New tool available at `tools\ue4ss-inspector\`: a non-visual inspector (`dumpclass`, `props`, `probe`, `watch`, `dump` commands) driven by console **or by a command file** (`inspector_cmd.txt` → `inspector_out.txt`), built to not depend on the ImGui GUI, which is not accessible.
+- Tool at `tools\ue4ss-inspector\`: a non-visual inspector (`dumpclass`, `props`, `probe`, `watch`, `dump` commands) driven by console **or by a command file** (`inspector_cmd.txt` → `inspector_out.txt`), built to not depend on the ImGui GUI, which is not accessible. **Installed 2026-08-06** as a junction `…\Mods\Inspector\Scripts` → `tools\ue4ss-inspector\Scripts`, `Inspector : 1` in `mods.txt` — so edits to it are live like the mod's own.
 - Reference: `UE4ss study\docs\ue4ss-live-workflow.md` (the no-restart loop).
 
-**Next step (dev loop):** create `UE4SS-settings.dev.ini` and try the inspector on a specific screen.
+### MCP server (2026-08-06) — the assistant drives the game directly
+
+`tools\kakarot-mcp\` (Node, zero deps, registered in `.mcp.json`). Wraps **both** file channels so an
+inspection costs one tool call instead of a round-trip through the player. See its README for the
+tool list; the parts that matter to this ledger:
+
+- **Two channels, because the mods cannot call each other.** UE4SS `lua_State` isolation between mods
+  is undocumented, so mod internals are driven from inside the mod: new `dev_channel.lua`
+  (`kakarot_cmd.txt` → `kakarot_out.txt`, gated on `Build.debug`, dropped from releases by
+  `package.ps1`) exposes `screen`, `census`, `reload`, `navdump`, `navlevels`, `memdiff`, `say`,
+  `ping`. The Inspector keeps generic reflection.
+- **Sequence tags.** Commands are written `#<seq> <cmd>` and answered between `<<<BEGIN seq>>>` /
+  `<<<END seq>>>` — the answer is findable in an append-only file, and a repeated command (`probe X`
+  twice, the whole point of probe) is no longer swallowed by the whole-line dedup.
+- **`kak_screen` answers the question this codebase asks most:** which adapter owns the tick, plus
+  the last lines actually spoken (new `Registry.active_name()` and `Speech.recent()`). An adapter
+  that never appears has a gate problem in `is_active`; one that appears saying nothing is holding
+  the tick with nothing to say. Both are documented recurring failures.
+- **What it does NOT do:** navigate. A human still has to open the screen; from there the assistant
+  can ask many questions without asking for anything.
+
+**Next step (dev loop):** create `UE4SS-settings.dev.ini`; smoke-test the MCP against a running game
+(`kak_alive` → `kak_screen` → `kak_census` on one open menu).
 
 ## Section status
 `done` = works with the screen reader on; `wip` = started; `todo` = not begun.
