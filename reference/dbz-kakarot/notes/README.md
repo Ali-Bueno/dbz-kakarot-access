@@ -57,6 +57,7 @@ notes are the evidence behind them.
 
 | Note | What it settles |
 |---|---|
+| [STATUS history (to 2026-08-14)](dbz-kakarot-status-history.md) | **`STATUS.md` as it stood before the prune** — the full diary: derivations, refuted hypotheses, in-game reports, and every per-batch test plan. Grep here for *why*, not *where we are* |
 | [Accessibility plan](dbz-kakarot-accessibility-plan.md) | The original plan and the running build log — the longest note here |
 | [Localization + config menu](dbz-kakarot-localization-config.md) | External TXT localization (13 languages) and the in-game config menu |
 | [Map travel + pending](dbz-kakarot-map-travel-and-pending.md) | The map open/close rule and the open TODO list as of 2026-07-10 |
