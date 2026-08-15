@@ -2680,13 +2680,27 @@ end
 -- fall back to the generic enemy noun). ONLY call on AT_Character actors: CharacterName is
 -- not declared elsewhere and reading it would be the uncatchable abort.
 enemy_display_name = function(c)
+    -- CharacterType FIRST (2026-08-15). It is a reflected ENUM on AAT_CharacterBase whose value
+    -- names are the characters themselves, so it names ~107 of them outright — against the four
+    -- that CPL_NAMES holds and the zero that the game's own GetCharacterName ever returns. An
+    -- enum is a value read: cheaper and safer than the FString hop below. `require` is a
+    -- package.loaded lookup, not a load, and this file is at Lua's 200-local ceiling so the
+    -- module cannot be held in a new upvalue.
+    -- pcall'd: a bare require RAISES if the module is missing or has a syntax error, and that
+    -- would take out naming for every enemy instead of quietly falling through to the old path.
+    local ctok, CT = pcall(require, "char_types")
+    local ct_name, ct_code
+    if ctok and CT then ct_name, ct_code = CT.of_actor(Core, c) end
+    if ct_name then return ct_name end
     local raw
     pcall(function()
         -- Gated fetch + a validity check on the RESULT. This runs on post-combat AT_Characters,
         -- i.e. actors the engine is in the middle of destroying.
         raw = Core.name_str(Core.member(c, "CharacterName"))
     end)
-    return resolve_char_id(raw)
+    -- ct_code is the enum's raw CplNNN for the unnamed tail (DLC/late content): a second id to
+    -- try against the hand-verified map when CharacterName itself was unreadable.
+    return resolve_char_id(raw) or (ct_code and resolve_char_id(ct_code)) or nil
 end
 
 -- Best spoken name for a field NPC from its UniqueId (FName). nil = fall back to the
@@ -2696,6 +2710,15 @@ end
 -- game raises a C++ exception pcall CANNOT catch — which froze the game (it aborted
 -- right after the menu had blocked the pad, leaving a stuck neutral pad).
 local function npc_name(npc)
+    -- CharacterType FIRST — see enemy_display_name. It is declared on AAT_CharacterBase, which
+    -- QuestCharacter also derives from, so talkable NPCs get the same ~107-name coverage from the
+    -- same single read; UniqueId below stays as the fallback and as the source for the
+    -- descriptive-id word match further down.
+    local ctok, CT = pcall(require, "char_types")   -- pcall'd, see enemy_display_name
+    if ctok and CT then
+        local ct_name = CT.of_actor(Core, npc)
+        if ct_name then return ct_name end
+    end
     local raw
     pcall(function()
         raw = Core.name_str(Core.member(npc, "UniqueId"))
@@ -3964,6 +3987,13 @@ end
 -- Ctrl+F5 (dev): dump every guidance candidate + a NavMesh probe to
 -- Scripts/dumps/dump_nav_targets.txt so a failing scan can be diagnosed offline.
 function Nav.dump()
+    -- How often the census writes a step marker while walking one anchor's objects. Derived
+    -- from the observed census size rather than picked: the run of 2026-08-15 reported
+    -- total=4640 for the CFUIMultiLineTextBox anchor, so a stride of 200 costs ~23 extra lines
+    -- per anchor (noise against a 280-line dump) while pinning an abort to a 200-object window
+    -- the markers name both ends of. Declared HERE, not at module scope: this file already sits
+    -- at Lua's 200-local ceiling for the main chunk, and one more breaks the whole file.
+    local CENSUS_STEP_STRIDE = 200
     -- Version beacon BEFORE any engine work: hearing it proves the reload applied and
     -- the keybind fired; the file then shows how far the dump got (unbuffered writes).
     Speech.say("dump v2", true)
@@ -3973,6 +4003,12 @@ function Nav.dump()
         -- APPEND (was "w"): the user often takes one dump per broken screen in a session,
         -- and overwrite mode lost all but the last (2026-07-15, the items dump). The
         -- timestamped header separates runs.
+        -- CRASH-TRAIL MARK (2026-08-15). This dump was the one heavy game-thread operation in the
+        -- mod with NO mark, so when the boot crash happened the trail ended in an ordinary
+        -- `quest.step` and read as "a normal tick killed it" — the exact blind spot nav.markers /
+        -- nav.mapicons / nav.sweep were each added to close. Without this, the dump is invisible to
+        -- the black box and every crash inside it is misattributed to whichever loop marked last.
+        Mem.mark("nav.dump")
         local f = io.open(dir .. "\\dumps\\dump_nav_targets.txt", "a")
         if not f then Speech.say("nav dump: cannot open file", true) return end
         -- UNBUFFERED: an uncatchable abort mid-dump otherwise loses EVERYTHING written
@@ -3989,6 +4025,26 @@ function Nav.dump()
             tostring(on), tostring(route_mode), tostring(trans), tostring(muted),
             tostring(not trans and not muted and world_alive()),
             tostring(Registry.active_index and Registry.active_index())))
+
+        -- EARLY GATE (2026-08-15 — the boot crash). This dump already HAD a safety gate for
+        -- "mid-transition / no world", but it sat ~290 lines below, AFTER the screen directory and
+        -- the visible-screen census — i.e. after thousands of widget reads had already happened.
+        -- So a dump triggered while the game was still loading did all the dangerous work first and
+        -- consulted the gate only if it survived. It did not: a stale command replayed one second
+        -- into boot took the process down with the world not yet up.
+        --
+        -- `muted` is deliberately NOT part of this early gate: a dump taken with a menu open is the
+        -- single most useful one there is (that is what the census is FOR), and a menu being up is
+        -- not by itself unsafe. Only the two conditions that mean "there is nothing valid to read"
+        -- bail here. `world_alive()` is asked only when NOT muted, matching the short-circuit the
+        -- header line above already relies on — with a menu up the minimap must not be probed.
+        if trans or (not muted and not world_alive()) then
+            f:write("GATED EARLY (" .. (trans and "transition" or "world")
+                .. ") — no world to read; census and actor sections skipped\n")
+            f:close()
+            Speech.say("nav dump written (gated early)", true)
+            return
+        end
         -- KeyConfig button-resolver state (for the fishing/QTE button announcements).
         pcall(function()
             f:write("keyconfig bindings: " .. require("ui_archetypes").bindings_status() .. "\n")
@@ -4172,10 +4228,30 @@ function Nav.dump()
                 local seen = {}
                 for _, anchor in ipairs({ "CFUIMultiLineTextBox", "CFUIXcmnMultiLineText",
                                           "Xcmn_MultiLineText_C", "TextBlock" }) do
+                    -- STEP MARKERS (2026-08-15). This census died silently mid-run — the dump
+                    -- ended right after the first anchor's summary with no actor section and no
+                    -- gate line, and UE4SS.log carried "Tried calling a member function but the
+                    -- UObject instance is nullptr", one of the errors that PIERCE pcall and
+                    -- unwind past every guard here. The file is unbuffered (see the open above),
+                    -- so whatever marker is last on disk is genuinely the last thing that ran:
+                    -- these lines turn "it stopped somewhere in the census" into a named anchor
+                    -- and a named object.
+                    f:write("  [step] anchor " .. anchor .. " FindAllOf\n")
                     local all
                     pcall(function() all = FindAllOf(anchor) end)
+                    f:write("  [step] anchor " .. anchor .. " walking\n")
                     local total, on = 0, 0
+                    local walked = 0
                     for _, t in pairs(all or {}) do
+                        -- One marker per STRIDE objects, not per object: a per-object line would
+                        -- add thousands of lines to every healthy dump, and the stride still
+                        -- narrows the killer to a short, named window.
+                        walked = walked + 1
+                        if walked % CENSUS_STEP_STRIDE == 0 then
+                            local at = "?"
+                            pcall(function() at = t:GetFullName() end)
+                            f:write(("  [step] anchor %s at #%d %s\n"):format(anchor, walked, at))
+                        end
                         if Core.valid(t) then
                             total = total + 1
                             local ok_os, os_r = pcall(Core.on_screen, t)
@@ -4190,10 +4266,35 @@ function Nav.dump()
                                 local key = fn:match("^(.-)%.WidgetTree%.") or fn:sub(1, 100)
                                 if not seen[key] then
                                     seen[key] = true
-                                    local txt
-                                    pcall(function() txt = t:GetText():ToString() end)
+                                    -- GATED (2026-08-15). This was `t:GetText():ToString()` with
+                                    -- a raw `t.Text` fallback, both merely pcall'd — and that is
+                                    -- what killed the dump. The anchors are NOT the same shape:
+                                    -- CFUIMultiLineTextBox is a real text box that declares
+                                    -- `Text`, while CFUIXcmnMultiLineText is this game's WRAPPER,
+                                    -- whose text lives in `mainTxt`. Fetching an undeclared
+                                    -- member aborts uncatchably, so the wrapper anchor died on
+                                    -- one of its first objects every single run — taking every
+                                    -- actor section of the dump with it. Core.text_of is the
+                                    -- substrate helper for exactly this wrapper; the strict
+                                    -- `Text` fetch covers the plain nodes it does not know.
+                                    -- STRICT ON BOTH CANDIDATES. The first cut of this fix used
+                                    -- Core.text_of, which is the right helper for an ADAPTER —
+                                    -- it fetches `mainTxt` NON-strict, i.e. fail-open, because
+                                    -- its caller believes the member is there. This loop has the
+                                    -- opposite contract: it walks thousands of heterogeneous
+                                    -- classes and most of them are EXPECTED not to declare the
+                                    -- name being tried, which is precisely where fail-open turns
+                                    -- into a licence to make the uncatchable fetch — and the
+                                    -- property-set budget is 1 class per tick, so during a walk
+                                    -- this size almost everything is ungated. Both reads are
+                                    -- therefore strict; a class whose set is not ready yet is
+                                    -- skipped for this run rather than risked.
+                                    local txt = Core.name_str(Core.member(t, "Text", true))
                                     if not txt or txt == "" then
-                                        pcall(function() txt = t.Text:ToString() end)
+                                        local m = Core.member(t, "mainTxt", true)
+                                        if Core.valid(m) then
+                                            txt = Core.name_str(Core.member(m, "Text", true))
+                                        end
                                     end
                                     f:write(string.format("  %s   e.g. \"%s\"\n",
                                         key, tostring(txt or ""):sub(1, 40)))

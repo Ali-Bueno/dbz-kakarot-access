@@ -70,6 +70,7 @@ function C.help()
         "navdump               Ctrl+F5   -> Scripts/dumps/dump_nav_targets.txt",
         "navlevels             Ctrl+Shift+F5 -> Scripts/dumps/dump_enemy_level.txt",
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
+        "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
     }) do out("  " .. l) end
 end
 
@@ -156,6 +157,16 @@ function C.memdiff()
     out(rok and "memdiff -> Scripts/dev_probe.txt" or ("memdiff raised: " .. tostring(err)))
 end
 
+function C.charnames()
+    package.loaded.dev_charnames = nil
+    local ok, mod = pcall(require, "dev_charnames")
+    if not ok or not mod then return out("dev_charnames.lua unavailable: " .. tostring(mod)) end
+    -- run() queues its own ExecuteInGameThread, so the file lands a tick or two after this returns.
+    local rok, err = pcall(mod.run)
+    out(rok and "char name probe -> Scripts/dumps/dump_char_names.txt"
+             or ("charnames raised: " .. tostring(err)))
+end
+
 --------------------------------------------------------------------------------
 -- dispatch
 --------------------------------------------------------------------------------
@@ -187,7 +198,19 @@ function Channel.install(d)
     end
     _G.__KakarotDevChannel = true
 
-    local last_cmd, busy = nil, false
+    -- PRIMED WITH WHATEVER IS ALREADY IN THE FILE (2026-08-15). Starting this at nil meant any
+    -- command left over from the previous session looked NEW to the very first poll, so the last
+    -- thing typed before a restart re-ran ~1 second into boot — on a half-loaded world, which is
+    -- the single most fragile moment there is, and with no human expecting it. That is exactly how
+    -- a stale `navdump` fired at 13:32:33 against a game that had started at 13:32:32. A command
+    -- file is a MAILBOX, not a queue: at startup its contents are history, not instructions.
+    local f0 = io.open(CMD_PATH, "r")
+    local last_cmd = f0 and f0:read("*l") or nil
+    if f0 then f0:close() end
+    if last_cmd and last_cmd ~= "" then
+        out("ignoring stale command from a previous session: " .. last_cmd)
+    end
+    local busy = false
     LoopAsync(POLL_MS, function()
         -- Backlog guard (ue4ss-api-reference.md:144-149): never queue the next step until the
         -- previous one finished. `census` and `reload` are tens of milliseconds of game-thread work;

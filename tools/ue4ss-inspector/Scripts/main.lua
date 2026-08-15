@@ -93,6 +93,23 @@ local SCALAR = {
     ByteProperty = true, EnumProperty = true,
 }
 
+-- Textual properties read back as an FString/FName/FText WRAPPER, so a bare tostring()
+-- prints "FString: 0000024E31121D58" — and the handle address differs on every read, so a
+-- change-detecting watch on one spams forever while telling you nothing. They are VALUE
+-- types: per the playbook they get no validity call at all, the guarded :ToString() IS the
+-- test. Kept separate from SCALAR because their value is the rendered string, not the raw.
+local TEXTUAL = { StrProperty = true, NameProperty = true, TextProperty = true }
+
+local RENDER_MAX = 120       -- one log line stays readable; names are far shorter than this
+
+local function render(v)
+    if type(v) ~= "userdata" then return v end
+    local s = safe(function() return v:ToString() end)
+    if type(s) ~= "string" then return tostring(v) end
+    if #s > RENDER_MAX then s = s:sub(1, RENDER_MAX) .. "..." end
+    return s
+end
+
 --------------------------------------------------------------------------------
 -- commands
 --------------------------------------------------------------------------------
@@ -176,9 +193,9 @@ local function scalars(obj)
         safe(function()
             c:ForEachProperty(function(p)
                 local n, k = safe(function() return p:GetFName():ToString() end), prop_type(p)
-                if n and SCALAR[k] then
+                if n and (SCALAR[k] or TEXTUAL[k]) then
                     local v = safe(function() return obj:GetPropertyValue(n) end)
-                    if v ~= nil then t[n] = v end
+                    if v ~= nil then t[n] = TEXTUAL[k] and render(v) or v end
                 end
             end)
         end)
@@ -247,7 +264,7 @@ function M.watch(name, prop, ms)
         ExecuteInGameThread(function()
             local obj = resolve(w.name)
             if not obj then return end
-            local v = safe(function() return obj:GetPropertyValue(w.prop) end)
+            local v = render(safe(function() return obj:GetPropertyValue(w.prop) end))
             if v ~= w.last then
                 out(("%s.%s = %s"):format(w.name, w.prop, tostring(v)))
                 w.last = v
@@ -325,7 +342,20 @@ end
 --   * the same command twice in a row actually runs twice. The dedup below compares whole lines, so
 --     a repeated `probe Foo` — the one command whose whole point is being run twice — was silently
 --     dropped. A unique seq makes every line distinct.
-local last_cmd = nil
+-- PRIMED WITH WHATEVER IS ALREADY IN THE FILE (2026-08-15). At nil, a command left over from the
+-- previous session looked NEW to the first poll and re-ran ~1 second into boot, unasked. The
+-- command file is a MAILBOX: at startup its contents are history, not instructions. (Both this and
+-- the mod's own dev channel had the same defect; they replayed together on the same restart.)
+local last_cmd = (function()
+    local f = io.open(CMD_PATH, "r")
+    if not f then return nil end
+    local l = f:read("*l")
+    f:close()
+    return l
+end)()
+if last_cmd and last_cmd ~= "" then
+    out("ignoring stale command from a previous session: " .. last_cmd)
+end
 local busy = false
 LoopAsync(POLL_MS, function()
     -- Backlog guard: LoopAsync fires on a worker thread and does not wait for the game thread, so

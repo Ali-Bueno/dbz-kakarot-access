@@ -1,5 +1,53 @@
 # dbz-kakarot-crash-bug
 
+> **2026-08-15 — `navdump` HAD BEEN DYING MID-CENSUS FOR AN UNKNOWN LENGTH OF TIME, AND IT TOOK
+> EVERY ACTOR SECTION OF THE DUMP WITH IT.** Found while starting the radar/character work, not
+> reported by anyone — the tool simply produced a shorter file than it should have, and nobody had
+> reason to notice a dump ending where a dump plausibly ends.
+>
+> **SIGNATURE.** `Nav.dump` wrote its header, the perf tables, the screen directory and the FIRST
+> anchor of the visible-screen census, then stopped. No `GATED (...)` line (the state was
+> `transition=false ui_muted=false world_alive=true`, so the gate was NOT the cause), no
+> `current target:` line, no actor sections at all, no `f:close()`. UE4SS.log carried
+> `Error: Tried calling a member function but the UObject instance is nullptr` with an empty
+> traceback, timestamped to the same second as the dump — one of the errors that **pierce
+> `pcall`**, unwinding to UE4SS's C++ callback boundary and killing the calling function
+> mid-flight while every enclosing pcall reports success. Reproducible on every run.
+>
+> **HOW IT WAS PINNED — the step markers, not the reasoning.** The census walks four anchor
+> classes. A first guess about which call died would have been cheap and wrong; instead the
+> anchor loop got step markers (`[step] anchor <name> FindAllOf` / `walking` / `at #N <object>`,
+> stride 200). The dump is already opened UNBUFFERED for exactly this reason (`f:setvbuf("no")`,
+> a lesson from the 0-byte dump of 2026-07-06), so the last marker on disk is genuinely the last
+> thing that ran. One run then said it outright: it died on the **second** anchor,
+> `CFUIXcmnMultiLineText`, after `FindAllOf` returned and before object #200.
+>
+> **MECHANISM — the anchors are not the same shape, and the text read assumed they were.** The
+> census read each node's text with `t:GetText():ToString()` and a raw `t.Text:ToString()`
+> fallback, both merely `pcall`'d. `CFUIMultiLineTextBox` is a real text box that declares
+> `Text`, so anchor 1 survived; `CFUIXcmnMultiLineText` is this game's WRAPPER, whose text lives
+> in **`mainTxt`**. Fetching a member the class does not declare is the uncatchable abort — so
+> the wrapper anchor died on one of its first on-screen objects every single run. The playbook
+> rule it violated is already written down ("Ask the class before fetching a member"); the census
+> predated it and was never brought into line.
+>
+> **FIX.** Both raw reads replaced with the substrate helpers: `Core.text_of(t)` (which knows the
+> wrapper's `mainTxt`) with a **strict**-gated `Core.member(t, "Text", true)` fallback for the
+> plain nodes it does not cover. The step markers were kept — they cost ~23 lines per anchor and
+> they are the only reason this took one run instead of a session.
+>
+> **VERIFIED LIVE, not reasoned about.** After the fix all four anchors complete
+> (`CFUIMultiLineTextBox` 4640/931, `CFUIXcmnMultiLineText` 2676/695, `Xcmn_MultiLineText_C`
+> 2676/695, `TextBlock` 0/0) and the dump reaches the actor sections it had been losing — map
+> icons, navmesh probes, raycasts, `current target`. The two dumps before the fix each left an
+> error in UE4SS.log; the first dump after it left none.
+>
+> **THE LESSON THAT GENERALISES.** A diagnostic that dies is worse than useless — but it is also
+> *invisible*, because its output still looks like output. `navdump` is the tool this codebase
+> reaches for when the radar misbehaves, and it had been silently answering half the question.
+> Unbuffered writes made the evidence survivable; step markers made it legible. Both belong in
+> any dump that touches engine objects.
+>
 > **2026-08-03 — THE INSERT RATE CAME DOWN 5× WITHOUT COSTING THE D-PAD ANYTHING, BECAUSE THE MOD
 > ALREADY OWNED THE FIX AND THREE FILES NEVER ADOPTED IT.** Follow-up to the entry below. The
 > question was whether the `lua_instances` race could be starved further than the loop merge

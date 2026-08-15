@@ -41,3 +41,126 @@ Experimental/unproven (needs a careful in-game test, flag as risky): reading
 `MessageManager.DataTable` ROWS directly via DataTable reflection (`GetRowNames`/`FindRow`) —
 a different API from the crashing `GetNounParam`; row-key format unknown, and messageData is
 keyed by message id (dialogue), not character code, so low expected value.
+
+---
+
+## 2026-08-15 — re-asked with the MCP and the offline pak index
+
+The 2026-07-10 conclusion **still stands** (no crash-safe live resolver), but two tools that did
+not exist then — the live Inspector over MCP, and the offline pak index — settled three of its
+open questions and opened one genuinely new route. Nothing below required a live call on the
+crashing family; the DataTable/messageData work never touched the running game at all.
+
+**NEW: two fields on `AT_CharacterBase` the July pass never saw** (from a live `kak_class` dump):
+- **`speakerID`** (StrProperty) — the dialogue speaker key. Content NOT yet read: the Inspector's
+  `watch` printed the FString HANDLE, not its text, because it deliberately excluded
+  Str/Name/Text properties. Fixed (see below); needs a game restart to load.
+- **`m_param_id`** (EnumProperty) — a numeric parameter-table id. Read **0** on the first live
+  `QuestCharacter`, so it is either unset for talkable NPCs or was read on the wrong instance.
+  Worth re-reading on several real characters before drawing a conclusion — see why it matters
+  under *the roster* below.
+- Also present: `fn GetCharacterCode_BPCharaCode()`. NOT called — reflected calls are the
+  crashing family on this build.
+
+**DEAD, and now for a concrete reason: `DT_CharacterDataTable`.** Extracted offline from
+`pakchunk0` and inspected. Its row struct `ATCharacterDataTable` declares **no name, label or
+message-key column at all** — only `RacialType`, `Height`, `Level`, `MotCode`, `SaveIndex`,
+`SortIndex`, `UniqueID`, `Width`, the `GuestCharacter`/`PlayerCharacter`/`SupportCharacter`
+flags and the `Summon*_01..08` families. ~164 `Cpl###`-keyed rows, no literal names anywhere.
+`ZCW_DT_UIDataModelChara` is an empty table (zero declared properties, 49-byte `.uexp`).
+Do not re-mine either.
+
+**NEW ROUTE — the name roster inside `messageData`.** `AT/Content/Message/PLAT_W/<lang>/
+messageData` (`.uasset` 1.9 MB + `.uexp` 17.2 MB) contains **two structurally different
+sub-tables**:
+1. A **dialogue stream** of flat adjacent triples `[numeric id][speaker code][line]`, where the
+   speaker code is exactly the `CplNNN<letter>` / `NpcNNN<letter>` space (200 bare `^Cpl\d{3}[A-Z]$`
+   FNames; 11,100 keys containing `Cpl`, 10,595 containing `Npc`). Recoverable from a strings pass
+   with 3-line grouping — cheap. Gives code → *lines*, NOT code → *name*.
+2. A **character-name roster**: the bare display names really are in there — `Goku`, `Gohan (Kid)`,
+   `Gohan (Teen)`, `Gohan (Adult)`, `Vegeta`, `Appule`, `Frieza Force Grunt`, `Frieza`, `Krillin`,
+   `Yamcha`, `Yajirobe`, `Piccolo`, `Nappa`, `Zarbon` … in one flat sequential block. **No string
+   key sits adjacent to them**: each is a length-prefixed FString preceded by an 8-byte binary
+   field, i.e. a NUMERIC row id. So this block is *not* recoverable by a strings pass; it needs a
+   real property/array parser (est. 1–2 days incl. verifying the id scheme).
+   The reason `m_param_id` matters: it is a numeric id on the actor, and this roster is keyed by a
+   numeric id. If those are the same space, actor → name is solved. **Unverified — check
+   `m_param_id` on several real characters before spending a day on the parser.**
+   Caveat if you do build it: this is per-language data, so a roster mined from `en_US` names
+   characters in English only; the mod ships 13 languages.
+
+**CHEAPER ALTERNATIVE that needs no parser — the nameplate, with a uniqueness rule.** The game
+draws the character's own **localized** name over them: `Info_Name_Parent_C` →
+`Ins_Info00`/`Ins_Info01` → `Txt_Name`/`Txt_Name01..03` (native twins on `AT_UIInfoNameCore`:
+`NameTxt`, `NameTxt_Large`, `PopularNameTxt`, `PopularNameTxt_Large`). One live host, **two
+slots**, and **no pointer back to the actor** — both classes declare zero own functions, the text
+is set from native C++. So pairing name→code needs the playbook's uniqueness rule: bind only when
+exactly ONE nameable character is in range. Being in the player's own language, this beats an
+`en_US` roster for a 13-language mod, and it grows the hand-verified map automatically from real
+play instead of from guesses.
+
+### THE ANSWER (same day, later): `AAT_CharacterBase::CharacterType`
+
+**Everything above is superseded as the PRIMARY route.** The name is a plain reflected ENUM on the
+character base class, and its enum's value names are the characters themselves.
+
+```
+AAT_CharacterBase :: CharacterType : CHARACTER_TYPE @0x0758      <-- read this
+AAT_CharacterBase :: m_param_id    : PARAM_ID       @0x075C
+AAT_CharacterBase :: speakerID     : FString        @0x0890
+AAT_Character     :: CharacterName : FString        @0x09E8
+```
+
+`enum class CHARACTER_TYPE` (CXXHeaderDump/`AT_enums.hpp`:98) has **277 values**. Values **1–119 are
+human-readable character names** — `Goku=1`, `Gohan=4`, `Vegeta=8`, `Apuru=11`, `Freezer=18`,
+`Kuririn=21`, `Yamcha=22`, `Tien=23`, `Chiaotzu=24`, `Piccolo=25`, `Raditz=26`, `Nappa=27`,
+`Saibamen=28`, `Cui_C01=33`, `Dodoria_C01=34`, `Zarbon_A_C01=35`, `Recoom=37`, `Burter_C01=38`,
+`Jeice_C01=39`, `Guldo=40`, `Ginyu=41`, `Trunks=42`, `Android20=45`, `Android17=46`, `Android18=47`,
+`Cell_A=48`, `CellJr_C01=51`, `Goten=52`, `Dabura=53`, `PuiPui_C01=54`, `Yakon_C01=55`, `Buu_A=56`,
+`Gotenks=60`, `Vegito=61`, `Mira=85`, `Bonyu=86`, `Beerus=93`, `Whis=94`, `Shin=119`, … Values
+**120–276 are raw `CplNNN` codes** (later/DLC content) and carry no name.
+
+Why this beats every other route considered:
+- It is a **VALUE read on a base-class property**, so it works on BOTH branches (`AAT_Character`
+  enemies and `AQuestCharacter` NPCs) — one code path, no per-class special-casing.
+- Enum reads take no validity call and no pointer hop: the safest operation on this engine.
+- No DataTable, no `messageData` parser, no icon/brush walk, no live actor-icon lookup.
+
+Naming needs light normalisation: strip the systematic variant suffixes (`_A`/`_B`/`_C`/`_Z`/`_E`/
+`_F`/`_G`, `_CNN`, `_L`) and map the romaji spellings to the display names already used elsewhere in
+this mod — `Kuririn`→Krillin, `Apuru`→Appule, `Freezer`→Frieza, `Saibamen`→Saibaman,
+`Recoom`→Recoome. `screen_community.lua`'s `CHAR_TOKENS` (62 entries) is the existing precedent for
+the spellings, and its comment records the relevant decision: these are **proper nouns, so no
+localization is needed**.
+
+Scale of the win: `nav_tracker`'s `CPL_NAMES` has **4** verified entries and `game_character_name`
+(the game's own `GetCharacterName`) returns "" for every id, so today the radar names 4 characters.
+This enum names ~119.
+
+**Dead ends confirmed by the same sweep** (do not re-investigate):
+- The character actor stores **no icon or texture**. `AAT_Character::MapIconComponent` /
+  `MobIconComponent` are typed-enum components only; `UATMapIconComponent` has just 6 members
+  (`MapIconType`, `SearchRangeRadius`, `bShowMapIcon`, `bShowLandmarkIcon`, `LandmarkType`,
+  `bIsHiddenTownToFieldIcon`) and cannot say WHICH character it belongs to. So the
+  "reuse the community board's icon→token trick on a world actor" idea has nothing to read.
+- No asset path pairs a `cplNNN` code with an icon token (`Charicon` files are
+  `<Family>_<Tok><VV>_<NN>_<NN>`, e.g. `D_Gok00_00_00`, and a grep for paths containing both a
+  `cpl\d{3}` and any known token returns **zero**). The icon families are `Charicon_D` (886 files),
+  `_Ev`, `_F`, `_Cz`; 2,796 paths total. Anonymous NPCs use a numbered `A##` token family
+  (`D_A0800_…`) with no name in it.
+- Code→icon and code→name DO exist, but only as DataTable row types
+  (`FCharacterIconInfo{CharaCode, Filename}`, `FCharacterIconCodeList{CharNameMsgId,
+  CharIconCodeType:E_CHARACTER_NAME}`, `FCharacterName{CharacterName}`), i.e. asset lookups —
+  irrelevant now that the enum answers directly. `E_CHARACTER_NAME` is a second readable roster
+  (`CHARA_GOKU=0`, `CHARA_GOHAN=2`, …) but appears only in those rows, not on the actor.
+
+**Tooling changed today** (both need a game restart to load — the Inspector loads once at start,
+and the dev channel's poll loop keeps its command table across a hot reload):
+- `tools/ue4ss-inspector`: `props`/`probe`/`watch` now render Str/Name/Text properties as text
+  (guarded `:ToString()`, no validity call — they are value types). They were excluded before,
+  which is why `speakerID` read as a handle.
+- `dev_charnames.lua` + the dev-channel command `charnames`: walks live characters reading
+  `UniqueId` / `speakerID` / `m_param_id` / `CharacterName` through the **strict** property gate
+  (this is a multi-candidate probe, and this note is explicit that `CharacterName` on
+  `QuestCharacter` is the uncatchable abort), plus the nameplate text, with incremental step
+  markers.

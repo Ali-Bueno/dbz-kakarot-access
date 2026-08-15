@@ -14,7 +14,8 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-08-14 — STATUS pruned back to a dashboard. No code changed.
+**Last updated:** 2026-08-15 — MCP proven against a running game; `navdump` abort fixed; character
+names now come from the `CharacterType` enum (~107 vs 4).
 
 ## Where the mod stands
 
@@ -25,17 +26,21 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 - The last code batch (2026-08-03, post-battle radar re-acquisition) is **source-only, never
   played**. Lint clean over 75 files. Needs a full restart.
-- The **MCP inspection server** (2026-08-06) is installed and wired — `Inspector : 1` in `mods.txt`,
-  `build_flags.debug = true`, both junctions in place — but has **never answered against a running
-  game**. `kak_alive` on 2026-08-14: game not running, `UE4SS.log` ~10 days stale.
+- The **MCP inspection server** works end to end (proven 2026-08-15: `kak_alive`, `kak_screen`,
+  `kak_dev say/navdump/charnames`, `kak_class`, `kak_census`, `kak_reload` all answered live). Two
+  hazards it taught us the hard way, both now fixed: a command left in the file **replayed one
+  second into boot** and crashed the game, and a dev probe that **walked live actors** crashed it
+  again. Dev probes read values, not actor handles.
 
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Smoke-test the MCP** (owed since 2026-08-06): `kak_alive` → `kak_screen` → `kak_census` with
-   one menu open. Until this passes, every diagnosis below still costs a full capture round through
-   the player.
+1. **Verify character names in the radar** (written 2026-08-15, NEVER RUN IN GAME). `CharacterType`
+   now resolves ~107 characters where `CPL_NAMES` resolved 4. Stand near named enemies/NPCs and
+   listen: a wrong name is worse than none, so check a few against what the game shows. The
+   suffix-stripping was cross-checked offline against the enum (107/119 named, 0 false positives in
+   the unnamed 120–276 tail), but nothing has been read off a live actor yet.
 2. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
    re-announcement. Try it with a HAND-PICKED target too (R3 → pick → get into a fight) — that is
