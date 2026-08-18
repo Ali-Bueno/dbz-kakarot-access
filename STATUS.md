@@ -36,11 +36,12 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Listen to the new character names** (wired 2026-08-18, reloaded live but NOT yet heard in
-   play). Names now come from the GAME, localized: `speakerID` -> `GetCharacterName` answers
-   "Bulma", "Zarbon", "Oficial del Ejército de Freezer". Walk past NPCs and enemies and check the
-   radar says the same thing the game shows. Our English tables are fallbacks now — if you hear an
-   English name where the game shows Spanish, that id had no message row and fell through.
+1. **Widen the character-name check** (wired 2026-08-18; FIRST ONE CONFIRMED IN PLAY — the radar
+   read "Bulma" off a live NPC). Names now come from the GAME, localized: `speakerID` ->
+   `GetCharacterName`. One NPC proves the path works end to end; it does not prove coverage. Still
+   to hear: a field ENEMY, an anonymous mob (should be a real description, not our generic noun),
+   and a story character in a different arc. Our English tables are fallbacks now — an English name
+   where the game shows Spanish means that id had no message row and fell through, so report it.
 
 2. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
