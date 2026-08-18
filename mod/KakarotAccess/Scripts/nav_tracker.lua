@@ -2619,6 +2619,12 @@ local NPC_ID_DUMP = false  -- SAFE, TARGETED: reads ONLY UniqueId (the one membe
 -- "Gohan's guardian" chapter and the C011 half of the Gohan/Piccolo demo pair.
 local CPL_NAMES = {
     Cpl001 = "Goku", Cpl002 = "Gohan", Cpl009 = "Yajirobe", Cpl011 = "Piccolo",
+    -- Cpl019 = Zarbon. PROVEN live 2026-08-18, not inferred: entering the Namek boss fight spawned
+    -- `AT_Character_cpl019_A_BP_C`, whose CharacterType read 35 = `Zarbon_A_C01`. The enemy class
+    -- name carries the cpl id and the enum carries the real name, so one actor pairs them outright.
+    -- This is the ONLY way an entry here should be earned — interpolating from the enum's order put
+    -- Zarbon at cpl017, and it was wrong, because the runs have gaps (see the notes file).
+    Cpl019 = "Zarbon",
 }
 local NPC_NAMES = {
     chichi = "Chi-Chi", gohan = "Gohan", goku = "Goku", krillin = "Krillin",

@@ -222,3 +222,20 @@ Counting runs forward from a known anchor therefore drifts, and any id derived t
 **The one decisive, zero-guess measurement:** an enemy's Blueprint class name carries its cpl id
 (`AT_Character_cpl004p1c02_BP_C`) and its `CharacterType` carries the real name. Read both off a
 live battle actor and the pairing is proven. That is how any new CPL_NAMES entry should be earned.
+
+### 2026-08-18 — Cpl019 = Zarbon, proven live (and the method that proves any other)
+
+Entering the Namek boss fight spawned `AT_Character_cpl019_A_BP_C`; its `CharacterType` read **35**
+= `Zarbon_A_C01`. The Blueprint class name carries the cpl id, the enum carries the real name, and
+one live battle actor pairs them with no inference at all. `Cpl019 = "Zarbon"` is now in CPL_NAMES.
+
+**This is the only way a CPL_NAMES entry should be earned.** Interpolating from the enum's run
+order — which is genuinely ordered by cpl id, with contiguous per-id blocks — placed Zarbon at
+cpl017. That was **wrong by two**, because the runs have gaps. The structure looked reliable enough
+to trust and was not; the measurement cost one command.
+
+**Generalizable:** any enemy the player fights pairs its cpl id with a real name this way, so the
+mod could LEARN the map at runtime (record `cplNNN` → `CharacterType` name whenever an
+`AT_Character` is seen, then name quest actors sharing that `UniqueId`). Not built — noted as the
+zero-guess route to naming story actors before their fight, since a character is only learned after
+being seen as an enemy at least once.
