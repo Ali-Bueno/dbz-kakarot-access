@@ -199,3 +199,26 @@ sample is not a survey — if an ENEMY is ever announced as Goku, that is the te
 command, the file was never written, and both MCP channels went silent from that moment). Do not
 run it on a live session until the census walk is bounded — see
 [dbz-kakarot-crash-bug](dbz-kakarot-crash-bug.md).
+
+### 2026-08-18 — `pak_index.txt` does NOT map CplNNN → character name (dead end, do not retry)
+
+Swept ids `cpl015`–`cpl020` looking for a readable character token on the same path. Result:
+
+- **Zero lines** anywhere in the 348k-path index carry a `cplNNN` id AND a character name.
+- Character names DO appear in the index, but in a separate hierarchy that never mentions a cpl id:
+  `AT/Content/MasterData/AI/BattleAI/Zarbon/BOSS_BATTLE_07/DT_BattleAI_Zarbon_Bs07_EnemyBehavior`,
+  `.../Zarbon/EVENT_BATTLE_12/...`. The two naming spaces simply do not meet in asset paths.
+- Skill tokens under `EFF/e/skill/CplNNN/` are NOT a character tell: `cpl004` (live-proven Apuru)
+  carries the generic `Rkidan`, and an agent reading only that token guessed Tien. Do not identify
+  a character from its skill asset names.
+- `cpl015` and `cpl016` do not appear in the index at all.
+
+**Nor can the enum ORDER be used to interpolate.** The runs are ordered by cpl id and each id owns a
+contiguous block (proven three ways from the header alone: `Cpl003_C/_D` in the tail ↔ Vegeta at
+8–10, `Cpl004_C05` ↔ Apuru at 11–14, `Cpl005_G` ↔ Freezer at 15–20) — **but there are gaps**: live
+reads give cpl057 → 75 (FZBit) and then cpl064 → 78 (AlienA), so six ids in between own nothing.
+Counting runs forward from a known anchor therefore drifts, and any id derived that way is a guess.
+
+**The one decisive, zero-guess measurement:** an enemy's Blueprint class name carries its cpl id
+(`AT_Character_cpl004p1c02_BP_C`) and its `CharacterType` carries the real name. Read both off a
+live battle actor and the pairing is proven. That is how any new CPL_NAMES entry should be earned.
