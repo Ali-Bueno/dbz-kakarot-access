@@ -325,6 +325,11 @@ local S = {
         compz_title = "Enciclopedia Z",
         cat_memory = "recuerdo",
         cat_item = "objeto",
+        -- Derived from the collectible's CLASS NAME, not from the game's own text (the localized
+        -- route is ItemId -> JName -> GetMessageFromID and is still untested — see the item-names
+        -- note). If the game words either of these differently on screen, THAT wording wins.
+        cat_dmedal = "Medalla D",
+        cat_treasure = "tesoro",
         cat_npc = "personaje",
         cat_companion = "compañero",
         cat_fishing = "zona de pesca",
@@ -589,6 +594,8 @@ local S = {
         radar_cat_other = "Other",
         cat_memory = "memory",
         cat_item = "item",
+        cat_dmedal = "D Medal",
+        cat_treasure = "treasure",
         cat_npc = "character",
         cat_companion = "companion",
         cat_fishing = "fishing spot",

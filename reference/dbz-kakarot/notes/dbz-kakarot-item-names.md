@@ -66,3 +66,33 @@ Open question for the player, not answerable from code: Dragon Balls already ann
 Dragón". Whether the ask is the STAR NUMBER ("Bola de 4 estrellas") or just naming the OTHER
 collectibles decides how much work this is — the star number needs a per-ball index nobody has
 looked for yet, and `ADragonBallStaticActor` exposes only `m_IsFloat`, so it is probably in `ItemId`.
+
+## 2026-08-18 — shipped: noun by class name (the interim, not the real fix)
+
+The player's answer to the open question was *"que se nombren los demás coleccionables"* — Dragon
+Balls stay as they are, the rest need names. Shipped now, offline, no live data required:
+
+- `nav_tracker.lua` section 4 gains a block-local `COLLECTIBLE_NOUN` list of class-name patterns ->
+  i18n noun, replacing the single hard-coded `find("Memories")`. **First match wins**, which matters:
+  `DMedalTreasure_BP_C` contains both `DMedal` and `Treasure`.
+- New i18n keys `cat_dmedal` ("Medalla D" / "D Medal") and `cat_treasure` ("tesoro" / "treasure").
+- `drop_item_name` now strips the drop-table bookkeeping: `_Fixed`, `_Normal`, `_AreaNN_NN`, a
+  trailing `_NN`. `Lost_Seaweed_Area11_01` was being read out in full; it now says "Lost Seaweed".
+- `is_memory` is derived from the resolved noun instead of a second `find`, so they cannot drift.
+
+Coverage checked against the pak index rather than against the one area that was loaded — every
+collectible Blueprint in the game is one of: `BP_FieldMemoriesActor`, `BP_DLC6_FieldMemoriesActor`,
+`BP_DLC7_FieldMemoriesActor`, `BP_DLC7_FieldMemoriesActor_FM_019`, `DMedalTreasure_BP`,
+`EventItemTreasure_BP`, `TreasureEventItem_BP`, `ItemStaticActor_BP`, `DragonBallManager_BP`. The
+four memory variants all contain `FieldMemories` and `TreasureEventItem` contains `Treasure`, so the
+four patterns cover all eight pickups.
+
+**`ItemStaticActor` was deliberately NOT added to the scan list.** It is the class that would carry a
+real `ItemId`, but `findall ItemStaticActor` returned **no instances** live, and the playbook rule is
+explicit: every class name an adapter names joins the ABSENT scan set and costs a full `FindAllOf`
+every ~4 s forever, so name only what a dump has actually shown. A pak path proves an asset exists,
+not that it is ever loaded. Dragon Balls already reach the radar through map icon 28 anyway.
+
+**These nouns are DERIVED FROM CLASS NAMES, not from the game's own text**, and that is the
+limitation to fix next: `ItemId -> JName -> GetMessageFromID` gives the real localized name. If the
+game words a D Medal or a chest differently on screen, the game's wording wins over this table.

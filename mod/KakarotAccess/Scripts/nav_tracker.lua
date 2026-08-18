@@ -3262,6 +3262,27 @@ function Nav.list_targets(boxed)
         -- in this game, and calling a non-existent member raises the uncatchable C++
         -- error that killed this whole loop (seen live 2026-07-04 — the R3 menu went
         -- dead for the session; same lesson as CharacterName in npc_name above).
+        -- Spoken noun per collectible CLASS (2026-08-18, user request: name the collectibles).
+        -- Every AAccessPointItemBase pickup shares the same reflected fields — a D Medal and an
+        -- event chest both read TreasureType 0 and InteractItemType 0 live, and their only
+        -- distinguishing member is TreasureSaveName, which is a SAVE key (L11_DMEDAL_310) — so the
+        -- CLASS NAME is the only thing that tells the types apart. Without this they all spoke the
+        -- generic "objeto". Same technique the Field Memory check already used, table-driven now.
+        --
+        -- These nouns are DERIVED FROM THE CLASS NAME, not from the game's own text: the proper
+        -- source is ItemId -> the item table's JName -> GetMessageFromID, which returns the real
+        -- localized name, but no ItemStaticActor was loaded to test that hop (see
+        -- reference/dbz-kakarot/notes/dbz-kakarot-item-names.md). When that lands it becomes the
+        -- primary and this table stays as the fallback.
+        --
+        -- FIRST MATCH WINS, so specific patterns come before generic ones: DMedalTreasure_BP_C
+        -- contains both "DMedal" and "Treasure" and must not be announced as a plain treasure.
+        local COLLECTIBLE_NOUN = {
+            { pat = "Memories", noun = "cat_memory" },
+            { pat = "Memory",   noun = "cat_memory" },
+            { pat = "DMedal",   noun = "cat_dmedal" },
+            { pat = "Treasure", noun = "cat_treasure" },
+        }
         local function visible_actor(a)
             -- Gated hop (was `pcall(function() hidden = a.bHidden end)`): `a` comes straight
             -- out of the FindAllOf over the actor classes just below (an on-demand scan -
@@ -3313,7 +3334,14 @@ function Nav.list_targets(boxed)
                 end
             end)
             if not raw then return nil end
-            local cleaned = raw:gsub("_", " ")
+            -- Strip the drop-table bookkeeping before speaking it. The keys are `<Item>_Fixed` and
+            -- `<Item>_AreaNN_NN` (live 2026-08-18: `Lost_Seaweed_Fixed`, `Lost_Seaweed_Area11_01`),
+            -- so those suffixes are pure noise to a listener — "Lost Seaweed Area11 01" was being
+            -- read out in full. Still the game's INTERNAL English id, not its localized name; see
+            -- the note above on COLLECTIBLE_NOUN for the real fix.
+            local base = raw:gsub("_Fixed$", ""):gsub("_Normal$", "")
+                            :gsub("_Area%d+_%d+$", ""):gsub("_%d+$", "")
+            local cleaned = ((base ~= "" and base) or raw):gsub("_", " ")
             return cleaned:match("%a%a%a") and cleaned or nil
         end
         -- Per-class capabilities (which reflected properties EXIST — reading a property
@@ -3333,9 +3361,15 @@ function Nav.list_targets(boxed)
                     and (not c.state or not point_taken(a)) then
                     local cn = "?"
                     pcall(function() cn = a:GetClass():GetFName():ToString() end)
-                    local is_memory = cn:find("Memories", 1, true) ~= nil
                     local grp = "collectibles"
-                    local noun = is_memory and "cat_memory" or "cat_item"
+                    local noun = "cat_item"
+                    for _, m in ipairs(COLLECTIBLE_NOUN) do
+                        if cn:find(m.pat, 1, true) then noun = m.noun break end
+                    end
+                    -- Derived from the resolved noun, not from a second `find("Memories")`, so the
+                    -- two can never disagree about what a Field Memory is. The DLC variants
+                    -- (BP_DLC6_/BP_DLC7_FieldMemoriesActor) match the same pattern.
+                    local is_memory = (noun == "cat_memory")
                     if c.action and not is_memory then
                         -- Non-memory action points are interactable SPOTS you use
                         -- (train/meditate/examine — e.g. Piccolo's waterfall), not

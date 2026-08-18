@@ -43,18 +43,28 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    and a story character in a different arc. Our English tables are fallbacks now — an English name
    where the game shows Spanish means that id had no message row and fell through, so report it.
 
-2. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
+2. **Run `charnames` near a Dragon Ball or a static item pickup** (armed 2026-08-18, NEVER RUN with
+   one loaded). It reads `ItemStaticActor.ItemId` and feeds it to `GetMessageFromID`. If that
+   answers, collectibles name themselves from the game's own localized text and the class-name noun
+   table becomes a fallback; if it returns "", the missing hop is a DataTable row read. Collectibles
+   currently say "Medalla D" / "tesoro" / "recuerdo" from CLASS NAMES — my wording, not the game's.
+3. **Check the bonfire and the machines on the radar.** They are already mapped and localized
+   (`cat_bonfire` = "hoguera de cocina", plus time machine, training room, dev lab, Turtle School —
+   twelve site types) and grouped under Sites. The player asked to "add" them, so either they are not
+   being FOUND where they stand, or they are found but buried in Sites and want their own category.
+   Stand next to a bonfire, cycle to Sitios, and report which it is.
+4. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
    re-announcement. Try it with a HAND-PICKED target too (R3 → pick → get into a fight) — that is
    the separate resume lane, so say which of the two is slow if either is. Then advance a quest so
    the objective CHANGES: guidance should start almost at once. Two things that are NOT bugs — the
    game sometimes spawns the marker seconds after the HUD text changes, and a marker that never
    appears still burns the preempt's tries over ~15 s.
-3. **Ctrl+F5 after ~10 minutes** — owed since 2026-08-03, and the only way to know whether the ghost
+5. **Ctrl+F5 after ~10 minutes** — owed since 2026-08-03, and the only way to know whether the ghost
    work paid. Compare against `ui step ms: avg 35.48 / max 925`, `findall scans: n=1982 /
    119463 ms`, `ghost classes: 42 / 84783 ms`.
-4. **Soul Emblems**: the grid must read, and the board alone must still read.
-5. **Dev loop**: create `UE4SS-settings.dev.ini` (consoles on) and have `package.ps1` ship the
+6. **Soul Emblems**: the grid must read, and the board alone must still read.
+7. **Dev loop**: create `UE4SS-settings.dev.ini` (consoles on) and have `package.ps1` ship the
    release ini instead, so development stops running against the release profile.
 
 ## Identity
