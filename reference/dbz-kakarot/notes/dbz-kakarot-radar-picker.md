@@ -206,3 +206,31 @@ across teardown); when the world returns, re-acquire by category+key through
 `Nav.list_targets()` (every 3rd scan, 10 tries) and hand back to `set_manual_target`
 (keep_sweep). The quest auto-scan is gated off while a resume is pending. Deliberate
 stops clear it (B / F3-off / a new pick). Companion targets (grp=nil) not resumable.
+
+## 2026-08-18 — roaming enemies were listed as COMPANIONS (SpawnType 0 blind spot)
+
+User report: *"me sale aliens en compañeros, que no debería salir porque son enemigos"* — the Namek
+Frieza-force mobs appeared under Compañeros, and Shift+F5 would target one as if it were a party
+member.
+
+`companions()` filtered enemies out NEGATIVELY:
+
+```lua
+and not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]
+```
+
+`ENEMY_NOUN_BY_SPAWN` is `{ [1]="cat_enemy", [2]="cat_enemy_quest", [3]="cat_enemy_boss" }` — **there
+is no `[0]`**, and the enemy scan itself proves it, because it has to write
+`ENEMY_NOUN_BY_SPAWN[...] or "cat_enemy"` to cover the rest. A **free-roaming mob is SpawnType 0**, so
+the lookup returned nil, `not nil` was true, and every roaming enemy passed as a companion. The filter
+read as if it excluded enemies and in fact excluded only the *specifically flagged* ones.
+
+Fixed by inverting it into a POSITIVE test — `is_playable_char(c)`, i.e. the actor really is an
+`AT_CharacterPlayableBase`. That helper already existed and the **enemy scan was already using it** to
+keep the party out of the enemy list, so the two scans now share one definition of "party member" and
+cannot drift apart. The player is still dropped by `me_key`.
+
+**Lesson: a negative filter built on a lookup table silently inherits every gap in that table.** The
+same table needed an `or` default two hundred lines away, which was the visible proof that its
+coverage was partial. When a filter means "is not an X", prefer asking "is a Y" against a class the
+engine guarantees.

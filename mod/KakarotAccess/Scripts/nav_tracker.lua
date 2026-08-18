@@ -2446,10 +2446,19 @@ local function companions(px, py, pz)
     local me_key = me and tostring(me:GetAddress()) or ""
     local out = {}
     for _, c in pairs(Core.findall("AT_Character")) do
-        -- Exclude field ENEMIES (SpawnType != 0): Shift+F5 must cycle party members,
-        -- not the mob you're about to fight (they're AT_Character too).
+        -- POSITIVE test: a companion IS an AT_CharacterPlayableBase. This used to be the
+        -- negative `not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]`, and that filter is
+        -- BLIND TO ROAMING ENEMIES: the table only has entries for SpawnType 1/2/3 (the
+        -- enemy scan says as much — it needs `or "cat_enemy"` for the rest), and a free-roaming
+        -- mob is SpawnType 0, so `ENEMY_NOUN_BY_SPAWN[0]` is nil and every one of them passed
+        -- as a party member. User report 2026-08-18: the Namek alien mobs were listed under
+        -- Compañeros, and Shift+F5 would target one as if it were Gohan.
+        --
+        -- `is_playable_char` is the SAME helper the enemy scan already uses to exclude the
+        -- party (line ~1283), so the two scans now share one definition of "party member" and
+        -- cannot disagree. It also covers the player, who is dropped by me_key just below.
         if Core.valid(c) and tostring(c:GetAddress()) ~= me_key
-            and not ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0]
+            and is_playable_char(c)
             and char_visible(c) then
             local x, y, z = actor_pos(c)
             if x then
