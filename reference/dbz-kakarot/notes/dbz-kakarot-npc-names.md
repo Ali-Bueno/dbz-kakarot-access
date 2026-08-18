@@ -340,3 +340,32 @@ structure the header's tail confirms with `Cpl003_C/_D`, `Cpl004_C05`, `Cpl005_G
 
 **Still unnamed: `Npc086`** (the Namekian child of the fruit side-quest). All seven letters A–G
 return "". Some NPCs genuinely have no row in the message table; the fallback chain stays for them.
+
+### 2026-08-18 — NPCs the character table cannot name: `NpcTalkComponent.m_SpeakerId`
+
+`Npc086`, the Namekian child of the fruit side-quest, returns "" from `GetCharacterName` on all seven
+letters — yet the game names him on screen: *"Niño namekuseijin: ¿Vas a conseguirme algunas
+frutas?…"*. He is named in the **speaker** column of the message table, not in the character table,
+and the id that reaches it is a THIRD id space. Read live off his actor:
+
+```
+Sub_Npc086_01_Client.NPCTALK   (UNpcTalkComponent, AT.hpp)
+   m_SpeakerId        Npc_ex675
+   m_talkParamId      Sub_Npc086_01_Npc086_03
+   CurrentMessageId   ¿Vas a conseguirme algunas frutas? ¿Pero por qué...?
+```
+
+Three things worth keeping:
+
+1. **`m_SpeakerId` is not `UniqueId` and not `speakerID`.** `Npc_ex675` bears no relation to `Npc086`,
+   which is why every letter of `Npc086` came back empty. A quest NPC can carry an id from a pool
+   the character table never indexes.
+2. **`CurrentMessageId` holds the RESOLVED LOCALIZED LINE**, not an id, despite the name. The
+   component does its own text resolution, so that member is a ready-made subtitle source.
+3. `UNpcTalkComponent` is attached as a component named `NPCTALK` on quest actors and
+   `NpcTalkComponent` on `AT_Character`s — both spellings observed live in the same `findall`.
+
+**UNVERIFIED:** whether `GetSpeakerFromID("Npc_ex675")` returns "Niño namekuseijin". That is the one
+call left to make, and it is the whole feature — if it answers, every NPC the character table cannot
+name gets its on-screen name from its own talk component. The probe run that would have answered it
+**took the game down** (see the crash-bug note), so this is the first thing to run next session.

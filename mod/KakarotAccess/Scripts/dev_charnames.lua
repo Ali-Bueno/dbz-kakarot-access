@@ -67,25 +67,11 @@ local RESOLVERS = {
 
 -- Ids probed even when the world walk finds nothing, so a run always tests the CALL itself.
 -- speakerID is UniqueId + a variant letter (Cpl003 -> Cpl003A), proven on 2026-08-15.
-local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl002B", "Cpl019A", "Npc004A",
-                    -- class-name-derived ids for the enemy branch (2026-08-18): speakerID is
-                    -- empty there, so these come from AT_Character_cplNNN..._BP_C.
-                    "Cpl003A", "Cpl057A", "Cpl064A", "Cpl065A",
-                    -- UATEnemiesBaseBehaviour.EnemiesBaseId read live off
-                    -- BP_EnemiesBaseFreezer_C_0 — testing whether a base id has a name row.
-                    "142",
-                    -- Variant-letter sweep (2026-08-18): the soul-emblem note records keys
-                    -- as CplNNN{A..G}, and only "A" has ever been tried. Npc086 is the
-                    -- Namekian child of the fruit side-quest and Cpl057 the FZBit mobs —
-                    -- both return "" on A, so if a later letter answers, the resolver needs
-                    -- to walk the letters instead of assuming A.
-                    "Npc086B", "Npc086C", "Npc086D", "Npc086E", "Npc086F", "Npc086G",
-                    "Cpl057B", "Cpl057C", "Cpl057D",
-                    -- Do the families that DO answer on "A" also have later letters? That
-                    -- decides whether the resolver takes the FIRST non-empty letter or the
-                    -- one matching the costume index (cpl057 has 3 classes and 3 names).
-                    "Cpl004B", "Cpl004C", "Cpl004D", "Cpl064B", "Cpl064C",
-                    "Cpl065B", "Cpl065C", "Cpl002C" }
+-- Only ids whose answer is still UNKNOWN. Everything already resolved (Cpl002A/003A/004A-D,
+-- 019A, 057B-D, 064A-C, 065A-C, Npc004A) is recorded in the npc-names note; re-asking them every
+-- run just multiplies reflected calls for no information.
+local EXTRA_IDS = { "Npc_ex675", "Sub_Npc086_01_Npc086_03" }
+
 
 -- QuestCharacter ONLY, by default (narrowed 2026-08-15 after this probe killed the game).
 --
@@ -117,6 +103,16 @@ local PLATE_SLOTS = { "Ins_Info00", "Ins_Info01" }
 local PLATE_TEXTS = { "Txt_Name", "Txt_Name01", "Txt_Name02", "Txt_Name03" }
 -- Native-side twins on AT_UIInfoNameCore (same widget, reflected under the C++ names).
 local PLATE_NATIVE = { "NameTxt", "NameTxt_Large", "PopularNameTxt", "PopularNameTxt_Large" }
+
+-- OFF BY DEFAULT (2026-08-18, after this probe took the game down mid-session).
+-- `Nav.list_targets()` is, in nav_tracker's own words, "the mod's single most expensive and most
+-- dangerous operation — 17 unbudgeted FindAllOf plus a dereference of every candidate". It answered
+-- the question it was added for (which group each actor lands in) across four clean runs, and then
+-- a run died with nothing in the log but the command acknowledgement. That does not prove this
+-- section was the cause — the crash trail at next boot will say — but it is by far the heaviest
+-- thing here, it is no longer needed for a routine name probe, and a diagnostic that can kill the
+-- session is worth less than the data it collects. Flip it to true deliberately, for one run.
+local DUMP_TARGET_LIST = false
 
 local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
@@ -165,7 +161,9 @@ function M.run()
         local nok, Nav = pcall(require, "nav_tracker")
         w("")
         w("======== radar target list ========")
-        if not nok or not Nav or not Nav.list_targets then
+        if not DUMP_TARGET_LIST then
+            w("(skipped: DUMP_TARGET_LIST is false — see the flag)")
+        elseif not nok or not Nav or not Nav.list_targets then
             w("(nav_tracker unavailable: " .. tostring(Nav) .. ")")
         else
             local cats

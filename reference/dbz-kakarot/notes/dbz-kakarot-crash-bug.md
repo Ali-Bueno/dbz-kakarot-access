@@ -1870,3 +1870,28 @@ this UE4SS build lacks the hook → need a fallback detector.
 sublevel teardown). Next step: get the crash frame offset (AT-Win64-Shipping+0x…) from
 the UE4SS/crash log, and consider gating on a fade/loading widget or dropping actor
 caches when the world gate has been closed >1 tick.
+
+## 2026-08-18 — `charnames` killed a live session (third dev-tool crash today)
+
+Ran the dev name probe while the player was standing in a sub-quest area. The dev channel logged the
+acknowledgement (`char name probe -> Scripts/dumps/dump_char_names.txt`) and then **nothing at all**:
+no error, no traceback, no dump file written (its mtime stayed on the previous run), and both MCP
+channels went silent while the process was still up.
+
+The probe had grown a lot during the session: a `Nav.list_targets()` dump, an item-id walk over four
+actor classes, and an id list that had reached ~30 entries probed against 3 functions on 2 libraries.
+By far the heaviest part is `list_targets`, which `nav_tracker` itself documents as *"the mod's
+single most expensive and most dangerous operation — 17 unbudgeted FindAllOf plus a dereference of
+every candidate"*. Four clean runs, then a dead session.
+
+Not proven to be the cause — the crash trail at next boot will name the last mark. Changes made
+anyway, because a diagnostic that can kill the session is worth less than the data it collects:
+
+- `DUMP_TARGET_LIST` flag, **default false**. Flip it deliberately, for one run.
+- `EXTRA_IDS` trimmed to ids whose answer is still unknown; everything already resolved lives in the
+  npc-names note instead of being re-asked every run.
+
+**Standing lesson, now three times over in one day** (navdump freeze, the actor-walk crash on
+2026-08-15, this): dev probes accrete. Each addition looks free because the previous run was fine.
+Give every heavy section its own flag from the start, and delete ids/classes from the probe the
+moment their answer is recorded.
