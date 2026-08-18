@@ -328,6 +328,9 @@ local S = {
         -- Derived from the collectible's CLASS NAME, not from the game's own text (the localized
         -- route is ItemId -> JName -> GetMessageFromID and is still untested — see the item-names
         -- note). If the game words either of these differently on screen, THAT wording wins.
+        -- "Ejército de Freezer" is the game's own phrase — GetCharacterName returns
+        -- "Oficial del Ejército de Freezer" for the mobs that guard these bases.
+        cat_enemy_base_freezer = "base del Ejército de Freezer",
         cat_dmedal = "Medalla D",
         cat_treasure = "tesoro",
         cat_npc = "personaje",
@@ -594,6 +597,7 @@ local S = {
         radar_cat_other = "Other",
         cat_memory = "memory",
         cat_item = "item",
+        cat_enemy_base_freezer = "Frieza Force base",
         cat_dmedal = "D Medal",
         cat_treasure = "treasure",
         cat_npc = "character",

@@ -3110,14 +3110,17 @@ function Nav.list_targets(boxed)
     -- Add by EMapIcon type (icons): derive group + noun from the type. A named
     -- mission marker (see is_mission_marker) is a QUEST destination whatever its
     -- icon type says — no distance cap, listed under Quests.
-    local function add_icon(actor, t, src)
+    -- `noun_override` (2026-08-18): let a caller name a POI more precisely than its EMapIcon type
+    -- can. Enemy bases are the case that needed it — every one of them is EMapIcon 32, so they all
+    -- spoke the same "base enemiga" with nothing to tell them apart.
+    local function add_icon(actor, t, src, noun_override)
         if not t then return end
         if is_mission_marker(actor) then
             add_target(actor, "quests", "nav_other", nil, src)
             return
         end
         local grp = ICON_GROUP[t] or "other"
-        local noun = ICON_NOUN[t] or ("radar_cat_" .. grp)
+        local noun = noun_override or ICON_NOUN[t] or ("radar_cat_" .. grp)
         local _, range = icon_info(actor)
         -- Gathering/collect spots that are access-point actors (mining points, bug
         -- nests, chests) DO carry the Taken state: mark them stateful so the chained
@@ -3190,7 +3193,25 @@ function Nav.list_targets(boxed)
             if Core.valid(comp) then
                 local owner
                 pcall(function() owner = comp:GetOwner() end)
-                if Core.valid(owner) then add_icon(owner, 32, "enemybase") end
+                if Core.valid(owner) then
+                    -- Name the base by its FACTION, from the owner's class name (user request
+                    -- 2026-08-18: "algún nombre mejor para identificarla"). The base's own
+                    -- `EnemiesBaseId` looked like the right key and is not: it read 142 live, and
+                    -- 142 / EB142 / EnemiesBase142 all return "" from every resolver, so there is
+                    -- no game-authored name to fetch. The owner class is self-describing instead
+                    -- (`BP_EnemiesBaseFreezer_C`, seven of them on Namek), and "Ejército de
+                    -- Freezer" is the game's OWN wording — it is exactly what GetCharacterName
+                    -- returns for the mobs guarding these bases ("Oficial del Ejército de
+                    -- Freezer"), so this composes with what the player already hears rather than
+                    -- inventing a second vocabulary. Only the faction actually observed is listed.
+                    local ocn = ""
+                    pcall(function() ocn = owner:GetClass():GetFName():ToString() end)
+                    local nb = nil
+                    if type(ocn) == "string" and ocn:find("Freezer", 1, true) then
+                        nb = "cat_enemy_base_freezer"
+                    end
+                    add_icon(owner, 32, "enemybase", nb)
+                end
             end
         end
     end

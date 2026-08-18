@@ -70,7 +70,10 @@ local RESOLVERS = {
 local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl002B", "Cpl019A", "Npc004A",
                     -- class-name-derived ids for the enemy branch (2026-08-18): speakerID is
                     -- empty there, so these come from AT_Character_cplNNN..._BP_C.
-                    "Cpl003A", "Cpl057A", "Cpl064A", "Cpl065A" }
+                    "Cpl003A", "Cpl057A", "Cpl064A", "Cpl065A",
+                    -- UATEnemiesBaseBehaviour.EnemiesBaseId read live off
+                    -- BP_EnemiesBaseFreezer_C_0 — testing whether a base id has a name row.
+                    "142", "EnemiesBase142", "EB142" }
 
 -- QuestCharacter ONLY, by default (narrowed 2026-08-15 after this probe killed the game).
 --
@@ -140,6 +143,40 @@ function M.run()
         local f = io.open(dump_path(), "a")
         if not f then return end
         local w = writer(f)
+
+        -- RADAR TARGET LIST (2026-08-18). The light replacement for the target section of
+        -- `navdump`, which FREEZES the game (see the crash-bug note) and so cannot be used on a
+        -- live session. This calls `Nav.list_targets()` — the very same build R3 triggers, with its
+        -- own `Mem.mark("nav.sweep")` — so it adds no exposure the picker does not already have,
+        -- and it answers the only question that matters when something is "not in its category":
+        -- which group did each actor actually land in.
+        local nok, Nav = pcall(require, "nav_tracker")
+        w("")
+        w("======== radar target list ========")
+        if not nok or not Nav or not Nav.list_targets then
+            w("(nav_tracker unavailable: " .. tostring(Nav) .. ")")
+        else
+            local cats
+            w("   step: Nav.list_targets()")
+            local lok = pcall(function() cats = Nav.list_targets() end)
+            if not lok or type(cats) ~= "table" then
+                w("   (list_targets raised or returned nothing — field not ready?)")
+            elseif #cats == 0 then
+                w("   (EMPTY: field_ready false, no pawn, or no targets at all)")
+            else
+                for _, c in ipairs(cats) do
+                    w(("-- group %-14s (%d items)"):format(tostring(c.key), #(c.items or {})))
+                    for i, it in ipairs(c.items or {}) do
+                        if i > 12 then w("      … more") break end
+                        local cls = "?"
+                        pcall(function() cls = it.actor:GetClass():GetFName():ToString() end)
+                        w(("      %-28s %-22s %6.0fm  %s"):format(
+                            tostring(it.name or "-"), tostring(it.noun), (it.dist or 0) / 100, cls))
+                    end
+                end
+            end
+        end
+        w("======== end radar target list ========")
 
         w("")
         w("======== char name probe ========")
