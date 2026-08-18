@@ -164,3 +164,38 @@ and the dev channel's poll loop keeps its command table across a hot reload):
   (this is a multi-candidate probe, and this note is explicit that `CharacterName` on
   `QuestCharacter` is the uncatchable abort), plus the nameplate text, with incremental step
   markers.
+
+## 2026-08-18 — the enum is authored on ONE branch only (playtest regression)
+
+The `CharacterType` naming shipped on 2026-08-15 (commit `2e0b891`) was wired into BOTH namers.
+The player's first playtest: *"me está detectando todo como goku — tengo a Dodoria a unos 300
+metros y dice que es Goku"*. Measured live over the MCP, two reads settle it:
+
+| Actor | Class | `CharacterType` | Authored? |
+|---|---|---|---|
+| field enemy, `/Game/Maps/Area11/Area11_P` (Namek) | `AT_Character_cpl004p1c02_BP_C` | 11 → `Apuru` | **yes** |
+| `Itm098c01` — an ITEM, `UniqueId = None` | `QuestCharacterBase_C` | **1 → `Goku`** | **no — BP default** |
+
+**The rule: the enum is only meaningful on a class that exists to BE one character.**
+`QuestCharacterBase_C` is the GENERIC class the game reuses for talkable NPCs, items and quest
+markers alike; nobody authors `CharacterType` on it, so every instance carries the Blueprint
+default, and that default happens to be 1 = Goku. `AT_Character_cplNNN_BP_C` is per-character, so
+its value is real.
+
+**There is no way to tell an authored 1 from a defaulted 1 from the value alone**, so the
+discrimination has to live at the CALL SITE. `npc_name` no longer reads the enum at all (back to
+`UniqueId`); `enemy_display_name` keeps it — all three of its call sites are already behind an
+`IsA(AT_Character)` gate (the enemy collector, the lock-on label, the companion collector).
+
+Corroboration for `cpl004` = Appule, from `pak_index.txt`: its assets sit under `Cpl004`/`C004A`
+with a DLC variant `Cpl004E` carrying `frie` (Frieza-force) tokens, and the live actor was on a
+Namek field map — where Appule is a field enemy. The index never spells the name, so this is
+supporting evidence, not proof.
+
+**Still unverified:** whether any `AT_Character_cplNNN_BP_C` also ships an unauthored 1. One
+sample is not a survey — if an ENEMY is ever announced as Goku, that is the tell.
+
+**New dead end:** `navdump` FROZE the running game on 2026-08-18 (the dev channel acknowledged the
+command, the file was never written, and both MCP channels went silent from that moment). Do not
+run it on a live session until the census walk is bounded — see
+[dbz-kakarot-crash-bug](dbz-kakarot-crash-bug.md).

@@ -148,6 +148,16 @@ end
 
 -- Spoken name for a LIVE character actor, plus the raw code when the enum has no name.
 --
+-- ONLY CALL THIS ON A CHARACTER-SPECIFIC CLASS (2026-08-18, measured live). The enum is declared
+-- on AAT_CharacterBase, so every descendant answers it — but only classes that exist to BE one
+-- character ever author it. `AT_Character_cpl004p1c02_BP_C` answered 11 (Apuru), a real value;
+-- `QuestCharacterBase_C`, the GENERIC class the game reuses for NPCs, items and quest markers,
+-- answered 1 on an ITEM whose UniqueId was "None" — 1 is Goku, and it is simply the Blueprint
+-- default nobody overrode. Asking a generic class therefore renames everything to Goku, which is
+-- how this shipped broken: the radar called Dodoria at 300 m "Goku". There is no way to tell an
+-- authored 1 from a defaulted 1 on the value alone, so the discrimination has to happen at the
+-- CALL SITE: nav_tracker only calls this behind an IsA(AT_Character) gate.
+--
 -- `Core` is passed IN rather than required, so this stays a pure data module with no dependency
 -- back into the UI substrate (nav_tracker already holds Core; a require here would be a cycle).
 --

@@ -2710,15 +2710,16 @@ end
 -- game raises a C++ exception pcall CANNOT catch — which froze the game (it aborted
 -- right after the menu had blocked the pad, leaving a stuck neutral pad).
 local function npc_name(npc)
-    -- CharacterType FIRST — see enemy_display_name. It is declared on AAT_CharacterBase, which
-    -- QuestCharacter also derives from, so talkable NPCs get the same ~107-name coverage from the
-    -- same single read; UniqueId below stays as the fallback and as the source for the
-    -- descriptive-id word match further down.
-    local ctok, CT = pcall(require, "char_types")   -- pcall'd, see enemy_display_name
-    if ctok and CT then
-        local ct_name = CT.of_actor(Core, npc)
-        if ct_name then return ct_name end
-    end
+    -- NO CharacterType HERE (2026-08-18, measured in the live game). It is declared on
+    -- AAT_CharacterBase, so QuestCharacter really does inherit it — but nothing on this branch
+    -- ever AUTHORS it, and the Blueprint default is 1, which is Goku. Read live: the actor
+    -- `Itm098c01` of class QuestCharacterBase_C — an ITEM, UniqueId "None" — answered
+    -- CharacterType = 1. QuestCharacterBase_C is the GENERIC class the game reuses for NPCs,
+    -- items and quest markers alike, so asking it for a character name renames every field NPC
+    -- on the radar to Goku. That is exactly what the player heard: Dodoria at 300 m announced as
+    -- Goku. The enemy branch is different and keeps the enum — its actors are character-specific
+    -- classes (AT_Character_cpl004p1c02_BP_C answered 11 = Apuru, a real authored value).
+    -- A wrong name is worse than no name, so this branch stays on UniqueId alone.
     local raw
     pcall(function()
         raw = Core.name_str(Core.member(npc, "UniqueId"))

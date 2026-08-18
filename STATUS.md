@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-08-15 — MCP proven against a running game; `navdump` abort fixed; character
+**Last updated:** 2026-08-18
 names now come from the `CharacterType` enum (~107 vs 4).
 
 ## Where the mod stands
@@ -36,11 +36,15 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Verify character names in the radar** (written 2026-08-15, NEVER RUN IN GAME). `CharacterType`
-   now resolves ~107 characters where `CPL_NAMES` resolved 4. Stand near named enemies/NPCs and
-   listen: a wrong name is worse than none, so check a few against what the game shows. The
-   suffix-stripping was cross-checked offline against the enum (107/119 named, 0 false positives in
-   the unnamed 120–276 tail), but nothing has been read off a live actor yet.
+1. **Re-verify character names in the radar** (half fixed 2026-08-18, PARTLY UNVERIFIED). The
+   2026-08-15 enum naming was wrong on NPCs — `QuestCharacterBase_C` is the generic class the game
+   reuses for NPCs, items and quest markers, it never authors `CharacterType`, and the Blueprint
+   default is 1 = Goku, so the radar called everything Goku (player report: Dodoria at 300 m). That
+   branch is back on `UniqueId`. The ENEMY branch keeps the enum (its classes are per-character;
+   `AT_Character_cpl004p1c02_BP_C` read 11 = Apuru, authored) and is still on ONE live sample. So:
+   listen to ENEMY names specifically — **if an enemy is ever announced as Goku, the enemy branch
+   has the same defect and must go too.** NPCs are expected to be generic nouns again, not names.
+
 2. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
    re-announcement. Try it with a HAND-PICKED target too (R3 → pick → get into a fight) — that is

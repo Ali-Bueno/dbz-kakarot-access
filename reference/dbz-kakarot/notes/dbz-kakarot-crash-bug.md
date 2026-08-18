@@ -1,5 +1,24 @@
 # dbz-kakarot-crash-bug
 
+> **2026-08-18 — `navdump` NOW FREEZES THE GAME OUTRIGHT. Do not run it on a live session.**
+> Ran it over the MCP while the player was in the field on Namek. The dev channel answered
+> `nav dump -> Scripts/dumps/dump_nav_targets.txt` — so the command was received and `Nav.dump`
+> was entered — but the file was never written (mtime stayed on the previous run, three days
+> old), and from that instant BOTH MCP channels stopped answering and the player reported the
+> game frozen. `kak_alive` then read "no answer" on both while the process was still up.
+>
+> **This is a different failure from the 2026-08-15 one below.** That one ABORTED (uncatchable
+> throw, dump truncated, game survived, error in the log). This one HANGS, with nothing in the
+> log at all. The 2026-08-15 fix made the census survive reads it used to die on — which means it
+> now keeps walking where it previously bailed out, so the suspect is the walk's SIZE, not its
+> safety: the field census plus the actor sections over a fully streamed open-world map.
+>
+> **Before running it again:** bound the walk (a hard cap on actors per section and a total
+> element budget) and yield between sections. The step markers added on 2026-08-15 are still
+> there and will name the section it dies in — but only if the file gets flushed, so the marker
+> write has to survive a hang, not just an abort.
+
+
 > **2026-08-15 — `navdump` HAD BEEN DYING MID-CENSUS FOR AN UNKNOWN LENGTH OF TIME, AND IT TOOK
 > EVERY ACTOR SECTION OF THE DUMP WITH IT.** Found while starting the radar/character work, not
 > reported by anyone — the tool simply produced a shorter file than it should have, and nobody had
