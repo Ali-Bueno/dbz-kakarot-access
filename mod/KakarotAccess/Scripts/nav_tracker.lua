@@ -2686,7 +2686,19 @@ end
 -- fall back to the generic enemy noun). ONLY call on AT_Character actors: CharacterName is
 -- not declared elsewhere and reading it would be the uncatchable abort.
 enemy_display_name = function(c)
-    -- CharacterType FIRST (2026-08-15). It is a reflected ENUM on AAT_CharacterBase whose value
+    -- SPEAKER ID FIRST (2026-08-18) — the game's own localized name, and it covers everyone.
+    -- `speakerID` is the UniqueId plus a variant letter (Cpl019 -> Cpl019A), and fed THAT,
+    -- GetCharacterName answers where it returns "" for the bare code. See char_types.speaker_id
+    -- for the live evidence. This outranks every other source here: it is the string the GAME
+    -- shows, in the PLAYER'S language, so it needs no table of ours and never drifts from the
+    -- game's own wording. Everything below stays as the fallback chain for ids it has no row for.
+    local ctok, CT = pcall(require, "char_types")
+    if ctok and CT then
+        local sid = CT.speaker_id(Core, c)
+        local nm = sid and game_character_name(sid)
+        if nm then return nm end
+    end
+    -- CharacterType SECOND (2026-08-15). It is a reflected ENUM on AAT_CharacterBase whose value
     -- names are the characters themselves, so it names ~107 of them outright — against the four
     -- that CPL_NAMES holds and the zero that the game's own GetCharacterName ever returns. An
     -- enum is a value read: cheaper and safer than the FString hop below. `require` is a
@@ -2694,7 +2706,6 @@ enemy_display_name = function(c)
     -- module cannot be held in a new upvalue.
     -- pcall'd: a bare require RAISES if the module is missing or has a syntax error, and that
     -- would take out naming for every enemy instead of quietly falling through to the old path.
-    local ctok, CT = pcall(require, "char_types")
     local ct_name, ct_code
     if ctok and CT then ct_name, ct_code = CT.of_actor(Core, c) end
     if ct_name then return ct_name end
@@ -2716,6 +2727,18 @@ end
 -- game raises a C++ exception pcall CANNOT catch — which froze the game (it aborted
 -- right after the menu had blocked the pad, leaving a stuck neutral pad).
 local function npc_name(npc)
+    -- SPEAKER ID FIRST (2026-08-18) — the game's own localized name, and it covers everyone.
+    -- `speakerID` is the UniqueId plus a variant letter (Cpl019 -> Cpl019A), and fed THAT,
+    -- GetCharacterName answers where it returns "" for the bare code. See char_types.speaker_id
+    -- for the live evidence. This outranks every other source here: it is the string the GAME
+    -- shows, in the PLAYER'S language, so it needs no table of ours and never drifts from the
+    -- game's own wording. Everything below stays as the fallback chain for ids it has no row for.
+    local ctok, CT = pcall(require, "char_types")
+    if ctok and CT then
+        local sid = CT.speaker_id(Core, npc)
+        local nm = sid and game_character_name(sid)
+        if nm then return nm end
+    end
     -- NO CharacterType HERE (2026-08-18, measured in the live game). It is declared on
     -- AAT_CharacterBase, so QuestCharacter really does inherit it — but nothing on this branch
     -- ever AUTHORS it, and the Blueprint default is 1, which is Goku. Read live: the actor

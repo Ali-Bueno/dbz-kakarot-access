@@ -239,3 +239,46 @@ mod could LEARN the map at runtime (record `cplNNN` → `CharacterType` name whe
 `AT_Character` is seen, then name quest actors sharing that `UniqueId`). Not built — noted as the
 zero-guess route to naming story actors before their fight, since a character is only learned after
 being seen as an enemy at least once.
+
+## 2026-08-18 — THE ANSWER, and it was here since July: feed GetCharacterName the speakerID
+
+`UAT_BlueprintFunctionLibrary::GetCharacterName` has been recorded at the top of this file since
+2026-07-10 as *"returns "" for EVERY code — safe but useless"*. **That is wrong, and every naming
+mechanism built since (CPL_NAMES, NPC_NAMES, the CHARACTER_TYPE enum) was a workaround for a
+non-problem.** The function was being called with the BARE code. It wants the **`speakerID`** —
+the same code plus a one-letter variant suffix.
+
+Live, in game, es_MX:
+
+| call | result |
+|---|---|
+| `GetCharacterName("Cpl002")` | `""` ← the call the July pass made |
+| `GetCharacterName("Cpl002A")` | **"Gohan"** |
+| `GetCharacterName("Npc004A")` | **"Bulma"** |
+| `GetCharacterName("Cpl019A")` | **"Zarbon"** |
+| `GetCharacterName("Cpl004A")` | **"Appule"** |
+| `GetCharacterName("Cpl064A")` | **"Oficial del Ejército de Freezer"** |
+| `GetCharacterName("Cpl065A")` | **"Comando del Ejército de Freezer"** |
+
+- **Localized.** Those strings came back in the player's language because the game had
+  `/Game/Message/PLAT_W/es_MX/messageData` loaded. `FMessageInfoTbl` (AT.hpp:7725) has per-language
+  `Speaker_*` / `Message_*` columns including `_esmx`, `_spa`, `_eng`, …
+- **Covers everyone**, not just fighters: story NPCs (Bulma) and anonymous mobs (which get a proper
+  descriptive name rather than our generic noun).
+- `speakerID` is a **StrProperty on AAT_CharacterBase**, so it answers on the enemy branch and the
+  QuestCharacter branch alike — one read, both namers.
+- `UEventBlueprintFunctionLibrary::GetMessageFromID` (AT.hpp:41265) returns the identical string;
+  `GetSpeakerFromID` (AT.hpp:41256) returns `""` for these ids. Either of the first two works.
+- **Safe.** No crash, on a heavily-populated streaming map. The shape is FString-in/FString-out on a
+  static BlueprintFunctionLibrary — the same shape as the call July already recorded as safe, and a
+  different shape from the fatal `MessageManager:GetNounParam*` (FName param / struct return on a BP
+  object). That distinction held.
+
+**The lesson worth more than the finding:** a dead end recorded as *"function X is useless"* was
+really *"function X is useless with the argument we tried"*. The note never said which argument.
+When a documented dead end blocks something this central, re-test it with every id spelling you
+have before building a workaround — the speakerID was already in the codebase (`dev_charnames.lua`
+had been reading and printing it since 2026-08-15) and nobody fed it back in.
+
+CPL_NAMES / NPC_NAMES / `char_types.DISPLAY` are now FALLBACKS, kept for ids the message table has
+no row for. They are no longer the primary path in either namer.

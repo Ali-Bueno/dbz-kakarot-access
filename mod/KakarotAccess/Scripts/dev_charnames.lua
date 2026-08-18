@@ -35,6 +35,40 @@ local FIELDS = {
     { prop = "CharacterName", note = "StrProperty on AT_Character actors — CplNNNcNN (enemies only)" },
 }
 
+-- RESOLVER FUNCTIONS (added 2026-08-18). The 2026-07-10 note concluded there is no crash-safe
+-- id -> localized-name call and listed the family that CRASHES: `MessageManager:GetNounParam*`,
+-- i.e. reflected calls on a Blueprint object taking an FName / returning a struct. These two are
+-- a DIFFERENT shape and were never found by that pass — they are not in the note at all:
+--
+--   UEventBlueprintFunctionLibrary::GetSpeakerFromID(const FString StringID) -> FString  AT.hpp:41256
+--   UEventBlueprintFunctionLibrary::GetMessageFromID(const FString StringID) -> FString  AT.hpp:41265
+--
+-- FString in, FString out, on a static BlueprintFunctionLibrary — the same shape as
+-- `UAT_BlueprintFunctionLibrary::GetCharacterName`, which that note records as SAFE (it returns ""
+-- for every id, but it does not crash). That is the whole risk argument: same shape as a proven
+-- safe call, different shape from the proven fatal one. It is an argument, not a guarantee, which
+-- is why this lives in a dev probe behind a command and not in the radar.
+--
+-- WHY IT MATTERS: `FMessageInfoTbl` (AT.hpp:7725) has per-language columns including
+-- `Speaker_esmx` / `Message_esmx`, and the game has `/Game/Message/PLAT_W/es_MX/messageData`
+-- loaded. So the speaker names exist as data IN THE PLAYER'S LANGUAGE. If GetSpeakerFromID
+-- answers, the radar can name characters from the game's own localized text instead of from a
+-- hand-written English table.
+-- Each library is paired with ONLY the functions the header shows it declares. Asking a class for
+-- a function it does not have is the same uncatchable abort as an undeclared property, and this is
+-- a multi-candidate probe — the contract where failing open is a licence to fetch a name we have
+-- positive reason to believe is absent. So: no cross-probing, ever.
+local RESOLVERS = {
+    { path = "/Script/AT.Default__EventBlueprintFunctionLibrary",
+      fns  = { "GetSpeakerFromID", "GetMessageFromID" } },          -- AT.hpp:41256, 41265
+    { path = "/Script/AT.Default__AT_BlueprintFunctionLibrary",
+      fns  = { "GetCharacterName" } },                              -- AT.hpp:29953 (known: returns "")
+}
+
+-- Ids probed even when the world walk finds nothing, so a run always tests the CALL itself.
+-- speakerID is UniqueId + a variant letter (Cpl003 -> Cpl003A), proven on 2026-08-15.
+local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl019", "Cpl019A", "Npc004", "Npc004A" }
+
 -- QuestCharacter ONLY, by default (narrowed 2026-08-15 after this probe killed the game).
 --
 -- The first version also walked `AT_CharacterBase`, the common base that includes every combat
@@ -112,6 +146,7 @@ function M.run()
             w(("  candidate %-14s %s"):format(fd.prop, fd.note))
         end
 
+        local seen_ids = {}
         for _, cls in ipairs(CLASSES) do
             w("")
             w("-- class " .. cls)
@@ -155,11 +190,60 @@ function M.run()
                                     s = tostring(v)
                                 end
                                 w(("        %-14s %s"):format(fd.prop, s))
+                                -- keep the raw value for the resolver section below
+                                if s ~= "(empty)" and not s:match("^%(") then
+                                    seen_ids[#seen_ids + 1] = s
+                                end
                             end
                         end
                     end
                 end
                 w(("   (%d valid instances reported)"):format(n))
+            end
+        end
+
+        -- RESOLVER SECTION. Every call is preceded by a step marker on disk, so if one of them is
+        -- the fatal shape after all, the trail names the exact library and function that killed it.
+        w("")
+        w("-- id -> name resolvers")
+        for _, res in ipairs(RESOLVERS) do
+            local path = res.path
+            w("   step: StaticFindObject(" .. path .. ")")
+            local lib
+            pcall(function() lib = StaticFindObject(path) end)
+            if not Core.valid(lib) then
+                w("   " .. path .. " -> not found")
+            else
+                w("   " .. path .. " -> found")
+                -- Probe the ids the walk actually saw first, then the fixed list.
+                local ids = {}
+                for _, v in ipairs(seen_ids) do ids[#ids + 1] = v end
+                for _, v in ipairs(EXTRA_IDS) do ids[#ids + 1] = v end
+                for _, fn in ipairs(res.fns) do
+                    for _, id in ipairs(ids) do
+                        w(("      step: %s(\"%s\")"):format(fn, id))
+                        local out_s, called
+                        pcall(function()
+                            local r = lib[fn](lib, id)
+                            called = true
+                            if type(r) == "string" then
+                                out_s = r
+                            elseif r ~= nil then
+                                local ok2, t = pcall(function() return r:ToString() end)
+                                out_s = (ok2 and type(t) == "string") and t or nil
+                            end
+                        end)
+                        if not called then
+                            w(("      %-18s(%-10s) -> (no such function here)"):format(fn, id))
+                        elseif out_s == nil then
+                            w(("      %-18s(%-10s) -> (unreadable return)"):format(fn, id))
+                        elseif out_s == "" then
+                            w(("      %-18s(%-10s) -> (empty)"):format(fn, id))
+                        else
+                            w(("      %-18s(%-10s) -> \"%s\"   <== HIT"):format(fn, id, out_s))
+                        end
+                    end
+                end
             end
         end
 

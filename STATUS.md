@@ -36,14 +36,11 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Re-verify character names in the radar** (half fixed 2026-08-18, PARTLY UNVERIFIED). The
-   2026-08-15 enum naming was wrong on NPCs — `QuestCharacterBase_C` is the generic class the game
-   reuses for NPCs, items and quest markers, it never authors `CharacterType`, and the Blueprint
-   default is 1 = Goku, so the radar called everything Goku (player report: Dodoria at 300 m). That
-   branch is back on `UniqueId`. The ENEMY branch keeps the enum (its classes are per-character;
-   `AT_Character_cpl004p1c02_BP_C` read 11 = Apuru, authored) and is still on ONE live sample. So:
-   listen to ENEMY names specifically — **if an enemy is ever announced as Goku, the enemy branch
-   has the same defect and must go too.** NPCs are expected to be generic nouns again, not names.
+1. **Listen to the new character names** (wired 2026-08-18, reloaded live but NOT yet heard in
+   play). Names now come from the GAME, localized: `speakerID` -> `GetCharacterName` answers
+   "Bulma", "Zarbon", "Oficial del Ejército de Freezer". Walk past NPCs and enemies and check the
+   radar says the same thing the game shows. Our English tables are fallbacks now — if you hear an
+   English name where the game shows Spanish, that id had no message row and fell through.
 
 2. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no

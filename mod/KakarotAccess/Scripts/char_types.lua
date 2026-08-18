@@ -173,4 +173,30 @@ function M.of_actor(Core, actor)
     return M.name(v), M.code(v)
 end
 
+-- The character's DIALOGUE SPEAKER KEY: `speakerID`, a StrProperty declared on AAT_CharacterBase,
+-- so it answers on BOTH branches (AT_Character enemies and QuestCharacter story actors). It is the
+-- `UniqueId` plus a one-letter variant suffix — `Cpl019` -> `Cpl019A`, `Npc004` -> `Npc004A`.
+--
+-- WHY THIS IS THE WHOLE BALL GAME (2026-08-18). `UAT_BlueprintFunctionLibrary::GetCharacterName`
+-- has been recorded in this repo since 2026-07-10 as "returns \"\" for EVERY code — safe but
+-- useless", and every naming mechanism since (CPL_NAMES, NPC_NAMES, the CHARACTER_TYPE enum) exists
+-- to work around it. The function was never useless: it was being called with the BARE code. Fed
+-- the speakerID instead, live in game:
+--
+--   GetCharacterName("Cpl002")  -> ""                                  (the old call)
+--   GetCharacterName("Cpl002A") -> "Gohan"
+--   GetCharacterName("Npc004A") -> "Bulma"
+--   GetCharacterName("Cpl019A") -> "Zarbon"
+--   GetCharacterName("Cpl064A") -> "Oficial del Ejercito de Freezer"
+--
+-- Localized to the player's language (the game had /Game/Message/PLAT_W/es_MX/messageData loaded),
+-- covering story NPCs and generic mobs alike, straight from the game's own message table. The one
+-- letter was the entire difference. `UEventBlueprintFunctionLibrary::GetMessageFromID` (AT.hpp:41265)
+-- returns the identical string, so either call works; GetCharacterName is kept because the resolver
+-- and its cache already exist in nav_tracker.
+function M.speaker_id(Core, actor)
+    if not Core or actor == nil then return nil end
+    return Core.name_str(Core.member(actor, "speakerID", true))
+end
+
 return M
