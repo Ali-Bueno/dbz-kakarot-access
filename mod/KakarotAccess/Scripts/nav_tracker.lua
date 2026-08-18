@@ -2710,6 +2710,11 @@ enemy_display_name = function(c)
         -- from the generated class name instead — see char_types.speaker_ids_from_class. Without
         -- this the Namek mobs stayed "alien" from the enum while the game's own table had
         -- "Oficial del Ejercito de Freezer" waiting under Cpl064A.
+        -- Walk the variant letters and pick the one matching this actor's CharacterType — see
+        -- char_types.name_by_variant. Taking the first letter that answers would call every drone
+        -- "Dron de ataque" and every AlienA "Oficial".
+        nm = CT.name_by_variant(Core, c, game_character_name)
+        if nm then return nm end
         for _, id in ipairs(CT.speaker_ids_from_class(Core, c) or {}) do
             nm = game_character_name(id)
             if nm then return nm end
@@ -3320,6 +3325,17 @@ function Nav.list_targets(boxed)
             { pat = "Memory",   noun = "cat_memory" },
             { pat = "DMedal",   noun = "cat_dmedal" },
             { pat = "Treasure", noun = "cat_treasure" },
+            -- Gathering points reached through this scan rather than through their map icon.
+            -- Observed live 2026-08-18: MineralMiningPointNormal_BP_C and
+            -- MineralMiningPointRare_BP_C both spoke the generic "objeto" while the icon-group
+            -- actor for the SAME deposit (MineralMiningMapIconGroup_C) correctly said "mineral" —
+            -- so the game's own classification was already there and only this path missed it.
+            -- `grp` moves the item OUT of Coleccionables (user 2026-08-18: a deposit is
+            -- gathering, and Coleccionables should keep medals, chests and memories). The
+            -- deposit's own icon-group marker already lives in `gathering`, so this puts the
+            -- individual points beside it instead of in a second place.
+            { pat = "MiningPoint", noun = "cat_ore", grp = "gathering" },
+            { pat = "Mineral",     noun = "cat_ore", grp = "gathering" },
         }
         -- Spoken noun and GROUP per action-point CLASS (2026-08-18, user report: "Sitios está
         -- detectando las tiendas / máquinas de cocina y la tienda que puso Bulma en Namek").
@@ -3437,7 +3453,11 @@ function Nav.list_targets(boxed)
                     local grp = "collectibles"
                     local noun = "cat_item"
                     for _, m in ipairs(COLLECTIBLE_NOUN) do
-                        if cn:find(m.pat, 1, true) then noun = m.noun break end
+                        if cn:find(m.pat, 1, true) then
+                            noun = m.noun
+                            grp = m.grp or grp
+                            break
+                        end
                     end
                     -- Derived from the resolved noun, not from a second `find("Memories")`, so the
                     -- two can never disagree about what a Field Memory is. The DLC variants

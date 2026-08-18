@@ -311,3 +311,32 @@ why the fallback exists rather than being defensive padding.
 `Cpl057A` (FZBit) and `Npc086A` return "": not every id has a row, so the enum/table fallback chain
 stays. FZBit is still deliberately unmapped in `char_types.DISPLAY`, so those mobs speak the generic
 enemy noun — correct behaviour, not a regression.
+
+### 2026-08-18 (later still) — the variant letter is a RANK, not a constant
+
+`GetCharacterName` keys on `CplNNN` + a letter, and the letter is **not always A**. Each family holds
+several ranks, all with their own localized name:
+
+| id | A | B | C | D |
+|---|---|---|---|---|
+| Cpl004 | Appule | Recluta del Ej. de Freezer | Guardia | Explorador |
+| Cpl064 | Oficial del Ej. de Freezer | Cabo | Sargento | — |
+| Cpl065 | Comando del Ej. de Freezer | Supercomando | Comando élite | — |
+| Cpl057 | **(empty)** | Dron de ataque | Dron de asistencia | Dron de recuperación |
+
+So "take the first letter that answers" — the obvious rule — is WRONG: it would call every drone
+"Dron de ataque" and every AlienA "Oficial". `Cpl057A` being empty is what makes the naive rule look
+plausible and the correct one non-obvious.
+
+**The actor already says which rank it is.** `CharacterType`'s position inside its family's run of
+enum values lines up with the answering letters *in order*, so the rule is: take the **P-th
+NON-EMPTY letter**, where P is that position. Verified against every family observed (cpl004, 057,
+064, 065, plus Zarbon/Vegeta/Gohan), and cross-checked against play — the mob the player fought
+announced as "Cabo del Ejército de Freezer", which is `Cpl064B` = `AlienA_C02` = index 1. It matches.
+
+`char_types.variant_index` walks backwards while the stripped base token matches (`Apuru_C02` ->
+`Apuru`), which works because each family occupies one contiguous block of the enum — the same
+structure the header's tail confirms with `Cpl003_C/_D`, `Cpl004_C05`, `Cpl005_G`.
+
+**Still unnamed: `Npc086`** (the Namekian child of the fruit side-quest). All seven letters A–G
+return "". Some NPCs genuinely have no row in the message table; the fallback chain stays for them.

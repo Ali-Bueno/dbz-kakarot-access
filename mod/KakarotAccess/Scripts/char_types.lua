@@ -236,4 +236,71 @@ function M.speaker_ids_from_class(Core, actor)
     return { base .. "A" }
 end
 
+-- The base token of an enum entry: `Apuru_C02` -> `Apuru`, `AlienA_C01` -> `AlienA`,
+-- `Zarbon_A_C01` -> `Zarbon`, `Freezer_MECHA` -> `Freezer`. Same suffix set M.name strips, but
+-- applied all the way down instead of stopping at the first DISPLAY match.
+function M.base_token(raw)
+    if type(raw) ~= "string" then return nil end
+    for _ = 1, #SUFFIXES do
+        local before = raw
+        for _, pat in ipairs(SUFFIXES) do
+            local stripped = raw:gsub(pat, "")
+            if stripped ~= raw then raw = stripped break end
+        end
+        if raw == before then break end
+    end
+    return raw
+end
+
+-- How far this CharacterType sits inside its own family's run of enum values.
+-- `Apuru`=11 -> 0, `Apuru_C02`=12 -> 1, `AlienA_C01`=78 -> 0, `AlienA_C02`=79 -> 1.
+-- The enum is ordered with each family in one contiguous block (proven from the header: the tail
+-- carries `Cpl003_C/_D`, `Cpl004_C05`, `Cpl005_G` as extra forms of those same ids), so walking
+-- backwards while the base token matches gives the family's first value.
+function M.variant_index(v)
+    v = tonumber(v)
+    if not v then return nil end
+    local base = M.base_token(M.RAW[v])
+    if not base then return nil end
+    local i = v
+    while i > 0 and M.RAW[i - 1] and M.base_token(M.RAW[i - 1]) == base do i = i - 1 end
+    return v - i
+end
+
+-- The game's own LOCALIZED name for a field enemy, or nil.
+--
+-- WHY A LETTER WALK (2026-08-18, measured live). `GetCharacterName` keys on `CplNNN` + a variant
+-- letter, and the letter is NOT always "A" — each family holds several ranks:
+--
+--   Cpl004A Appule            Cpl004B Recluta…   Cpl004C Guardia…   Cpl004D Explorador…
+--   Cpl064A Oficial…          Cpl064B Cabo…      Cpl064C Sargento…
+--   Cpl065A Comando…          Cpl065B Supercomando…  Cpl065C Comando élite…
+--   Cpl057A (empty)           Cpl057B Dron de ataque … C … D
+--
+-- So "take the first letter that answers" would call every drone "Dron de ataque" and every
+-- AlienA "Oficial". The actor already tells us WHICH rank it is: `CharacterType`, whose position
+-- inside its family run lines up with the answering letters in order. Verified against every
+-- family observed: cpl004/064/065 answer from A (index 0 -> A), cpl057 has no A and its index 0
+-- lands on B — which is why the P-th NON-EMPTY letter is the rule rather than the P-th letter.
+-- Cross-check from play: the mob the player fought announced as "Cabo del Ejército de Freezer",
+-- and Cabo is Cpl064B, i.e. AlienA_C02 — index 1. It matches.
+--
+-- `resolve` is the caller's cached id->name lookup (nav_tracker.game_character_name), so the walk
+-- costs at most 7 lookups the first time a family is seen and nothing afterwards.
+local LETTERS = { "A", "B", "C", "D", "E", "F", "G" }
+function M.name_by_variant(Core, actor, resolve)
+    if not Core or actor == nil or type(resolve) ~= "function" then return nil end
+    local ids = M.speaker_ids_from_class(Core, actor)
+    if not ids or not ids[1] then return nil end
+    local base = ids[1]:gsub("%u$", "")          -- "Cpl064A" -> "Cpl064"
+    local hits = {}
+    for _, L in ipairs(LETTERS) do
+        local nm = resolve(base .. L)
+        if nm then hits[#hits + 1] = nm end
+    end
+    if #hits == 0 then return nil end
+    local p = M.variant_index(Core.member(actor, "CharacterType", true)) or 0
+    return hits[p + 1] or hits[1]
+end
+
 return M

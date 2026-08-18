@@ -73,7 +73,19 @@ local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl002B", "Cpl019A", "Npc004A",
                     "Cpl003A", "Cpl057A", "Cpl064A", "Cpl065A",
                     -- UATEnemiesBaseBehaviour.EnemiesBaseId read live off
                     -- BP_EnemiesBaseFreezer_C_0 — testing whether a base id has a name row.
-                    "142", "EnemiesBase142", "EB142" }
+                    "142",
+                    -- Variant-letter sweep (2026-08-18): the soul-emblem note records keys
+                    -- as CplNNN{A..G}, and only "A" has ever been tried. Npc086 is the
+                    -- Namekian child of the fruit side-quest and Cpl057 the FZBit mobs —
+                    -- both return "" on A, so if a later letter answers, the resolver needs
+                    -- to walk the letters instead of assuming A.
+                    "Npc086B", "Npc086C", "Npc086D", "Npc086E", "Npc086F", "Npc086G",
+                    "Cpl057B", "Cpl057C", "Cpl057D",
+                    -- Do the families that DO answer on "A" also have later letters? That
+                    -- decides whether the resolver takes the FIRST non-empty letter or the
+                    -- one matching the costume index (cpl057 has 3 classes and 3 names).
+                    "Cpl004B", "Cpl004C", "Cpl004D", "Cpl064B", "Cpl064C",
+                    "Cpl065B", "Cpl065C", "Cpl002C" }
 
 -- QuestCharacter ONLY, by default (narrowed 2026-08-15 after this probe killed the game).
 --
