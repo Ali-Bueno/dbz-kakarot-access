@@ -96,3 +96,36 @@ not that it is ever loaded. Dragon Balls already reach the radar through map ico
 **These nouns are DERIVED FROM CLASS NAMES, not from the game's own text**, and that is the
 limitation to fix next: `ItemId -> JName -> GetMessageFromID` gives the real localized name. If the
 game words a D Medal or a chest differently on screen, the game's wording wins over this table.
+
+## 2026-08-18 — action points: why the bonfire "was not on the radar", and why shops showed as Sites
+
+Player report: *"Sitios está detectando las tiendas / máquinas de cocina y la tienda que puso Bulma
+en Namek"*. Measured live — the seven `AFieldActionPointActor`s loaded on Namek:
+
+| Actor class | Own map icon? | Was announced as | Now |
+|---|---|---|---|
+| `BP_BonfireActor_C` | **no** | "Sitio", **no name** | Sites / `cat_bonfire` |
+| `FoodNobody_Store_BP_C` | **no** | "Sitio", **no name** | Shops / `cat_food_shop` |
+| `RestaurantNobody_Store_BP_C` | **no** | "Sitio", **no name** | Shops / `cat_restaurant` |
+| `TCGMachine_BP_C` | yes | Minigames (icon wins) | unchanged |
+| `TrainingPoint_BP_C` ×3 | yes | Sites / `cat_practice` | unchanged |
+
+**Root cause: `ActionName` is EMPTY on all of them** (read live on the bonfire and the food stall),
+and the action-point branch labelled every non-memory point with the GROUP's own label as its noun.
+So the naming path existed and produced nothing.
+
+**This also closes the earlier "add bonfires to the radar" request.** The bonfire was never missing —
+`EMapIcon::Bonfire` = 64 is mapped, `cat_bonfire` = "hoguera de cocina" has existed all along — but
+the live bonfire actor carries **no `ATMapIconComponent` at all**, so it never went through the icon
+path that would have named it. It arrived through the action-point path and came out anonymous. The
+lesson: an icon type being mapped proves nothing about whether the ACTOR carries that icon.
+
+**Why the shops arrive here at all:** they DO have map icons, but on separate icon-only actors
+(`FoodMapIcon_010`, `CookingMapIcon_010`) rather than on the store. The icon actor is correctly
+grouped under Shops; the store actor came through the action-point path and was misgrouped. It is now
+routed to Shops rather than skipped, because skipping would lose any store in an area that has no
+icon actor — and `add_target` dedupes by ADDRESS, so the pair stays two entries, both in the right
+group and adjacent by distance.
+
+Unrecognised action-point classes keep the old behaviour, so the change can only improve a
+classification, never remove one.

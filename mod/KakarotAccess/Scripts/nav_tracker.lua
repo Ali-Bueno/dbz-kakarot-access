@@ -3283,6 +3283,41 @@ function Nav.list_targets(boxed)
             { pat = "DMedal",   noun = "cat_dmedal" },
             { pat = "Treasure", noun = "cat_treasure" },
         }
+        -- Spoken noun and GROUP per action-point CLASS (2026-08-18, user report: "Sitios está
+        -- detectando las tiendas / máquinas de cocina y la tienda que puso Bulma en Namek").
+        --
+        -- Non-memory action points all used to land in `sites` with the group's own label as the
+        -- noun, named by `ActionName` — and `ActionName` is EMPTY on every one of them (read live on
+        -- the bonfire and the food stall). So they announced as an anonymous "Sitio". Measured on
+        -- Namek, the seven live AFieldActionPointActors and where they belong:
+        --
+        --   BP_BonfireActor_C            no map icon  -> the cooking campfire
+        --   FoodNobody_Store_BP_C        no map icon  -> a SHOP (Bulma's unattended stall)
+        --   RestaurantNobody_Store_BP_C  no map icon  -> a SHOP
+        --   TCGMachine_BP_C              HAS an icon  -> already Minigames via the icon, deduped
+        --   TrainingPoint_BP_C x3        HAS an icon  -> already Sites/cat_practice, deduped
+        --
+        -- The shops DO have map icons, but on SEPARATE icon-only actors (FoodMapIcon_010,
+        -- CookingMapIcon_010) rather than on the store itself — which is exactly why the store
+        -- actor came through this path instead and was misgrouped. Routing it to `shops` keeps it
+        -- detected (skipping it would lose any store whose area has no icon actor) and puts it where
+        -- the player looks for it; add_target dedupes by ADDRESS, so the icon actor and the store
+        -- actor stay two entries, both now in the right group and adjacent by distance.
+        --
+        -- FIRST MATCH WINS: `RestaurantNobody_Store` contains both "Restaurant" and "Store", and
+        -- `FoodNobody_Store` contains both "Food" and "Store", so the specific ones come first.
+        -- The trailing generic "Store" is not speculation about a class that exists — it is the
+        -- honest default for a name that says shop, and a string match costs nothing (unlike naming
+        -- a CLASS, which would join the absent-scan set).
+        local ACTION_POINT = {
+            { pat = "Bonfire",       grp = "sites",  noun = "cat_bonfire" },
+            { pat = "TrainingPoint", grp = "sites",  noun = "cat_practice" },
+            { pat = "Restaurant",    grp = "shops",  noun = "cat_restaurant" },
+            { pat = "Cooking",       grp = "shops",  noun = "cat_cooking_shop" },
+            { pat = "Food",          grp = "shops",  noun = "cat_food_shop" },
+            { pat = "Store",         grp = "shops",  noun = "radar_cat_shops" },
+            { pat = "Shop",          grp = "shops",  noun = "radar_cat_shops" },
+        }
         local function visible_actor(a)
             -- Gated hop (was `pcall(function() hidden = a.bHidden end)`): `a` comes straight
             -- out of the FindAllOf over the actor classes just below (an on-demand scan -
@@ -3373,8 +3408,12 @@ function Nav.list_targets(boxed)
                     if c.action and not is_memory then
                         -- Non-memory action points are interactable SPOTS you use
                         -- (train/meditate/examine — e.g. Piccolo's waterfall), not
-                        -- pickups: list them under Sites, labeled by their ActionName.
+                        -- pickups. Route by class name; anything unrecognised keeps the
+                        -- old behaviour, so this can only improve a classification.
                         grp, noun = "sites", "radar_cat_sites"
+                        for _, m in ipairs(ACTION_POINT) do
+                            if cn:find(m.pat, 1, true) then grp, noun = m.grp, m.noun break end
+                        end
                     end
                     local name = (c.action and action_name(a))
                         or (c.item and drop_item_name(a)) or nil

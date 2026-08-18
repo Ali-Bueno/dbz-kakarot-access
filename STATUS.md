@@ -48,11 +48,13 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    answers, collectibles name themselves from the game's own localized text and the class-name noun
    table becomes a fallback; if it returns "", the missing hop is a DataTable row read. Collectibles
    currently say "Medalla D" / "tesoro" / "recuerdo" from CLASS NAMES — my wording, not the game's.
-3. **Check the bonfire and the machines on the radar.** They are already mapped and localized
-   (`cat_bonfire` = "hoguera de cocina", plus time machine, training room, dev lab, Turtle School —
-   twelve site types) and grouped under Sites. The player asked to "add" them, so either they are not
-   being FOUND where they stand, or they are found but buried in Sites and want their own category.
-   Stand next to a bonfire, cycle to Sitios, and report which it is.
+3. **Listen to the bonfire, the shops and the training points** (fixed 2026-08-18, reloaded live,
+   NOT yet heard). The bonfire was never missing — it carries no `ATMapIconComponent`, so it came
+   through the action-point path, where `ActionName` is empty on every actor, and announced as an
+   anonymous "Sitio". It should now say "hoguera de cocina" under Sitios, and Bulma's stall and the
+   restaurant should have moved from Sitios to **Tiendas**. Confirm the bonfire is findable and that
+   Sitios no longer lists unnamed things.
+
 4. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
    re-announcement. Try it with a HAND-PICKED target too (R3 → pick → get into a fight) — that is
