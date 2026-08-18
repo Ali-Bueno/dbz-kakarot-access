@@ -282,3 +282,32 @@ had been reading and printing it since 2026-08-15) and nobody fed it back in.
 
 CPL_NAMES / NPC_NAMES / `char_types.DISPLAY` are now FALLBACKS, kept for ids the message table has
 no row for. They are no longer the primary path in either namer.
+
+### 2026-08-18 (later) — `speakerID` is EMPTY on the ENEMY branch; derive the id from the class name
+
+The speakerID fix named NPCs but the Namek mobs were still announced as "alien" from the enum. Cause,
+measured on `AT_Character_cpl002_B_BP_C`: **`speakerID` and `CharacterName` are both blank strings on
+`AAT_Character`**, while `CharacterType` read 4. So the localized lookup could never fire on enemies.
+Nothing appeared in the log because no gate refused anything — the value was simply empty.
+
+The id is recoverable from the **generated Blueprint class name**, which embeds the code:
+
+| class | derived id | `GetCharacterName` |
+|---|---|---|
+| `AT_Character_cpl003_A_BP_C` | `Cpl003A` | **"Vegeta"** |
+| `AT_Character_cpl004p1c02_BP_C` | `Cpl004A` | **"Appule"** |
+| `AT_Character_cpl019_A_BP_C` | `Cpl019A` | **"Zarbon"** |
+| `AT_Character_cpl064c01_BP_C` | `Cpl064A` | **"Oficial del Ejército de Freezer"** |
+| `AT_Character_cpl065c01_BP_C` | `Cpl065A` | **"Comando del Ejército de Freezer"** |
+| `AT_Character_cpl002_B_BP_C` | `Cpl002B` → `Cpl002A` | "" → **"Gohan"** |
+| `AT_Character_cpl057Ac01_BP_C` | `Cpl057A` | **""** — no message row |
+
+Rule (`char_types.speaker_ids_from_class`): match `[Cc]pl(%d+)`, take an **UPPERCASE** letter
+immediately after the digits or after one underscore, default `A`. Requiring uppercase is what stops
+the costume suffixes (`c01`, `p1c02`) from being read as a variant. A non-A letter is tried first and
+then `A`, because a variant may have no row of its own — `Cpl002B` is exactly that case, and it is
+why the fallback exists rather than being defensive padding.
+
+`Cpl057A` (FZBit) and `Npc086A` return "": not every id has a row, so the enum/table fallback chain
+stays. FZBit is still deliberately unmapped in `char_types.DISPLAY`, so those mobs speak the generic
+enemy noun — correct behaviour, not a regression.

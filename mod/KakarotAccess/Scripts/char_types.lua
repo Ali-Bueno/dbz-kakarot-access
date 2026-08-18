@@ -199,4 +199,41 @@ function M.speaker_id(Core, actor)
     return Core.name_str(Core.member(actor, "speakerID", true))
 end
 
+-- FALLBACK for the ENEMY branch: derive the message-table id from the BLUEPRINT CLASS NAME.
+--
+-- WHY IT IS NEEDED (2026-08-18, measured live). `speakerID` answers on QuestCharacter but is an
+-- EMPTY string on `AAT_Character` — read off `AT_Character_cpl002_B_BP_C`, where both `speakerID`
+-- and `CharacterName` came back blank while `CharacterType` read 4. So the localized lookup could
+-- never fire on enemies and they fell through to the enum, which is why the Namek mobs were still
+-- announced as "alien" instead of "Oficial del Ejercito de Freezer".
+--
+-- The id is recoverable anyway, because the enemy's generated class name embeds it, and
+-- GetCharacterName wants that code plus a one-letter variant. Verified against every class name
+-- observed live on Namek:
+--
+--   AT_Character_cpl019_A_BP_C     -> Cpl019A  (proved "Zarbon")
+--   AT_Character_cpl064c01_BP_C    -> Cpl064A  (proved "Oficial del Ejercito de Freezer")
+--   AT_Character_cpl065c01_BP_C    -> Cpl065A  (proved "Comando del Ejercito de Freezer")
+--   AT_Character_cpl004p1c02_BP_C  -> Cpl004A  (proved "Appule")
+--   AT_Character_cpl057Ac01_BP_C   -> Cpl057A
+--   AT_Character_cpl002_B_BP_C     -> Cpl002B, then Cpl002A  (Cpl002A is proved "Gohan")
+--
+-- The letter is taken from the class when it declares one (`_A`, `057A`) and defaults to "A"
+-- otherwise; a non-A letter is tried FIRST and then A, because a variant may have no message row
+-- of its own. `game_character_name` caches misses, so a wrong candidate costs one call ever.
+-- Only a lowercase run follows the digits in the costume forms (`c01`, `p1c02`), so requiring an
+-- UPPERCASE letter is what keeps those from being mistaken for a variant.
+function M.speaker_ids_from_class(Core, actor)
+    if not Core or actor == nil then return nil end
+    local cn
+    pcall(function() cn = actor:GetClass():GetFName():ToString() end)
+    if type(cn) ~= "string" then return nil end
+    local digits, tail = cn:match("[Cc]pl(%d+)(.*)")
+    if not digits then return nil end
+    local base = "Cpl" .. digits
+    local letter = tail:match("^_?(%u)")
+    if letter and letter ~= "A" then return { base .. letter, base .. "A" } end
+    return { base .. "A" }
+end
+
 return M

@@ -67,7 +67,10 @@ local RESOLVERS = {
 
 -- Ids probed even when the world walk finds nothing, so a run always tests the CALL itself.
 -- speakerID is UniqueId + a variant letter (Cpl003 -> Cpl003A), proven on 2026-08-15.
-local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl019", "Cpl019A", "Npc004", "Npc004A" }
+local EXTRA_IDS = { "Cpl002", "Cpl002A", "Cpl002B", "Cpl019A", "Npc004A",
+                    -- class-name-derived ids for the enemy branch (2026-08-18): speakerID is
+                    -- empty there, so these come from AT_Character_cplNNN..._BP_C.
+                    "Cpl003A", "Cpl057A", "Cpl064A", "Cpl065A" }
 
 -- QuestCharacter ONLY, by default (narrowed 2026-08-15 after this probe killed the game).
 --

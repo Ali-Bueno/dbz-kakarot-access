@@ -2706,8 +2706,16 @@ enemy_display_name = function(c)
         local sid = CT.speaker_id(Core, c)
         local nm = sid and game_character_name(sid)
         if nm then return nm end
+        -- `speakerID` is EMPTY on this branch (measured live 2026-08-18), so the id has to come
+        -- from the generated class name instead — see char_types.speaker_ids_from_class. Without
+        -- this the Namek mobs stayed "alien" from the enum while the game's own table had
+        -- "Oficial del Ejercito de Freezer" waiting under Cpl064A.
+        for _, id in ipairs(CT.speaker_ids_from_class(Core, c) or {}) do
+            nm = game_character_name(id)
+            if nm then return nm end
+        end
     end
-    -- CharacterType SECOND (2026-08-15). It is a reflected ENUM on AAT_CharacterBase whose value
+    -- CharacterType THIRD (2026-08-15). It is a reflected ENUM on AAT_CharacterBase whose value
     -- names are the characters themselves, so it names ~107 of them outright — against the four
     -- that CPL_NAMES holds and the zero that the game's own GetCharacterName ever returns. An
     -- enum is a value read: cheaper and safer than the FString hop below. `require` is a
