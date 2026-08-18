@@ -247,6 +247,109 @@ function M.run()
             end
         end
 
+        -- ITEM IDS (2026-08-18). GetMessageFromID resolved CHARACTER ids straight to localized
+        -- text, and it is a general message-id lookup, not a character one — so the same call may
+        -- name collectibles. Collect whatever ids the world actors carry and feed them in.
+        -- Sources, all already read by nav_tracker so none of them is a new risk:
+        --   PlacementObjectInfo -> ItemTableComponent.FieldItemDropData.FixedId/NormalId (FName)
+        --   AccessPointItemBase -> TreasureSaveName (e.g. L11_DMEDAL_310) — a save key, probably
+        --     not a name key, but it costs one call to find out.
+        w("")
+        w("-- item ids")
+        local item_ids = {}
+        for _, spec in ipairs({
+            -- AItemStaticActor (AT.hpp:15780) declares `FName ItemId`, and
+            -- ADragonBallStaticActor (AT.hpp:15370) derives from it — so a Dragon Ball carries its
+            -- own item id as a reflected FName. That is the id worth resolving: the drop-table and
+            -- save keys below were tried on 2026-08-18 and every one came back empty, because they
+            -- are not message ids. Neither class was loaded on the Namek map where this was written,
+            -- so ItemId has never actually been read — run this near a Dragon Ball or any static
+            -- item pickup. Scan the DERIVED class too: FindAllOf on a native base returns nothing
+            -- on this game when a subclass exists (the community-board lesson).
+            { cls = "DragonBallStaticActor", kind = "itemid" },
+            { cls = "ItemStaticActor", kind = "itemid" },
+            { cls = "PlacementObjectInfo", kind = "drop" },
+            { cls = "AccessPointItemBase", kind = "treasure" },
+        }) do
+            w("   step: FindAllOf(" .. spec.cls .. ")")
+            local all
+            pcall(function() all = FindAllOf(spec.cls) end)
+            local n = 0
+            for _, a in pairs(all or {}) do
+                if n >= 8 then break end
+                if Core.valid(a) then
+                    n = n + 1
+                    if spec.kind == "itemid" then
+                        w("      step: " .. spec.cls .. ".ItemId")
+                        local v = Core.name_str(Core.member(a, "ItemId", true))
+                        if v and v ~= "None" then
+                            w(("      itemid %s"):format(v))
+                            item_ids[#item_ids + 1] = v
+                        else
+                            w("      itemid (gate/empty)")
+                        end
+                    elseif spec.kind == "treasure" then
+                        w("      step: " .. spec.cls .. ".TreasureSaveName")
+                        local v = Core.name_str(Core.member(a, "TreasureSaveName", true))
+                        if v then
+                            w(("      treasure %s"):format(v))
+                            item_ids[#item_ids + 1] = v
+                        end
+                    else
+                        w("      step: " .. spec.cls .. ".ItemTableComponent")
+                        local comp = Core.member(a, "ItemTableComponent", true)
+                        if Core.valid(comp) then
+                            local d = Core.member(comp, "FieldItemDropData", true)
+                            -- valid_REF: an FStruct handle. Core.valid would call GetAddress on it,
+                            -- which UE4SS raises THROUGH pcall (see nav_tracker.drop_item_name).
+                            if Core.valid_ref(d) then
+                                for _, fld in ipairs({ "FixedId", "NormalId" }) do
+                                    w("      step: FieldItemDropData." .. fld)
+                                    local v
+                                    pcall(function() v = Core.name_str(d[fld]) end)
+                                    if v and v ~= "None" then
+                                        w(("      drop %-10s %s"):format(fld, v))
+                                        item_ids[#item_ids + 1] = v
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            w(("   (%d %s actors read)"):format(n, spec.cls))
+        end
+
+        w("")
+        w("-- item id -> name")
+        for _, res in ipairs(RESOLVERS) do
+            local lib
+            pcall(function() lib = StaticFindObject(res.path) end)
+            if Core.valid(lib) then
+                for _, fn in ipairs(res.fns) do
+                    for _, id in ipairs(item_ids) do
+                        w(("      step: %s(\"%s\")"):format(fn, id))
+                        local out_s, called
+                        pcall(function()
+                            local r = lib[fn](lib, id)
+                            called = true
+                            if type(r) == "string" then
+                                out_s = r
+                            elseif r ~= nil then
+                                local ok2, t = pcall(function() return r:ToString() end)
+                                out_s = (ok2 and type(t) == "string") and t or nil
+                            end
+                        end)
+                        if called and out_s and out_s ~= "" then
+                            w(("      %-18s(%-18s) -> \"%s\"   <== ITEM HIT"):format(fn, id, out_s))
+                        else
+                            w(("      %-18s(%-18s) -> (empty)"):format(fn, id))
+                        end
+                    end
+                end
+            end
+        end
+
         -- The nameplate: whatever it holds RIGHT NOW is a name the game itself resolved.
         w("")
         w("-- nameplate " .. PLATE_HOST)

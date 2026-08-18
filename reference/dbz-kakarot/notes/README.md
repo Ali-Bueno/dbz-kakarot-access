@@ -33,7 +33,8 @@ notes are the evidence behind them.
 | [Pak index (offline)](dbz-kakarot-pak-index.md) | 348k asset paths grep-able without launching the game; `LoadAllAssetsBefore*` must stay 0 |
 | [UI map](dbz-kakarot-ui-map.md) | Full UI/menu/dialogue/combat/nav structure from the CXX header dump |
 | [Input icons reference](dbz-kakarot-input-icons-ref.md) | The inline `<inputicon>` / KeyConfig glyph system |
-| [NPC names](dbz-kakarot-npc-names.md) | Why there is no safe automatic name resolver on this game |
+| [NPC names](dbz-kakarot-npc-names.md) | The resolver: feed `GetCharacterName` the **speakerID**, not the bare code — localized names for everyone |
+| [Item names](dbz-kakarot-item-names.md) | Naming collectibles / Dragon Balls: the chain is mapped, the last hop is untested |
 | [UE4SS screen-reader template](ue4ss-screenreader-template.md) | The reusable PRISM bridge, for the next UE4SS game |
 | [SparkingZero reference scope](sparkingzero-reference-scope.md) | Reuse its bridge only — not its hooking/polling design; and why its adapter-free menu architecture cannot work on this game's empty UI base classes |
 
