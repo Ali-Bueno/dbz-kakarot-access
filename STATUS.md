@@ -36,7 +36,19 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Widen the character-name check** (wired 2026-08-18/19). Names come from the GAME, localized,
+1. **Point the radar AT the quest item, not the quest site** (half done 2026-08-19 — the other
+   half is the next real piece of work). Users get sent to the quest DESTINATION and stand in an
+   empty clearing, not realising the item is a separate radar target. DONE: a collectible the
+   active quest still asks for is promoted into the **quests** group (no distance cap), and
+   `quest_objective.Quest.item_requirement()` returns `{name, got, need}` from the HUD checklist
+   row. TODO: make AUTO-TRACK prefer that item over the NAVI marker, advance to the next as each
+   is picked up, and hand back to the marker when the count is met. Left for its own pass on
+   purpose — the acquire/preempt/resume path has a documented history of subtle bugs; read
+   `reference/dbz-kakarot/notes/dbz-kakarot-quest-item-tracking.md` FIRST (it records the measured
+   HUD fields, the three rules the parse must keep, and why the quest-data path is native-only and
+   must not be retried).
+
+2. **Widen the character-name check** (wired 2026-08-18/19). Names come from the GAME, localized,
    via three id sources in order: `speakerID`, the enemy's Blueprint class name, and the actor's
    talk component (`m_SpeakerId`). CONFIRMED IN PLAY so far: a story NPC ("Bulma"), a field enemy
    ("Oficial del Ejército de Freezer") and a quest NPC the character table cannot name (the Namek
@@ -45,7 +57,7 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    story character in a different arc. Our English tables are fallbacks now — an English name where
    the game shows Spanish means that id had no message row and fell through, so report it.
 
-2. **Listen to a collection point** (wired 2026-08-19, NOT yet heard). Collectibles now resolve
+3. **Listen to a collection point** (wired 2026-08-19, NOT yet heard). Collectibles now resolve
    their REAL localized name: drop-table slug -> `item_drop_ids.lua` -> numeric item id ->
    `GetMessageFromID("Item_<n>_Name")`. The Namek quest fruit should say "Fruta namekuseijin"
    instead of "tesoro". 1432 ids ship; 1429 verified to have a `_Name` key in the message table.
@@ -54,25 +66,25 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    its early-game sibling; (b) the second collectible class fetches its item component through the
    STRICT gate, so a newly-seen class can be silent for a tick or two. Anything still saying
    "tesoro" / "objeto" is a slug with no row -- report the spot.
-3. **Listen to the bonfire, the shops and the training points** (fixed 2026-08-18, reloaded live,
+4. **Listen to the bonfire, the shops and the training points** (fixed 2026-08-18, reloaded live,
    NOT yet heard). The bonfire was never missing — it carries no `ATMapIconComponent`, so it came
    through the action-point path, where `ActionName` is empty on every actor, and announced as an
    anonymous "Sitio". It should now say "hoguera de cocina" under Sitios, and Bulma's stall and the
    restaurant should have moved from Sitios to **Tiendas**. Confirm the bonfire is findable and that
    Sitios no longer lists unnamed things.
 
-4. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
+5. **Play the 2026-08-03 batch** (full restart). Finish a battle with the radar tracking a quest
    objective: it should resume guiding within about a tick of regaining control, with no
    re-announcement. Try it with a HAND-PICKED target too (R3 → pick → get into a fight) — that is
    the separate resume lane, so say which of the two is slow if either is. Then advance a quest so
    the objective CHANGES: guidance should start almost at once. Two things that are NOT bugs — the
    game sometimes spawns the marker seconds after the HUD text changes, and a marker that never
    appears still burns the preempt's tries over ~15 s.
-5. **Ctrl+F5 after ~10 minutes** — owed since 2026-08-03, and the only way to know whether the ghost
+6. **Ctrl+F5 after ~10 minutes** — owed since 2026-08-03, and the only way to know whether the ghost
    work paid. Compare against `ui step ms: avg 35.48 / max 925`, `findall scans: n=1982 /
    119463 ms`, `ghost classes: 42 / 84783 ms`.
-6. **Soul Emblems**: the grid must read, and the board alone must still read.
-7. **Dev loop**: create `UE4SS-settings.dev.ini` (consoles on) and have `package.ps1` ship the
+7. **Soul Emblems**: the grid must read, and the board alone must still read.
+8. **Dev loop**: create `UE4SS-settings.dev.ini` (consoles on) and have `package.ps1` ship the
    release ini instead, so development stops running against the release profile.
 
 ## Identity
