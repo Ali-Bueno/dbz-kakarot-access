@@ -3125,7 +3125,18 @@ function Nav.list_targets(boxed)
     local function point_taken(a)
         local st
         pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
-        return st == STATE_TAKEN
+        if st == STATE_TAKEN then return true end
+        -- SECOND state machine (2026-08-19). ATreasureAccessPoint -- D medals, event items and
+        -- insects (ETreasureAccessPointCategory) -- runs its own `TreasureState` alongside the
+        -- inherited InteractState, and the player reported collected D medals still on the radar.
+        -- Both enums put Taken at 11 (EAccessPointState.State_Taken and
+        -- ETreasureAccessPointState.State_TreasureTaken, AT_enums.hpp), so STATE_TAKEN covers both.
+        -- STRICT: only ATreasureAccessPoint declares TreasureState -- its AAccessPointItemBase and
+        -- APlacementObjectInfo siblings do not -- so a fail-open fetch would be the uncatchable
+        -- abort on every fruit and field drop in the world.
+        local ts
+        pcall(function() ts = tonumber(Core.member(a, "TreasureState", true)) end)
+        return ts == STATE_TAKEN
     end
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
     -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
@@ -4928,9 +4939,24 @@ function Nav.dump()
                             if c.state then
                                 pcall(function() st = tostring(tonumber(a.InteractState)) end)
                             end
+                            -- Every field a "collected item still listed" report could hinge on,
+                            -- in ONE line, so the next such report needs one dump and not three.
+                            -- All three are STRICT: none is declared on every class in this list,
+                            -- and an ungated fetch of an undeclared member aborts uncatchably.
+                            local ts, ht, sv = "-", "-", "-"
+                            pcall(function()
+                                ts = tostring(tonumber(Core.member(a, "TreasureState", true)))
+                            end)
+                            pcall(function()
+                                ht = tostring(tonumber(Core.member(a, "CurrentHiddenType", true)))
+                            end)
+                            pcall(function()
+                                sv = tostring(Core.name_str(Core.member(a, "TreasureSaveName", true)))
+                            end)
                             f:write(string.format(
-                                "  collectible[%s] d=%.0fm cls=%s bHidden=%s state=%s\n",
-                                c.cls, dd / M, cn, hid, st))
+                                "  collectible[%s] d=%.0fm cls=%s bHidden=%s state=%s treasure=%s"
+                                .. " hiddenType=%s save=%s\n",
+                                c.cls, dd / M, cn, hid, st, ts, ht, sv))
                         end
                     end
                 end
