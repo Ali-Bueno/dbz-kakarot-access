@@ -2736,6 +2736,22 @@ function Nav._field_item_name(drop_key)
     return Nav._message_text("Item_" .. num .. "_Name")
 end
 
+-- Does the active quest still need THIS item? `want` is quest_objective.item_requirement()'s
+-- localized item name, read once per sweep; `name` is the collectible's own localized name. Both
+-- come from the GAME's message table, so this compares the game against itself and works in every
+-- language without a word of ours taking part.
+--
+-- Exact match first. The containment fallback exists because the HUD states the requirement in
+-- prose elsewhere ("frutas namekuseijin" plural in the title) while the checklist row carries the
+-- item name verbatim -- the row is what we read, so exact should win, and containment only covers
+-- a row that ever adds a qualifier.
+function Nav._wants_item(want, name)
+    if type(want) ~= "string" or type(name) ~= "string" then return false end
+    if want == "" or name == "" then return false end
+    local w, n = want:lower(), name:lower()
+    return w == n or w:find(n, 1, true) ~= nil or n:find(w, 1, true) ~= nil
+end
+
 -- Resolve a character id ("Cpl059c02", "Cpl013") to a display name: the game's own
 -- GetCharacterName resolver first, retried without a trailing variation suffix ("...c02")
 -- when the full id has no entry, then the hand-verified CPL_NAMES fallback. nil = the game
@@ -3536,6 +3552,18 @@ function Nav.list_targets(boxed)
         --   PlacementObjectInfo (AAccessPointBase + ItemTableComponent) -> item-id
         --     name + Taken filter;
         --   AccessPointItemBase (AAccessPointBase only) -> Taken filter, generic noun.
+        -- ONE HUD read per sweep, not per actor: the requirement is the same for every
+        -- collectible in this pass, and quest_objective's own host lookup is cached per tick.
+        -- pcall'd and optional -- if the quest module is unavailable this whole feature simply
+        -- does not happen and the scan behaves exactly as before.
+        local want_item
+        do
+            local qok, Q = pcall(require, "quest_objective")
+            if qok and Q and Q.item_requirement then
+                local rok, req = pcall(Q.item_requirement)
+                if rok and type(req) == "table" then want_item = req.name end
+            end
+        end
         for _, c in ipairs({
             { cls = "FieldActionPointActor", action = true },
             { cls = "PlacementObjectInfo", item = true, state = true },
@@ -3571,6 +3599,12 @@ function Nav.list_targets(boxed)
                     end
                     local name = (c.action and action_name(a))
                         or (c.item and drop_item_name(a, c.strict_item)) or nil
+                    -- QUEST ITEM PROMOTION (2026-08-19). A collectible the active quest is still
+                    -- asking for moves into the QUESTS group: that group has no distance cap, so
+                    -- the item is findable from wherever the quest marker dropped the player,
+                    -- instead of being filtered out by the tight collectible cap and leaving them
+                    -- in an empty clearing.
+                    if want_item and Nav._wants_item(want_item, name) then grp = "quests" end
                     add_target(a, grp, noun, nil, "collectible", name, c.state)
                 end
             end

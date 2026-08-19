@@ -147,6 +147,66 @@ local function row_line(host, member)
     return Core.phrase(obj, read_clean(Core.member(row, "Txt_List_01"))), obj
 end
 
+-- WHAT THE ACTIVE QUEST STILL NEEDS YOU TO COLLECT (2026-08-19, user request: the radar sends
+-- players to the quest SITE and they stand in an empty clearing, not realising the item itself
+-- has to be tracked separately).
+--
+-- Returns { name = "<localized item name>", got = n, need = m } for the first UNFINISHED
+-- collection row on the quest HUD, or nil when there is none. Main-quest rows before sub-quest
+-- rows, matching the on-screen order.
+--
+-- MEASURED, not assumed (live capture, fruit sub-quest on Namek): row `Quest_Navi_S00` carried
+-- `Txt_List_00` = "3/4" and `Txt_List_01` = "Fruta namekuseijin" -- the counter AND the item
+-- name, both from the game's own localized message table. That is the same table the radar
+-- resolves a collectible's name from (`Item_<n>_Name`), so matching one against the other is
+-- LANGUAGE-INDEPENDENT: no wording of ours takes part.
+--
+-- WHY THE HUD AND NOT THE QUEST DATA. The clean path does not exist. `UQuestPhase_SearchItem` and
+-- `UQuestPhase_GetItem` both dump EMPTY (AT.hpp) -- native, zero reflected members -- and the
+-- requirement rows live in `UDataTable.RowMap`, which is not reflected either. The contrast is
+-- instructive: `UQuestPhase_GetFish` DOES reflect its target map, so this is a per-phase-type
+-- gap, not a general one. The HUD is the only surface stating the requirement in readable form.
+--
+-- WHICH FIELD HOLDS WHICH is decided BY CONTENT, never by position: the live capture had the
+-- counter in `Txt_List_00`, while the native member names behind those nodes (`WL_QuestDetail` /
+-- `WL_CollectionNum`) imply the opposite order. Whichever field parses as `x/y` is the counter
+-- and the other is the name.
+--
+-- The rows are COLLAPSED for ordinary single-step objectives and only populate for collection
+-- phases, so nil is the normal answer most of the time and every caller must degrade silently to
+-- the game's own marker rather than assume a row will be there.
+local function requirement_from(host, rows)
+    for _, m in ipairs(rows) do
+        local row
+        -- STRICT, for the same reason row_line is: these members are not declared on every host
+        -- variant, and an undeclared name is an abort rather than a nil.
+        if pcall(function() row = Core.member(host, m, true) end)
+            and Core.valid(row) and Core.on_screen(row) then
+            local a = read_clean(Core.member(row, "Txt_List_00"))
+            local b = read_clean(Core.member(row, "Txt_List_01"))
+            local name, got, need
+            for _, v in ipairs({ a, b }) do
+                if type(v) == "string" and v ~= "" then
+                    local g, n = v:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
+                    if g then got, need = tonumber(g), tonumber(n) else name = v end
+                end
+            end
+            -- A finished row (got == need) is skipped on purpose: the caller wants the thing
+            -- still to fetch, and the turn-in marker is the right target once the count is met.
+            if name and got and need and got < need then
+                return { name = name, got = got, need = need }
+            end
+        end
+    end
+    return nil
+end
+
+function Quest.item_requirement()
+    local host = Core.first_on_screen(HOST_CLASS, tick)
+    if not host then return nil end
+    return requirement_from(host, MAIN_ROWS) or requirement_from(host, SUB_ROWS)
+end
+
 -- The whole current objective as one string (title + each visible objective line for
 -- both quest groups), or nil when the tracker shows nothing.
 --
