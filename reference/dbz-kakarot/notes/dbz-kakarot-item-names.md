@@ -175,3 +175,32 @@ binary data:**
 
 Corollary for anything read out of a pak: **a text-search miss is not evidence of absence.** Confirm
 with a parser, or with a known-good pair that must come out right.
+
+
+## 2026-08-19 — collected items: the second state machine, and a wrong prediction
+
+Collected D medals and fruits stayed on the radar. Cause: the "already taken" filter read only
+`AAccessPointBase.InteractState`, but `ATreasureAccessPoint` — D medals, event items, insects —
+runs a SECOND state machine of its own, `TreasureState`, alongside the inherited one. Both enums
+put Taken at 11 (`EAccessPointState.State_Taken`, `ETreasureAccessPointState.State_TreasureTaken`,
+AT_enums.hpp), so one constant covers both. The fetch must be STRICT: only `ATreasureAccessPoint`
+declares `TreasureState`, and a fail-open read would abort on every fruit and field drop.
+
+**CONFIRMED IN PLAY.** Worth recording that I predicted the opposite: I sampled two live D medals
+through the Inspector, saw `TreasureState = 0` on both, and told the player the fix probably would
+not fire. The sample was the flaw — I had no way to know whether those two were collected, so
+"state is 0 on two arbitrary medals" was never evidence about the fix. **A negative reading on
+samples of unknown ground truth is not a negative result.** Ask for the state of an object whose
+condition you KNOW, or do not draw the conclusion.
+
+The measurement round was still worth it, because it mapped what genuinely is NOT available and
+those dead ends should not be retried:
+
+- `APlacementObjectInfo` (`LostPropertyItem_N_C`/`_R_C`) has **no collected marker at all** — no
+  state member, no `bHidden` flip, and its Blueprint adds only an editor `Billboard`.
+- `ATreasureAccessPoint` carries `TreasureSaveName` (`L11_DMEDAL_310`) and `SaveDataIndex`, i.e.
+  the persistent record lives in the SAVE, in `UTreasureAccessPointSaveData` — which dumps EMPTY,
+  so it is native-only and unreachable by reflection.
+- `UATMapIconComponent` has a reflected `bShowMapIcon` and a `RemoveMapIcon()`, which looked like a
+  promising universal "collected" signal — but a live `findall` shows only **20** icon components in
+  the whole area, on shops, houses, fishing spots and quest NPCs. **Collectibles carry none.**
