@@ -114,6 +114,14 @@ local PLATE_NATIVE = { "NameTxt", "NameTxt_Large", "PopularNameTxt", "PopularNam
 -- session is worth less than the data it collects. Flip it to true deliberately, for one run.
 local DUMP_TARGET_LIST = false
 
+-- IDS_ONLY (2026-08-19). When true the probe makes NO FindAllOf sweep at all: it resolves the
+-- fixed EXTRA_IDS list and nothing else. Every sweep here walks live world actors and dereferences
+-- each candidate, which is the one shape that can abort uncatchably when the world is churning --
+-- and the run that killed the session on 2026-08-18 was made MID-DIALOGUE, when the conversation
+-- system is spawning and freeing actors on the very ticks the sweep is reading them. Leave this
+-- true for a routine id lookup; flip it off only to re-collect ids, and only in free roam.
+local IDS_ONLY = true
+
 local function dump_path()
     local src = debug.getinfo(1, "S").source:sub(2)
     local dir = src:match("^(.*)[/\\]") or "."
@@ -202,7 +210,7 @@ function M.run()
             w("-- class " .. cls)
             local all
             w("   step: FindAllOf(" .. cls .. ")")
-            pcall(function() all = FindAllOf(cls) end)
+            if not IDS_ONLY then pcall(function() all = FindAllOf(cls) end) end
             if not all then
                 w("   (FindAllOf returned nothing)")
             else
@@ -323,7 +331,7 @@ function M.run()
         }) do
             w("   step: FindAllOf(" .. spec.cls .. ")")
             local all
-            pcall(function() all = FindAllOf(spec.cls) end)
+            if not IDS_ONLY then pcall(function() all = FindAllOf(spec.cls) end) end
             local n = 0
             for _, a in pairs(all or {}) do
                 if n >= 8 then break end
@@ -405,7 +413,7 @@ function M.run()
         w("-- nameplate " .. PLATE_HOST)
         local hosts
         w("   step: FindAllOf(" .. PLATE_HOST .. ")")
-        pcall(function() hosts = FindAllOf(PLATE_HOST) end)
+        if not IDS_ONLY then pcall(function() hosts = FindAllOf(PLATE_HOST) end) end
         for _, host in pairs(hosts or {}) do
             if Core.valid(host) then
                 w("   host on_screen=" .. tostring(Core.on_screen(host)))

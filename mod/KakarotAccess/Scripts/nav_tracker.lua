@@ -2760,6 +2760,13 @@ local function npc_name(npc)
         local sid = CT.speaker_id(Core, npc)
         local nm = sid and game_character_name(sid)
         if nm then return nm end
+        -- TALK COMPONENT (2026-08-19). Quest NPCs whose `speakerID` is empty still carry a name:
+        -- their talk component holds a third id (`m_SpeakerId`, e.g. Npc_ex675) that the same
+        -- resolver answers for. This is what named the Namek child the radar could only call
+        -- "personaje". See char_types.talk_speaker_id for the evidence and the strict gate.
+        local tid = CT.talk_speaker_id and CT.talk_speaker_id(Core, npc)
+        nm = tid and game_character_name(tid)
+        if nm then return nm end
     end
     -- NO CharacterType HERE (2026-08-18, measured in the live game). It is declared on
     -- AAT_CharacterBase, so QuestCharacter really does inherit it — but nothing on this branch

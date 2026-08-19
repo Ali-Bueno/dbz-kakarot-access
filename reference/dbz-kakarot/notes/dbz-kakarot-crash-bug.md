@@ -1,3 +1,28 @@
+## 2026-08-19 — `charnames` kills the session even with every sweep disabled
+
+Two more kills, same signature as 2026-08-18: the dev channel logs the acknowledgement
+(`char name probe -> …`) and the log **ends there**. Both channels dead, dump file untouched.
+
+What this run RULED OUT — it was made deliberately narrow:
+
+- **Not the actor sweeps.** All three `FindAllOf` calls were gated off (`IDS_ONLY`); the run made
+  none.
+- **Not mid-dialogue timing** (the player's hypothesis, and a good one). `kak_screen` showed
+  `adapter : (none — free roam)` immediately before the run.
+- **Not `Nav.list_targets()`** — already off since the previous kill.
+
+So what is left is the very first steps of the probe body, before the first line reaches disk:
+`require`s, `Mem.mark`, `io.open`, or the re-require of the module itself.
+
+**The breadcrumb design has a hole**: the step markers are written INTO the dump file, so anything
+that dies before `io.open` succeeds leaves no breadcrumb at all — the tool cannot record its own
+earliest failure. The crash trail should cover that gap (`Mem.mark("dev.charnames")` runs before
+`io.open`), but the trail printed at the following boot was **completely empty**, header and footer
+with nothing between, which suggests the body never reached the mark either.
+
+**Do not run `charnames` against a session you care about.** The offline pak route (see the
+npc-names note) answered the question this probe existed for, with no game running — prefer it.
+
 # dbz-kakarot-crash-bug
 
 > **2026-08-18 — `navdump` NOW FREEZES THE GAME OUTRIGHT. Do not run it on a live session.**

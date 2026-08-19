@@ -199,6 +199,41 @@ function M.speaker_id(Core, actor)
     return Core.name_str(Core.member(actor, "speakerID", true))
 end
 
+-- A THIRD id space: the NPC's own TALK COMPONENT (2026-08-19, probed live on the Namek fruit
+-- side-quest). Quest NPCs that the character table cannot name still speak with a name on screen
+-- -- the player read "Nino namekuseijin: Vas a conseguirme algunas frutas?" off an NPC whose
+-- UniqueId is Npc086 and whose `speakerID` is empty. The name does not come from either of those:
+-- the actor carries a talk component holding a SEPARATE id.
+--
+--   Sub_Npc086_01_Client.NPCTALK
+--       m_SpeakerId   Npc_ex675          <- unrelated to UniqueId / speakerID
+--
+-- `Npc_ex675` is a real row key: it is in the message table's name map, and that table holds a
+-- contiguous block of character display names including the exact string the player saw
+-- ("Nino namekuseijin", "Principe de los saiyajin", "El guardian de la Tierra" -- read offline
+-- from AT/Content/Message/PLAT_W/es_MX/messageData, where the accented names are stored as
+-- UTF-16 and an ASCII-only scan misses them entirely). So the same GetCharacterName resolver
+-- that already answers for Cpl002A/Npc004A should answer for these too.
+--
+-- STRICT gate on every fetch: this is a MULTI-CANDIDATE probe (the component is spelled NPCTALK
+-- on quest actors and NpcTalkComponent on AT_Character), so most candidates are EXPECTED to be
+-- absent, and fail-open there would be a licence to fetch names we have positive reason to
+-- believe are missing -- the uncatchable abort. One tick of silence per newly-seen class is the
+-- correct trade here.
+local TALK_COMPONENTS = { "NPCTALK", "NpcTalkComponent" }
+
+function M.talk_speaker_id(Core, actor)
+    if not Core or actor == nil then return nil end
+    for _, cn in ipairs(TALK_COMPONENTS) do
+        local comp = Core.member(actor, cn, true)
+        if Core.valid(comp) then
+            local id = Core.name_str(Core.member(comp, "m_SpeakerId", true))
+            if id and id ~= "" and id ~= "None" then return id end
+        end
+    end
+    return nil
+end
+
 -- FALLBACK for the ENEMY branch: derive the message-table id from the BLUEPRINT CLASS NAME.
 --
 -- WHY IT IS NEEDED (2026-08-18, measured live). `speakerID` answers on QuestCharacter but is an

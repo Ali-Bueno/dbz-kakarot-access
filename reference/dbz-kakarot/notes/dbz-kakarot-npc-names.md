@@ -369,3 +369,41 @@ Three things worth keeping:
 call left to make, and it is the whole feature — if it answers, every NPC the character table cannot
 name gets its on-screen name from its own talk component. The probe run that would have answered it
 **took the game down** (see the crash-bug note), so this is the first thing to run next session.
+
+### 2026-08-19 — the name is in the message table, and an ASCII scan cannot see it
+
+The live probe that would have resolved `Npc_ex675` **took the game down twice more** (see the
+crash-bug note), so the question was answered **offline instead, from the paks** — no game needed,
+no risk, and it is now the preferred way to ask this kind of question.
+
+```
+repak.exe get pakchunk0-WindowsNoEditor.pak     AT/Content/Message/PLAT_W/es_MX/messageData.uexp > md.uexp
+```
+
+`Npc_ex675` is present in the table's name map, and the table holds a **contiguous block of
+character display names** that contains the exact string the player saw:
+
+```
+… Mujer egoísta | Niño namekuseijin | Alienígena masculino | Alienígena femenino | Niña |
+  Súper Saibaman | Príncipe de los saiyajin | … | El guardián de la Tierra | Líder de los namekuseijin
+```
+
+**The trap that cost most of the session:** UE stores an FString as **plain ASCII when it is
+ASCII-only and as UTF-16LE the moment it contains one accented character**. Both encodings sit in
+the same file. A `grep`/ASCII-run scan therefore reads only the unaccented half of a Spanish table
+and reports a name as ABSENT with total confidence — it found "Colono namekuseijin" and missed
+"Niño namekuseijin" fifteen rows away. Two consequences worth carrying to any pak text search:
+
+- **Always scan both encodings**, and treat an ASCII-only miss as *no evidence*, never as absence.
+- `bash` **silently drops NUL bytes in command substitution**, so a UTF-16 grep pattern built with
+  `$(printf ...)` collapses to ASCII and appears to work. Use python/perl for binary search.
+
+One more self-inflicted one, same family: extracting in a `for pak in …` loop where the redirect
+`> out` runs before `repak get` fails **truncates the good extraction from the previous pak**. The
+file then reads as 0 bytes of "compressed data" and invites a wrong conclusion about encryption.
+
+**Status: implemented, not yet heard in game.** `char_types.talk_speaker_id` reads `m_SpeakerId`
+through the same strict gate as every multi-candidate probe, and `npc_name` consults it right after
+`speakerID`. It only ever ADDS a name: an id the resolver has no row for returns "" and the chain
+falls through to the existing behaviour. The remaining check is a listening one — walk up to that
+child and confirm the radar says "Niño namekuseijin" instead of "personaje".
