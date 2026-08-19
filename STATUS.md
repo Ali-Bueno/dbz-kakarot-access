@@ -45,11 +45,15 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    story character in a different arc. Our English tables are fallbacks now — an English name where
    the game shows Spanish means that id had no message row and fell through, so report it.
 
-2. **Run `charnames` near a Dragon Ball or a static item pickup** (armed 2026-08-18, NEVER RUN with
-   one loaded). It reads `ItemStaticActor.ItemId` and feeds it to `GetMessageFromID`. If that
-   answers, collectibles name themselves from the game's own localized text and the class-name noun
-   table becomes a fallback; if it returns "", the missing hop is a DataTable row read. Collectibles
-   currently say "Medalla D" / "tesoro" / "recuerdo" from CLASS NAMES — my wording, not the game's.
+2. **Listen to a collection point** (wired 2026-08-19, NOT yet heard). Collectibles now resolve
+   their REAL localized name: drop-table slug -> `item_drop_ids.lua` -> numeric item id ->
+   `GetMessageFromID("Item_<n>_Name")`. The Namek quest fruit should say "Fruta namekuseijin"
+   instead of "tesoro". 1432 ids ship; 1429 verified to have a `_Name` key in the message table.
+   Two known limits to listen for: (a) 125 slugs have per-episode variants (the same bush drops a
+   bigger vegetable later) and the map emits the EARLIEST, so a late-game pickup may be named as
+   its early-game sibling; (b) the second collectible class fetches its item component through the
+   STRICT gate, so a newly-seen class can be silent for a tick or two. Anything still saying
+   "tesoro" / "objeto" is a slug with no row -- report the spot.
 3. **Listen to the bonfire, the shops and the training points** (fixed 2026-08-18, reloaded live,
    NOT yet heard). The bonfire was never missing — it carries no `ATMapIconComponent`, so it came
    through the action-point path, where `ActionName` is empty on every actor, and announced as an

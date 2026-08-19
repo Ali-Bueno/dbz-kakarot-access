@@ -129,3 +129,49 @@ group and adjacent by distance.
 
 Unrecognised action-point classes keep the old behaviour, so the change can only improve a
 classification, never remove one.
+
+
+## 2026-08-19 — SOLVED: the item name needs one more hop than we were making
+
+The player reported a Namek quest fruit that the radar called "tesoro" while the game, on pickup,
+called it **"Fruta namekuseijin"**. Both were right about different things: the radar was describing
+the *container* (the actor's class name contains `Treasure`, so it got our generic noun) and the game
+was naming the *contents*.
+
+**The chain, verified offline from the paks — no game running, no crash risk:**
+
+```
+actor -> ItemTableComponent -> FieldItemDropData.FixedId / .NormalId   ("Lost_Seaweed_Fixed")
+      -> row in Parameter/Field/LotteryLostPropertyItemsTable          -> DropItemId_1 = Item_36029
+      -> message key `Item_36029_Name`                                 -> "Algas marinas"
+```
+
+Two of these were already in hand and the conclusion was still wrong, so the lesson is worth stating:
+the 2026-08-18 round tested `Lost_Seaweed_Fixed` against the resolver, got "", and concluded that
+collectibles cannot be named. **That id was never an item id** — it is a drop-table ROW KEY. One
+missing hop looked exactly like a dead end.
+
+**Why this one needs a shipped table when nothing else in the mod does.** The item name space is
+NUMERIC (`Item_11001`..`Item_96016`, 956 entries with a `_Name` key) while the actor only ever hands
+us an alphabetic slug. Several distinct slugs collapse onto one numeric id and the ranges jump
+arbitrarily, so no string surgery bridges them; the bridge is a DataTable row read, and a
+`UDataTable`'s `RowMap` is not reflected, so Lua cannot do it at runtime. Hence a GENERATED
+`item_drop_ids.lua` (slug -> number), produced by `tools/item-ids/dump_drop_item_ids.py`.
+
+The map holds **no text at all**, only id pairs. The displayed name still comes from the game's own
+message table at runtime, so it stays in the player's language automatically and a new translation
+never touches it. Only an item renumbering in a game patch would, and then the generator is re-run.
+
+**Two measurement traps cost most of this session, both the same shape — trusting a text search over
+binary data:**
+
+1. **UTF-16.** UE stores an FString as ASCII when it is ASCII-only and as UTF-16LE the moment it
+   contains one accented character; both live in the same file. An ASCII-only scan of a Spanish table
+   reads half of it and reports a present string as ABSENT with total confidence.
+2. **FName numbers.** An FName is (name-table index, number) — `Item_36029` is stored as the entry
+   `Item` plus a binary number. `grep` for `Item_36029` finds NOTHING in the very table that defines
+   it. This nearly made me discard a correct sub-agent result as fabricated: its numeric ids looked
+   unsupported because the name map only contained a bare `Item`.
+
+Corollary for anything read out of a pak: **a text-search miss is not evidence of absence.** Confirm
+with a parser, or with a known-good pair that must come out right.

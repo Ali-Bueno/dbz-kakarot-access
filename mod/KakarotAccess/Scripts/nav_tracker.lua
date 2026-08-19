@@ -2671,6 +2671,71 @@ local function game_character_name(id)
     return nm
 end
 
+-- The game's GENERAL message resolver: UEventBlueprintFunctionLibrary::GetMessageFromID(FString)
+-- -> FString (AT.hpp:41265), called on its CDO. Same call shape as GetCharacterName above -- an
+-- FString in and an FString out on a static blueprint library -- and the same cache discipline.
+-- Kept SEPARATE from game_character_name because it answers a different key space: character ids
+-- resolve through the character table, while everything else in the game's message table (item
+-- names, descriptions, notices) is keyed by its own message id. `false` caches a known miss so a
+-- wrong key costs exactly one call ever.
+-- Fields on Nav, not new module locals: this chunk is at Lua's 200-local ceiling for a main
+-- function, and five more locals overflow it (luac: "too many local variables").
+Nav._msg_lib, Nav._msg_cache = nil, {}
+function Nav._message_text(id)
+    if type(id) ~= "string" or id == "" then return nil end
+    local hit = Nav._msg_cache[id]
+    if hit ~= nil then return hit or nil end
+    if Nav._msg_lib == nil then
+        local ok, lib = pcall(function()
+            return StaticFindObject("/Script/AT.Default__EventBlueprintFunctionLibrary")
+        end)
+        Nav._msg_lib = (ok and Core.valid(lib)) and lib or false
+    end
+    local txt
+    if Nav._msg_lib then
+        pcall(function()
+            local s = Nav._msg_lib:GetMessageFromID(id)
+            if type(s) == "string" then txt = s elseif s then txt = s:ToString() end
+        end)
+    end
+    if txt == "" then txt = nil end
+    Nav._msg_cache[id] = txt or false
+    return txt
+end
+
+-- Localized name of a field ITEM from its drop-table row key (the FixedId/NormalId an item actor
+-- exposes through its ItemTableComponent -- e.g. "Lost_Seaweed_Fixed"). nil = no name, caller keeps
+-- its generic noun.
+--
+-- WHY A TABLE IS NEEDED HERE, when every other name in this file is resolved live (2026-08-19).
+-- The actor hands us an alphabetic SLUG, but the message table is keyed by a NUMERIC item id
+-- (`Item_36029_Name` -> "Algas marinas"; ids run 11001..96016, 956 of them). The two id spaces are
+-- unrelated -- several distinct slugs collapse onto one numeric id, and the numeric ranges jump
+-- arbitrarily -- so there is no string surgery that gets from one to the other. The hop that closes
+-- the gap is a DataTable row read (LotteryLostPropertyItemsTable), and a DataTable's RowMap is not
+-- reflected, so Lua cannot do it at runtime. Hence item_drop_ids.lua: a GENERATED slug -> numeric-id
+-- map, extracted from that very table by tools/item-ids/dump_drop_item_ids.py.
+--
+-- The map holds NO TEXT, only id pairs -- the displayed name still comes from the game's own message
+-- table at runtime, so this stays in the player's language exactly like character names do, and a
+-- new translation never touches it. Only a game patch that renumbers items would, and then the
+-- generator is re-run.
+-- Nav._drop_ids, same reason: lazily required, and a missing/broken data file must not kill the module.
+function Nav._field_item_name(drop_key)
+    if type(drop_key) ~= "string" or drop_key == "" then return nil end
+    if Nav._drop_ids == nil then
+        local ok, t = pcall(require, "item_drop_ids")
+        Nav._drop_ids = (ok and type(t) == "table") and t or false
+        if not Nav._drop_ids then
+            print("[KakarotAccess] item_drop_ids unavailable: " .. tostring(t) .. "\n")
+        end
+    end
+    if not Nav._drop_ids then return nil end
+    local num = Nav._drop_ids[drop_key]
+    if not num then return nil end
+    return Nav._message_text("Item_" .. num .. "_Name")
+end
+
 -- Resolve a character id ("Cpl059c02", "Cpl013") to a display name: the game's own
 -- GetCharacterName resolver first, retried without a trailing variation suffix ("...c02")
 -- when the full id has no entry, then the hand-verified CPL_NAMES fallback. nil = the game
@@ -3408,10 +3473,16 @@ function Nav.list_targets(boxed)
         -- reflected, CXX dump). The id is game data, not localized text, so it is only
         -- spoken when it reads as words (has a 3+ letter run); cryptic numeric codes
         -- fall back to the generic "item" noun.
-        local function drop_item_name(a)
+        -- `strict` = ask the class whether it declares ItemTableComponent and skip if it does not.
+        -- PlacementObjectInfo is KNOWN to declare it, so that caller stays fail-open (unchanged
+        -- behaviour). AccessPointItemBase does NOT declare it -- only its ATreasureAccessPoint
+        -- subclass does -- so that caller must be strict: a fail-open fetch of a member the class
+        -- may not have is the uncatchable abort. Failing closed there costs at most a tick of
+        -- silence per newly-seen class while the property set is enumerated, and self-heals.
+        local function drop_item_name(a, strict)
             local raw
             pcall(function()
-                local comp = Core.member(a, "ItemTableComponent")
+                local comp = Core.member(a, "ItemTableComponent", strict)
                 if not (Core.valid(comp)) then return end
                 local d = Core.member(comp, "FieldItemDropData")
                 -- Core.member validates the OWNER, not the RESULT. A null/empty field yields an
@@ -3430,6 +3501,13 @@ function Nav.list_targets(boxed)
                 end
             end)
             if not raw then return nil end
+            -- THE GAME'S OWN LOCALIZED NAME FIRST (2026-08-19). `raw` is the drop-table row key,
+            -- which the generated map turns into the numeric item id the message table is keyed by
+            -- -- so a collection point announces "Fruta namekuseijin" instead of the class-derived
+            -- noun "tesoro" the player was hearing, in whatever language the game is set to. See
+            -- Nav._field_item_name for why this one hop needs a table when nothing else here does.
+            local localized = Nav._field_item_name(raw)
+            if localized then return localized end
             -- Strip the drop-table bookkeeping before speaking it. The keys are `<Item>_Fixed` and
             -- `<Item>_AreaNN_NN` (live 2026-08-18: `Lost_Seaweed_Fixed`, `Lost_Seaweed_Area11_01`),
             -- so those suffixes are pure noise to a listener — "Lost Seaweed Area11 01" was being
@@ -3450,7 +3528,7 @@ function Nav.list_targets(boxed)
         for _, c in ipairs({
             { cls = "FieldActionPointActor", action = true },
             { cls = "PlacementObjectInfo", item = true, state = true },
-            { cls = "AccessPointItemBase", state = true },
+            { cls = "AccessPointItemBase", state = true, item = true, strict_item = true },
         }) do
             for _, a in pairs(Nav.SW.class_list(c.cls)) do
                 if Core.valid(a) and visible_actor(a)
@@ -3481,7 +3559,7 @@ function Nav.list_targets(boxed)
                         end
                     end
                     local name = (c.action and action_name(a))
-                        or (c.item and drop_item_name(a)) or nil
+                        or (c.item and drop_item_name(a, c.strict_item)) or nil
                     add_target(a, grp, noun, nil, "collectible", name, c.state)
                 end
             end
