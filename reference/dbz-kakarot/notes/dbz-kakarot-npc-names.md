@@ -402,7 +402,13 @@ One more self-inflicted one, same family: extracting in a `for pak in …` loop 
 `> out` runs before `repak get` fails **truncates the good extraction from the previous pak**. The
 file then reads as 0 bytes of "compressed data" and invites a wrong conclusion about encryption.
 
-**Status: implemented, not yet heard in game.** `char_types.talk_speaker_id` reads `m_SpeakerId`
+**Status: CONFIRMED IN PLAY (2026-08-19).** The player walked up to the Namek fruit-quest child and
+the radar named him. So the talk component closes the gap the character table left: an NPC with an
+empty `speakerID` and an unindexed `UniqueId` still names itself, in the player's language, from its
+own conversation data. Treat `m_SpeakerId` as a first-class id source alongside `speakerID`, not a
+special case for quest NPCs.
+
+**Implementation.** `char_types.talk_speaker_id` reads `m_SpeakerId`
 through the same strict gate as every multi-candidate probe, and `npc_name` consults it right after
 `speakerID`. It only ever ADDS a name: an id the resolver has no row for returns "" and the chain
 falls through to the existing behaviour. The remaining check is a listening one — walk up to that

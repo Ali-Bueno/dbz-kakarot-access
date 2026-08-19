@@ -36,12 +36,14 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Widen the character-name check** (wired 2026-08-18; FIRST ONE CONFIRMED IN PLAY — the radar
-   read "Bulma" off a live NPC). Names now come from the GAME, localized: `speakerID` ->
-   `GetCharacterName`. One NPC proves the path works end to end; it does not prove coverage. Still
-   to hear: a field ENEMY, an anonymous mob (should be a real description, not our generic noun),
-   and a story character in a different arc. Our English tables are fallbacks now — an English name
-   where the game shows Spanish means that id had no message row and fell through, so report it.
+1. **Widen the character-name check** (wired 2026-08-18/19). Names come from the GAME, localized,
+   via three id sources in order: `speakerID`, the enemy's Blueprint class name, and the actor's
+   talk component (`m_SpeakerId`). CONFIRMED IN PLAY so far: a story NPC ("Bulma"), a field enemy
+   ("Oficial del Ejército de Freezer") and a quest NPC the character table cannot name (the Namek
+   fruit-quest child). That covers all three sources end to end; it does not prove coverage across
+   arcs. Still to hear: an anonymous mob (should be a real description, not our generic noun) and a
+   story character in a different arc. Our English tables are fallbacks now — an English name where
+   the game shows Spanish means that id had no message row and fell through, so report it.
 
 2. **Run `charnames` near a Dragon Ball or a static item pickup** (armed 2026-08-18, NEVER RUN with
    one loaded). It reads `ItemStaticActor.ItemId` and feeds it to `GetMessageFromID`. If that
