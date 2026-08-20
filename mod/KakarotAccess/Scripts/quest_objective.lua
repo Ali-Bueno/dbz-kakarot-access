@@ -175,7 +175,11 @@ end
 -- The rows are COLLAPSED for ordinary single-step objectives and only populate for collection
 -- phases, so nil is the normal answer most of the time and every caller must degrade silently to
 -- the game's own marker rather than assume a row will be there.
-local function requirement_from(host, rows)
+--
+-- `kind` ("main"/"sub") is carried out with the answer because the radar's auto-track must not
+-- drift off the quest the player is on: `preempt.focus` is a standing MAIN-or-SUB context, and an
+-- item requirement belonging to the other group has to be declined rather than tracked.
+local function requirement_from(host, rows, kind)
     for _, m in ipairs(rows) do
         local row
         -- STRICT, for the same reason row_line is: these members are not declared on every host
@@ -194,17 +198,24 @@ local function requirement_from(host, rows)
             -- A finished row (got == need) is skipped on purpose: the caller wants the thing
             -- still to fetch, and the turn-in marker is the right target once the count is met.
             if name and got and need and got < need then
-                return { name = name, got = got, need = need }
+                return { name = name, got = got, need = need, kind = kind }
             end
         end
     end
     return nil
 end
 
-function Quest.item_requirement()
+-- `prefer` ("main"/"sub", optional) asks the OTHER group first. On-screen order puts main before
+-- sub, which is the right default -- but the radar carries a standing MAIN-or-SUB focus, and a
+-- player working a side story while a main quest also shows a collection row would otherwise get
+-- the main row, have it declined as off-focus, and never see their own requirement at all.
+function Quest.item_requirement(prefer)
     local host = Core.first_on_screen(HOST_CLASS, tick)
     if not host then return nil end
-    return requirement_from(host, MAIN_ROWS) or requirement_from(host, SUB_ROWS)
+    if prefer == "sub" then
+        return requirement_from(host, SUB_ROWS, "sub") or requirement_from(host, MAIN_ROWS, "main")
+    end
+    return requirement_from(host, MAIN_ROWS, "main") or requirement_from(host, SUB_ROWS, "sub")
 end
 
 -- The whole current objective as one string (title + each visible objective line for

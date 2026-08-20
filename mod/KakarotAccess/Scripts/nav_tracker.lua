@@ -213,7 +213,7 @@ local route_mode = true        -- NavMesh route guidance (Shift+F3)
 local running = false
 local tick = 0                 -- loop tick counter; tick * TICK_MS is our clock
 
-local target = nil             -- { actor, key, pri, label, manual }
+local target = nil             -- { actor, key, pri, label, manual, questitem }
 local target_missing = 0       -- consecutive scans where the target wasn't found
 local companion_idx = 0        -- Shift+F5 cycle: 0 = quest mode; 1..n = that companion
 local auto_suppressed = false  -- after reaching / stopping a target the auto-scan stays
@@ -1213,6 +1213,69 @@ local function is_playable_char(c)
     return ok and r == true
 end
 
+-- WHICH SIDE a field character is on, straight from the game's own data: "ally", "enemy", or nil.
+--
+-- WHY THIS EXISTS (user report 2026-08-19: "the radar detects Krillin as an enemy when he is in my
+-- party"). `is_playable_char` above is a CLASS-IDENTITY test, and it is not the game's statement
+-- about sides — it only happens to be true for the handful of characters whose blueprints derive
+-- `AAT_CharacterPlayableBase`. Measured live: the player (`cpl002_B`) has it in its chain, and the
+-- party companion Krillin (`AT_Character_cpl006_BP_C` -> `ATCharacterCpl006` -> `AT_Character`)
+-- does NOT. So Krillin failed the companion scan's positive test AND the enemy scan's negative
+-- one, and was announced as a generic enemy. `SpawnType` cannot rescue it either: the enum is
+-- `E_ENEMYSPAWN_TYPE` (`NONE/ENCOUNT/QUEST/BOSS`, AT_enums.hpp:10965) and says how an enemy was
+-- SPAWNED, so a level-placed roaming mob reads 0 exactly like Krillin does.
+--
+-- `AAT_Character.AttributeComponent` (AT.hpp:14371, reflected) is POLYMORPHIC by side, and its
+-- class is the only per-actor side statement this game exposes — a whole-header grep finds no
+-- team/faction UPROPERTY and no IsAlly-style getter on `AT_Character` or `AT_CharacterBase`:
+--   UATCharacterAttributeComponentBase
+--     +- UATPlayerAttributeComponent               <- ALLY
+--     |    +- UATMainPlayerAttributeComponent           the character you control
+--     |    +- UATSupportPlayerAttributeComponent        the party companion following you
+--     |    +- UATLimitedSupportPlayerAttributeComponent
+--     +- UATEnemyAttributeComponent                <- ENEMY
+--     +- UATAtrociousAttributeComponent            <- ENEMY (special)
+-- Confirmed against a live ObjectDump of this save: Krillin's actor carries
+-- `ATSupportPlayerAttributeComponent`, and all 59 roaming field enemies carry
+-- `ATEnemyAttributeComponent`. One reflected hop, no out-params, no manager lookup.
+--
+-- DEAD ENDS, do not spend a session on them: the runtime party roster lives in `FPartyMember`,
+-- which reflects ZERO members (an opaque blob), and `UATSupportSystem` reflects nothing at all;
+-- every `TArray<CHARACTER_TYPE>` in the headers is a quest DATA TABLE describing what a party
+-- should be, not what it is; and `bEnableHiddenOnJoinedSupport` is an `AQuestCharacter` visibility
+-- toggle on a sibling branch that Krillin's actor can never have.
+--
+-- nil means DON'T KNOW and every caller must treat it as such rather than as "enemy": in that same
+-- dump 16 of 76 character actors carried no attribute component at all.
+-- BOTH the function and its resolved UClasses live on the module table rather than in file-scope
+-- locals: this chunk sits at Lua's 200-active-locals ceiling, and either one as a local fails to
+-- COMPILE (the same constraint the sweep telemetry and the quest-item state already work around).
+function Nav._char_side(c)
+    if Nav.side_cls == nil then
+        Nav.side_cls = false
+        pcall(function()
+            local ally = StaticFindObject("/Script/AT.ATPlayerAttributeComponent")
+            local foe = StaticFindObject("/Script/AT.ATEnemyAttributeComponent")
+            if ally and foe then
+                Nav.side_cls = { ally = ally, enemy = foe,
+                                 atrocious = StaticFindObject("/Script/AT.ATAtrociousAttributeComponent") }
+            end
+        end)
+    end
+    local side_cls = Nav.side_cls
+    if not side_cls then return nil end
+    local ac
+    pcall(function() ac = Core.member(c, "AttributeComponent") end)
+    if not Core.valid(ac) then return nil end
+    local side
+    pcall(function()
+        if ac:IsA(side_cls.ally) then side = "ally"
+        elseif ac:IsA(side_cls.enemy) then side = "enemy"
+        elseif side_cls.atrocious and ac:IsA(side_cls.atrocious) then side = "enemy" end
+    end)
+    return side
+end
+
 -- Live ENEMY level: reflected hops AAT_Character.AttributeComponent -> .StatusInstance,
 -- then the native int32 at statusInstance.level — ENEMY instances only (ATEnemyStatus);
 -- the player's instance keeps a POINTER in that slot (see native_offsets). Only ever call
@@ -1280,7 +1343,13 @@ local function enemies_list()
         local px, py, pz
         if pawn then px, py, pz = actor_pos(pawn) end
         for _, c in pairs(FindAllOf("AT_Character") or {}) do
-            if Core.valid(c) and not is_playable_char(c) and char_visible(c) then
+            -- SIDE FIRST, class identity only as the fallback (2026-08-19). `is_playable_char`
+            -- alone let the party companion Krillin through as an enemy; `Nav._char_side` is the
+            -- game's own per-actor statement. It answers nil for a character that carries no
+            -- attribute component, and nil must NOT mean "enemy" — so the old test still decides
+            -- that case, which is exactly the behaviour this scan had before.
+            if Core.valid(c) and Nav._char_side(c) ~= "ally" and not is_playable_char(c)
+                and char_visible(c) then
                 local near = true
                 if px then
                     local x, y, z = actor_pos(c)
@@ -1561,6 +1630,13 @@ function Nav.release_world_refs()
     -- the system), where no Core.valid on our side can protect the parameter.
     human_mesh = nil
     invoker_key, invoker_nav = nil, nil
+    -- The quest-item election's own bookkeeping, all of it meaningless on the other side of this
+    -- gate. `qreq_gone_at` is a WALL clock and this function is called precisely when the nav
+    -- step stops running, so a 20 s cutscene would otherwise "prove" the requirement had been
+    -- absent long enough and release it on the first tick back — the double announcement the
+    -- debounce exists to prevent. `qreq_miss` is a POSITION, and a map change re-frames the
+    -- coordinates, so keeping it could suppress the next look somewhere else entirely.
+    Nav.qreq_gone_at, Nav.qreq_miss, Nav.qreq_bump, Nav.qreq_missn = nil, nil, nil, nil
 end
 
 local function step()
@@ -1783,7 +1859,13 @@ local function step()
         -- The fresh preempt biases once; `preempt.focus` is the standing context and therefore
         -- applies to EVERY auto-scan, which is what carries a multi-phase side story from one
         -- objective to the next without the player opening the picker.
-        local best = best_candidate(px, py, pz, fresh and preempt.pri or preempt.focus)
+        -- THE QUEST ITEM OUTRANKS THE MARKER (2026-08-19). On a collection quest the marker
+        -- points at the quest SITE and leaves the player standing in an empty clearing; what
+        -- they need is the item. `_quest_item_target` answers nil for every other objective —
+        -- and again the moment the count is met — so the marker is the normal answer and the
+        -- hand-back at the end of a collection costs no code of its own.
+        local best = Nav._quest_item_target(px, py, pz)
+            or best_candidate(px, py, pz, fresh and preempt.pri or preempt.focus)
         if best then
             -- Close the re-acquire window and MEASURE it. This line is the whole point of the
             -- window being a hypothesis rather than a hunch: it says how long the marker
@@ -1960,7 +2042,14 @@ local function step()
     -- auto radius arms the sweep from anywhere inside the patch; the walk-away
     -- trigger (chain_step) then advances it.
     local d3 = math.sqrt((tx - px) ^ 2 + (ty - py) ^ 2 + (tz - pz) ^ 2)
-    local arrive_r = (target.manual and target.grp ~= "gathering")
+    -- A QUEST ITEM ARRIVES LIKE A HAND-PICKED ONE (2026-08-19). It is a pickup, not a
+    -- destination: the wide auto radius would say "you have arrived" and then go silent 8 m short
+    -- of the collectible, which is the very complaint -- standing in an empty clearing -- that
+    -- tracking the item was meant to end. `homegrp` keeps the volume exception intact: a fruit
+    -- patch promoted out of "gathering" still needs the wide radius, because its actor origin can
+    -- sit meters from the orbs.
+    local arrive_r = ((target.manual or target.questitem)
+        and target.grp ~= "gathering" and target.homegrp ~= "gathering")
         and ARRIVE_DIST_MANUAL or ARRIVE_DIST
     if d3 <= arrive_r then
         if not arrived then
@@ -1968,7 +2057,8 @@ local function step()
             Audio.arrival()
             -- Hand-picked target: you're right on it — prompt the interact button so a
             -- collectible/NPC can be grabbed/talked to. Auto quest target: plain arrival.
-            Speech.say(target.manual and I18n.t("nav_arrived_pickup") or I18n.t("nav_arrived"), false)
+            Speech.say((target.manual or target.questitem)
+                and I18n.t("nav_arrived_pickup") or I18n.t("nav_arrived"), false)
             -- A hand-picked (manual) target STOPS on arrival: the beacon goes quiet, the
             -- target is dropped, AND the auto-scan is suppressed so it can't immediately
             -- re-acquire the same spot when you walk away. To track again, re-pick from
@@ -2457,8 +2547,15 @@ local function companions(px, py, pz)
         -- `is_playable_char` is the SAME helper the enemy scan already uses to exclude the
         -- party (line ~1283), so the two scans now share one definition of "party member" and
         -- cannot disagree. It also covers the player, who is dropped by me_key just below.
+        --
+        -- WIDENED 2026-08-19: `is_playable_char` is a class-identity test and the party is bigger
+        -- than the three blueprints that happen to derive `AAT_CharacterPlayableBase` — Krillin's
+        -- does not, so he was missing here AND showing up under Enemigos. `Nav._char_side` reads
+        -- the game's own side data (the polymorphic AttributeComponent) and answers "ally" for
+        -- main/support/limited-support alike. Kept as an OR: the old test still catches anyone the
+        -- new one cannot read, so this can only ever add companions, never lose one.
         if Core.valid(c) and tostring(c:GetAddress()) ~= me_key
-            and is_playable_char(c)
+            and (Nav._char_side(c) == "ally" or is_playable_char(c))
             and char_visible(c) then
             local x, y, z = actor_pos(c)
             if x then
@@ -2750,6 +2847,260 @@ function Nav._wants_item(want, name)
     if want == "" or name == "" then return false end
     local w, n = want:lower(), name:lower()
     return w == n or w:find(n, 1, true) ~= nil or n:find(w, 1, true) ~= nil
+end
+
+-- Spoken name for a placed collectible: its drop-table id resolved to the game's own localized
+-- item name. On the module rather than inside the sweep because BOTH scans need it -- the direct
+-- class scan that finds unmarked collectibles, and the map-icon scan that finds every POI the
+-- game marks. `strict` refuses the ItemTableComponent fetch when the class has not been
+-- introspected, which is mandatory on the map-icon path: there the owner can be any class at all.
+function Nav._drop_item_name(a, strict)
+    local raw
+    pcall(function()
+        local comp = Core.member(a, "ItemTableComponent", strict)
+        if not (Core.valid(comp)) then return end
+        -- STRICT with the caller: on the map-icon path the component's own class is
+        -- whatever the game map-icons, and a fail-open fetch of an undeclared member is
+        -- the uncatchable abort.
+        local d = Core.member(comp, "FieldItemDropData", strict)
+        -- Core.member validates the OWNER, not the RESULT. A null/empty field yields an
+        -- INVALID RemoteObject, which is NOT nil — so `if not d` let it straight through
+        -- and the next hop resolved a property on a dead handle: the +0x10 fault. This is
+        -- the prime suspect for the 2026-07-26 (c) crash (it is the only live fetch in the
+        -- whole step() graph whose receiver never reached Core.valid, which is exactly
+        -- what "Mem.alive logged zero rejections" demands).
+        -- valid_REF, not valid: `d` is an FStruct handle, and Core.valid would call
+        -- GetAddress on it, which UE4SS raises THROUGH pcall.
+        if not Core.valid_ref(d) then return end
+        for _, fld in ipairs({ "FixedId", "NormalId" }) do
+            -- FName members of the struct: read them as names, never IsValid them.
+            local s = Core.name_str(d[fld])
+            if s and s ~= "None" then raw = s return end
+        end
+    end)
+    if not raw then return nil end
+    -- THE GAME'S OWN LOCALIZED NAME FIRST (2026-08-19). `raw` is the drop-table row key,
+    -- which the generated map turns into the numeric item id the message table is keyed by
+    -- -- so a collection point announces "Fruta namekuseijin" instead of the class-derived
+    -- noun "tesoro" the player was hearing, in whatever language the game is set to. See
+    -- Nav._field_item_name for why this one hop needs a table when nothing else here does.
+    local localized = Nav._field_item_name(raw)
+    if localized then return localized end
+    -- Strip the drop-table bookkeeping before speaking it. The keys are `<Item>_Fixed` and
+    -- `<Item>_AreaNN_NN` (live 2026-08-18: `Lost_Seaweed_Fixed`, `Lost_Seaweed_Area11_01`),
+    -- so those suffixes are pure noise to a listener — "Lost Seaweed Area11 01" was being
+    -- read out in full. Still the game's INTERNAL English id, not its localized name; see
+    -- the note above on COLLECTIBLE_NOUN for the real fix.
+    local base = raw:gsub("_Fixed$", ""):gsub("_Normal$", "")
+                    :gsub("_Area%d+_%d+$", ""):gsub("_%d+$", "")
+    local cleaned = ((base ~= "" and base) or raw):gsub("_", " ")
+    return cleaned:match("%a%a%a") and cleaned or nil
+end
+
+
+-- Is this actor hidden? The same question `visible_actor` asks inside the sweep, available to the
+-- election, which has to re-ask it about a point it is already guiding to. `bHidden` is declared
+-- on AActor, so it needs no per-class gate. Unreadable counts as NOT hidden (fail open).
+function Nav._actor_hidden(a)
+    local hidden
+    pcall(function() hidden = Core.member(a, "bHidden") end)
+    return hidden == true or hidden == 1
+end
+
+-- Has this gathering point already been collected? `stateful` is list_targets' own record of
+-- whether the class DECLARES InteractState; without it the fetch is refused, because an
+-- undeclared member is an uncatchable abort rather than a nil. Both enums put Taken at 11
+-- (EAccessPointState / ETreasureAccessPointState), and ATreasureAccessPoint runs the second
+-- state machine alongside the inherited one, so both are asked. Unknown counts as NOT taken:
+-- this guards a live feature, so it fails open.
+function Nav._point_taken(a, stateful)
+    if not stateful or not Core.valid(a) then return false end
+    local st
+    pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
+    if st == STATE_TAKEN then return true end
+    local ts
+    -- STRICT: only ATreasureAccessPoint declares TreasureState, so a fail-open fetch here would
+    -- be the uncatchable abort on every fruit and field drop in the world.
+    pcall(function() ts = tonumber(Core.member(a, "TreasureState", true)) end)
+    return ts == STATE_TAKEN
+end
+
+-- What the active quest still asks the player to collect, or nil — `quest_objective`'s
+-- `{name, got, need, kind}`, read at most once per nav tick and shared by the two callers that
+-- need it (the collectible promotion inside list_targets, and the auto-track election below).
+-- Optional by construction: if the quest module is unavailable this whole feature simply does not
+-- happen and the radar behaves exactly as it did before.
+--
+-- It also detects THE PICKUP EDGE, which nothing else can. When the tracked item is collected the
+-- actor lingers valid (it merely flips InteractState to Taken), so validity cannot say it was
+-- taken; the HUD counter moving is the signal. On that edge the shared target snapshot is dropped
+-- so the rebuild cannot serve the item that was just picked up, and a re-election is forced.
+function Nav._quest_req()
+    if Nav.qreq_tick == tick then return Nav.qreq end
+    Nav.qreq_tick = tick
+    local req
+    local qok, Q = pcall(require, "quest_objective")
+    if qok and Q and Q.item_requirement then
+        -- Ask the FOCUSED quest group first. The HUD lists main before sub, so without this a
+        -- main-quest collection row would shadow the side story's own row, and the election below
+        -- would then decline it as off-focus -- silently disabling the feature for the whole side
+        -- quest, which is the one case it was asked for.
+        local rok, r = pcall(Q.item_requirement, preempt.focus == PRI_SUB and "sub" or nil)
+        if rok and type(r) == "table" then req = r end
+    end
+    -- THE ABSENCE IS DEBOUNCED, THE PRESENCE IS NOT. The HUD checklist is a widget read, and
+    -- widget reads flicker -- a repaint, a cutscene, a menu taking the screen -- so a raw nil
+    -- would hand the radar back to the quest MARKER and re-announce it, then re-announce the item
+    -- when the row returned: two announcements for an event that never happened. The wait is one
+    -- whole election interval (SCAN_EVERY ticks), i.e. the shortest absence this file could even
+    -- act on, so it costs nothing real; the genuine end of a collection -- the count met, the row
+    -- gone for good -- simply hands back one election later.
+    if req == nil and Nav.qreq then
+        Nav.qreq_gone_at = Nav.qreq_gone_at or os.clock()
+        if os.clock() - Nav.qreq_gone_at < SCAN_EVERY * TICK_MS / 1000 then
+            return Nav.qreq
+        end
+        print(string.format("[KakarotAccess] nav quest item released (%s) after %.2f s absent\n",
+            tostring(Nav.qreq.name), os.clock() - Nav.qreq_gone_at))
+        Nav.qreq_gone_at = nil
+    end
+    if req then Nav.qreq_gone_at = nil end
+    local prev = Nav.qreq
+    if req and prev and req.name == prev.name and req.got ~= prev.got then
+        -- Timestamped, and it ARMS a boxed rebuild rather than invalidating the snapshot: nilling
+        -- `targets_snap_at` would push the next explore_rescan into the SYNCHRONOUS
+        -- `Nav.targets_cached()` path, which is a 0.4-1.2 s sweep on the game thread. The
+        -- election compares this stamp against the snapshot's own age instead, so a snapshot
+        -- gathered before the pickup is simply not elected from.
+        Nav.qreq_bump, Nav.qreq_miss, Nav.qreq_missn = os.clock(), nil, nil
+        Nav.targets_want = true
+    elseif (req and req.name) ~= (prev and prev.name) then
+        -- A DIFFERENT item is being asked for (or none at all): whatever the last search concluded
+        -- was about the old one, so the travel wait must not carry over to the new question.
+        Nav.qreq_miss, Nav.qreq_missn = nil, nil
+    end
+    Nav.qreq = req
+    return req
+end
+
+-- THE QUEST ITEM the auto-track should guide to instead of the game's NAVI marker, or nil.
+--
+-- WHY (user reports, 2026-08-19): on a collection quest the marker points at the quest SITE, so
+-- the radar walks the player into an empty clearing and stops. The thing they actually need is a
+-- world collectible, which `list_targets` already promotes into the quests group — but
+-- `best_candidate` only ever walks navi icons and the minimap list, so a promoted collectible was
+-- never a candidate for the automatic election. This is the missing half.
+--
+-- Shaped exactly like `best_candidate`'s record so the caller's bookkeeping (stash, route,
+-- announce, re-adopt) needs no special case; `questitem` carries the item's own localized name so
+-- the held target can be re-checked against a changing requirement.
+--
+-- COST, measured against what this file already pays elsewhere. While we are already guiding to a
+-- required item the held record is returned and NO snapshot is asked for at all, so the steady
+-- state is free. When there is something to elect and the item is not found, the next look waits
+-- for the player to travel EXPLORE_RESCAN_DIST *and* for EXPLORE_RESCAN_MS to pass — the same
+-- pair of conditions explore_rescan uses for the same reason — so the worst case is one boxed
+-- build per 4 s of travel while a collection objective is open, and nothing at all outside one.
+function Nav._quest_item_target(px, py, pz)
+    local req = Nav._quest_req()
+    if not req then return nil end
+    -- Respect the standing quest focus: a requirement belonging to the OTHER quest group is not
+    -- ours to track, for the same reason notify_objective_change declines an off-focus objective.
+    local pri = (req.kind == "main") and PRI_MAIN or PRI_SUB
+    if preempt.focus and preempt.focus ~= pri then return nil end
+    -- A PICKUP JUST HAPPENED and every snapshot we could look at predates it, so it still lists
+    -- the item that was taken. Hold that item — yes, the taken one: the hold is SILENT (same key,
+    -- so nothing is announced) and ends the moment the rebuild lands, whereas letting the marker
+    -- win for those two ticks announces the destination and then the next item. It is the only
+    -- place a known-taken item is deliberately held, and it is BOUNDED: `targets_wait_cap_ms` is
+    -- this file's own answer to how long a caller should ever wait for a build, and a build that
+    -- never lands must not freeze the radar on a collected item.
+    local bump, forced = Nav.qreq_bump, false
+    if bump then
+        if (os.clock() - bump) * 1000 > Nav.targets_wait_cap_ms() then
+            -- The rebuild never came. Dropping the bump must NOT hand control back to the hold
+            -- below — that would restore the very hold the bump existed to bypass and guide to
+            -- the collected item indefinitely. Force one look instead.
+            Nav.qreq_bump, bump, forced = nil, nil, true
+        elseif (Nav.targets_snap_at or 0) < bump then
+            Nav.targets_want = true      -- boxed rebuild, never a synchronous sweep
+            return (target and target.questitem) and target or nil
+        end
+    end
+    -- STILL GUIDING TO A REQUIRED ITEM THAT IS STILL THERE: keep it, and ask for no snapshot at
+    -- all — that is what makes the steady state free. The test has to be the SAME one the sweep
+    -- applied when it offered the item (valid, not hidden, not taken); asking only about Taken
+    -- held a collected-and-hidden point forever, because a hold that returns here never consults
+    -- a rebuild. A pending bump deliberately skips this branch: "re-elect" is precisely how the
+    -- radar advances to the next item.
+    if not bump and not forced and target and target.questitem
+        and Nav._wants_item(req.name, target.questitem)
+        and Core.valid(target.actor) and not Nav._actor_hidden(target.actor)
+        and not Nav._point_taken(target.actor, target.stateful) then
+        return target
+    end
+    -- Past this point the held record can only be one whose handle is dead or condemned, so every
+    -- exit below answers nil and lets `best_candidate` have the tick. Returning the held record
+    -- instead looks like it would suppress a spurious marker announcement, and does the opposite:
+    -- `step` treats a non-nil answer as a successful acquisition, closes the post-battle
+    -- re-acquire window, prints `nav re-acquired`, and then drops the target anyway on the nil
+    -- handle — trading one extra announcement for that plus a scan-interval of silence.
+    -- NOTHING FOUND LAST TIME: wait for travel AND for the snapshot TTL before looking again.
+    -- Without this, a collection quest whose item is not in the loaded world yet -- the usual
+    -- state right after accepting one -- asks for a rebuilt snapshot as fast as the election
+    -- runs, which inside a post-battle re-acquire window is every single tick. A static world
+    -- collectible can only come into range because the player went to it, so travel is the right
+    -- question; the time floor is what stops the every-tick case.
+    if Nav.qreq_miss and not forced then
+        local mx, my, mz = Nav.qreq_miss[1], Nav.qreq_miss[2], Nav.qreq_miss[3]
+        if (px - mx) ^ 2 + (py - my) ^ 2 + (pz - mz) ^ 2 <= EXPLORE_RESCAN_DIST ^ 2
+            or (os.clock() - (Nav.qreq_miss[4] or 0)) * 1000 < EXPLORE_RESCAN_MS then
+            return nil
+        end
+    end
+    local snap = Nav.targets_cached(true)   -- never sweeps here; arms the boxed build instead
+    if not snap then
+        -- A FORCED look that found no snapshot has learned nothing, so it must not let the hold
+        -- resume: re-arm the bump (which keeps the hold branch skipped) and ask again. Bounded
+        -- the same way, and it cannot spin — the rebuild is serviced on the nav loop.
+        if forced then Nav.qreq_bump, Nav.targets_want = os.clock(), true end
+        return nil                          -- the boxed rebuild is armed; look on a later tick
+    end
+    for _, cat in ipairs(snap) do
+        if cat.key == "quests" then
+            for _, it in ipairs(cat.items or {}) do
+                -- `qitem` is the promotion's own mark, set in add_target: a real mission marker
+                -- shares this group and must never be elected here as if it were a pickup.
+                -- Items come sorted nearest-first, so the first match IS the nearest one, and
+                -- "advance to the next as each is collected" needs no state of its own: the taken
+                -- one is filtered out of the rebuilt sweep and the next one wins this loop.
+                if it.qitem and Core.valid(it.actor)
+                    and not Nav._actor_hidden(it.actor)
+                    and not Nav._point_taken(it.actor, it.stateful)
+                    and Nav._wants_item(req.name, it.name) then
+                    Nav.qreq_bump, Nav.qreq_miss, Nav.qreq_missn = nil, nil, nil
+                    -- `homegrp` is the group the collectible would have been in but for the
+                    -- promotion. The arrival radius needs it: a fruit patch is a spawner VOLUME
+                    -- whose origin sits meters from the orbs, which is why "gathering" arrives
+                    -- wide, and the promotion must not lose that by renaming the group.
+                    return { actor = it.actor, key = it.key, pri = pri, grp = "quests",
+                             label = string.format("%s (%d/%d)", it.name, req.got, req.need),
+                             stateful = it.stateful, questitem = it.name, homegrp = it.homegrp }
+                end
+            end
+        end
+    end
+    -- Looked at a real snapshot and the item was not in it. Remember WHERE and WHEN so the next
+    -- look waits for the player to travel (see the gate above) -- but only from the SECOND
+    -- fruitless look. The name the promotion matches on comes from a property fetch that is
+    -- refused until the owner's class has been introspected, and the mod introspects ONE class
+    -- per tick globally, so the first sweeps after a load are legitimately anonymous. Arming the
+    -- wait on that would strand a player standing exactly where the quest marker left them, which
+    -- is the situation this whole feature exists for.
+    Nav.qreq_bump = nil
+    Nav.qreq_missn = (Nav.qreq_missn or 0) + 1
+    if Nav.qreq_missn >= 2 then Nav.qreq_miss = { px, py, pz, os.clock() } end
+    return nil
 end
 
 -- Resolve a character id ("Cpl059c02", "Cpl013") to a display name: the game's own
@@ -3117,6 +3468,17 @@ function Nav.list_targets(boxed)
     if Nav.SW.lists == nil then Nav.SW.lists = {} end
     Nav.SW.t0, Nav.SW.partial, Nav.SW.boxed = os.clock(), false, boxed and true or false
 
+    -- WHAT THE ACTIVE QUEST STILL ASKS THE PLAYER TO COLLECT: read ONCE per sweep, not per actor,
+    -- and read here rather than beside the collectible scan because the promotion now lives in
+    -- add_target, which every source calls. `Nav._quest_req` is the shared, per-tick-cached
+    -- reader (the auto-track election asks the same one), and it is optional by construction --
+    -- with the quest module unavailable it answers nil and the sweep behaves exactly as before.
+    local want_item
+    do
+        local req = Nav._quest_req()
+        want_item = req and req.name
+    end
+
     local seen = {}
     local groups = {}
     local dropped = {}   -- per-group candidates cut by the distance cap (rescue below)
@@ -3138,21 +3500,15 @@ function Nav.list_targets(boxed)
     end
     -- Collected filter for access-point actors (callers guarantee the class declares
     -- InteractState — see access_point_class).
+    -- SECOND state machine (2026-08-19). ATreasureAccessPoint -- D medals, event items and
+    -- insects (ETreasureAccessPointCategory) -- runs its own `TreasureState` alongside the
+    -- inherited InteractState, and the player reported collected D medals still on the radar.
+    -- The body lives on the module (Nav._point_taken) because the quest-item election has to ask
+    -- the SAME question about a point it is already guiding to, long after this sweep ended.
+    -- Callers here guarantee the class declares InteractState (see access_point_class), which is
+    -- what the second argument asserts.
     local function point_taken(a)
-        local st
-        pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
-        if st == STATE_TAKEN then return true end
-        -- SECOND state machine (2026-08-19). ATreasureAccessPoint -- D medals, event items and
-        -- insects (ETreasureAccessPointCategory) -- runs its own `TreasureState` alongside the
-        -- inherited InteractState, and the player reported collected D medals still on the radar.
-        -- Both enums put Taken at 11 (EAccessPointState.State_Taken and
-        -- ETreasureAccessPointState.State_TreasureTaken, AT_enums.hpp), so STATE_TAKEN covers both.
-        -- STRICT: only ATreasureAccessPoint declares TreasureState -- its AAccessPointItemBase and
-        -- APlacementObjectInfo siblings do not -- so a fail-open fetch would be the uncatchable
-        -- abort on every fruit and field drop in the world.
-        local ts
-        pcall(function() ts = tonumber(Core.member(a, "TreasureState", true)) end)
-        return ts == STATE_TAKEN
+        return Nav._point_taken(a, true)
     end
     -- Core add: place an actor into a group with a spoken noun. range = the icon's own
     -- reveal radius (nil for non-icon sources like NPCs). Distance-limited for non-quest
@@ -3160,12 +3516,50 @@ function Nav.list_targets(boxed)
     -- icon farther than its small reveal radius isn't wrongly dropped. stateful = the
     -- actor carries AAccessPointBase.InteractState (safe to read Taken on it later —
     -- the arrival-chaining check needs to know).
-    local function add_target(actor, grp, noun, range, src, name, stateful)
+    -- `dup_ok`: this actor may be listed even though an earlier section already claimed it. The
+    -- dedup is by ADDRESS and global, so the FIRST section to reach an actor owns it outright —
+    -- which silently stole talkable NPCs from the characters category. Measured 2026-08-19: the
+    -- player stood 2 m from Bulma and *Personajes* did not exist, because she was the current
+    -- quest target, so the navi-icon walk (section 1) had already filed her under *Misiones* and
+    -- section 3 hit this line and returned. She is genuinely both, and the category a blind player
+    -- uses to find someone to talk to must not lose her for being on a quest.
+    local function add_target(actor, grp, noun, range, src, name, stateful, dup_ok)
         if not Core.valid(actor) then return end
         local key = tostring(actor:GetAddress())
-        if seen[key] then return end
+        if seen[key] and not dup_ok then return end
         local x, y, z = actor_pos(actor)
         if not x then return end
+        -- QUEST ITEM PROMOTION (2026-08-19). A collectible the active quest still asks for joins
+        -- the QUESTS group: that group has no distance cap, so the item is findable from wherever
+        -- the quest marker dropped the player, instead of being filtered out by the tight
+        -- collectible cap and leaving them in an empty clearing.
+        --
+        -- It lives HERE, in the one funnel every source passes through, because `seen` dedupes by
+        -- address and the map-icon scan runs FIRST: promoting at a single call site only ever
+        -- covered whichever source happened to reach the actor first, which for anything the game
+        -- puts on the minimap — most gathering points — was never the collectible scan.
+        --
+        -- `home` is the group it would have been in. The arrival radius needs it: a fruit patch is
+        -- a spawner VOLUME whose origin can sit meters from the orbs the player actually picks up,
+        -- which is why "gathering" arrives wide; renaming the group must not take that away.
+        -- GROUP-GATED, and that clause is load-bearing. Every scan funnels through here, and most
+        -- of them pass a name: an NPC, an enemy, a companion, a door's area name. Without the
+        -- group test a requirement name that merely CONTAINS or is contained by one of those
+        -- (the match is bidirectional) would promote a hostile into the quests group — losing the
+        -- tight preload-pool distance cap that keeps parked characters out, and then being
+        -- elected as a PICKUP: 1.5 m arrival radius and "you can pick it up" spoken at an enemy.
+        -- Only the two collectible families are promotable, which is exactly the set add_icon
+        -- resolves names for.
+        local home
+        if want_item and name and (grp == "gathering" or grp == "collectibles")
+            and Nav._wants_item(want_item, name) then
+            home, grp = grp, "quests"
+            if Nav.qreq_logged ~= want_item then
+                Nav.qreq_logged = want_item
+                print(string.format("[KakarotAccess] nav quest item promoted: %s (was %s, src=%s)\n",
+                    tostring(name), tostring(home), tostring(src)))
+            end
+        end
         local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
         local kept = true
         if grp ~= "quests" then
@@ -3193,8 +3587,12 @@ function Nav.list_targets(boxed)
                 "  grp=%s noun=%s name=%s cls=%s d=%.0f range=%s kept=%s src=%s bHidden=%s hiddenType=%s",
                 grp, noun, tostring(name), cls, d, tostring(range), tostring(kept), src, hid, ht)
         end
+        -- `qitem` marks a promoted quest collectible and `homegrp` remembers the group it came
+        -- from: a real mission marker shares the quests group, and only the collectible may be
+        -- elected as a pickup or re-elected as the count goes down (Nav._quest_item_target).
         local item = { actor = actor, key = key, dist = d, noun = noun, name = name,
-                       grp = grp, stateful = stateful or nil }
+                       grp = grp, stateful = stateful or nil,
+                       qitem = home and true or nil, homegrp = home }
         if not kept then
             -- Over the cap: remember it for the empty-group rescue — but ONLY for the
             -- game-curated MAP-ICON sources. Direct actor scans (NPCs, collectibles,
@@ -3210,6 +3608,7 @@ function Nav.list_targets(boxed)
         seen[key] = true
         groups[grp] = groups[grp] or { items = {} }
         groups[grp].items[#groups[grp].items + 1] = item
+        return item   -- so a caller can annotate the record it just created (see the promotion)
     end
     -- Add by EMapIcon type (icons): derive group + noun from the type. A named
     -- mission marker (see is_mission_marker) is a QUEST destination whatever its
@@ -3234,7 +3633,18 @@ function Nav.list_targets(boxed)
         local stateful = (grp == "gathering" or grp == "collectibles")
             and access_point_class(actor) or nil
         if stateful and point_taken(actor) then return end
-        add_target(actor, grp, noun, range, src, nil, stateful)
+        -- NAME the gathering/collect spots this scan reaches. It runs BEFORE the direct class
+        -- scan and `seen` dedupes by address, so whatever this path leaves anonymous stays
+        -- anonymous — which for anything the game marks on the minimap (most gathering points)
+        -- was every one of them. The quest-item promotion matches on that name, so without this
+        -- it could never see the very items it exists for.
+        -- Gated on `stateful`, which above already means "gathering/collectible group AND an
+        -- access-point class" — the only actors that carry an ItemTableComponent at all — so this
+        -- costs nothing on the shops/sites/fishing icons that share this scan. STRICT as well,
+        -- because the icon's owner is whatever the game map-icons and an ungated fetch of an
+        -- undeclared member is the uncatchable abort rather than a nil.
+        local name = stateful and Nav._drop_item_name(actor, true) or nil
+        add_target(actor, grp, noun, range, src, name, stateful)
     end
 
     -- 1) active navi guidance (quest arrows) — always quest-classified
@@ -3340,10 +3750,15 @@ function Nav.list_targets(boxed)
         -- bonfire was a QuestCharacterBase_C the "QuestCharacter" scan never returned
         -- (dump 2026-07-06). add_target dedupes by address when both scans hit.
         local iddump, id_seen = (NPC_ID_DUMP and {} or nil), {}
+        -- This block's OWN dedup, because it opts out of the global one (see add_target's
+        -- `dup_ok`). The two class scans below overlap by design — a `QuestCharacterBase_C` is a
+        -- `QuestCharacter` — and without this the same person would be listed twice.
+        local npc_seen = {}
         for _, cls in ipairs({ "QuestCharacter", "QuestCharacterBase_C" }) do
             for _, npc in pairs(Nav.SW.class_list(cls)) do
-                if Core.valid(npc) and npc_present(npc) then
-                    add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc))
+                if Core.valid(npc) and npc_present(npc) and not npc_seen[tostring(npc:GetAddress())] then
+                    npc_seen[tostring(npc:GetAddress())] = true
+                    add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc), nil, true)
                     if iddump then
                         local addr = tostring(npc:GetAddress())
                         if not id_seen[addr] then
@@ -3506,45 +3921,7 @@ function Nav.list_targets(boxed)
         -- subclass does -- so that caller must be strict: a fail-open fetch of a member the class
         -- may not have is the uncatchable abort. Failing closed there costs at most a tick of
         -- silence per newly-seen class while the property set is enumerated, and self-heals.
-        local function drop_item_name(a, strict)
-            local raw
-            pcall(function()
-                local comp = Core.member(a, "ItemTableComponent", strict)
-                if not (Core.valid(comp)) then return end
-                local d = Core.member(comp, "FieldItemDropData")
-                -- Core.member validates the OWNER, not the RESULT. A null/empty field yields an
-                -- INVALID RemoteObject, which is NOT nil — so `if not d` let it straight through
-                -- and the next hop resolved a property on a dead handle: the +0x10 fault. This is
-                -- the prime suspect for the 2026-07-26 (c) crash (it is the only live fetch in the
-                -- whole step() graph whose receiver never reached Core.valid, which is exactly
-                -- what "Mem.alive logged zero rejections" demands).
-                -- valid_REF, not valid: `d` is an FStruct handle, and Core.valid would call
-                -- GetAddress on it, which UE4SS raises THROUGH pcall.
-                if not Core.valid_ref(d) then return end
-                for _, fld in ipairs({ "FixedId", "NormalId" }) do
-                    -- FName members of the struct: read them as names, never IsValid them.
-                    local s = Core.name_str(d[fld])
-                    if s and s ~= "None" then raw = s return end
-                end
-            end)
-            if not raw then return nil end
-            -- THE GAME'S OWN LOCALIZED NAME FIRST (2026-08-19). `raw` is the drop-table row key,
-            -- which the generated map turns into the numeric item id the message table is keyed by
-            -- -- so a collection point announces "Fruta namekuseijin" instead of the class-derived
-            -- noun "tesoro" the player was hearing, in whatever language the game is set to. See
-            -- Nav._field_item_name for why this one hop needs a table when nothing else here does.
-            local localized = Nav._field_item_name(raw)
-            if localized then return localized end
-            -- Strip the drop-table bookkeeping before speaking it. The keys are `<Item>_Fixed` and
-            -- `<Item>_AreaNN_NN` (live 2026-08-18: `Lost_Seaweed_Fixed`, `Lost_Seaweed_Area11_01`),
-            -- so those suffixes are pure noise to a listener — "Lost Seaweed Area11 01" was being
-            -- read out in full. Still the game's INTERNAL English id, not its localized name; see
-            -- the note above on COLLECTIBLE_NOUN for the real fix.
-            local base = raw:gsub("_Fixed$", ""):gsub("_Normal$", "")
-                            :gsub("_Area%d+_%d+$", ""):gsub("_%d+$", "")
-            local cleaned = ((base ~= "" and base) or raw):gsub("_", " ")
-            return cleaned:match("%a%a%a") and cleaned or nil
-        end
+        local drop_item_name = Nav._drop_item_name
         -- Per-class capabilities (which reflected properties EXIST — reading a property
         -- a class doesn't declare is the uncatchable abort, so never probe blindly):
         --   FieldActionPointActor (plain AActor + ActionName; Field Memories derive
@@ -3552,18 +3929,6 @@ function Nav.list_targets(boxed)
         --   PlacementObjectInfo (AAccessPointBase + ItemTableComponent) -> item-id
         --     name + Taken filter;
         --   AccessPointItemBase (AAccessPointBase only) -> Taken filter, generic noun.
-        -- ONE HUD read per sweep, not per actor: the requirement is the same for every
-        -- collectible in this pass, and quest_objective's own host lookup is cached per tick.
-        -- pcall'd and optional -- if the quest module is unavailable this whole feature simply
-        -- does not happen and the scan behaves exactly as before.
-        local want_item
-        do
-            local qok, Q = pcall(require, "quest_objective")
-            if qok and Q and Q.item_requirement then
-                local rok, req = pcall(Q.item_requirement)
-                if rok and type(req) == "table" then want_item = req.name end
-            end
-        end
         for _, c in ipairs({
             { cls = "FieldActionPointActor", action = true },
             { cls = "PlacementObjectInfo", item = true, state = true },
@@ -3604,7 +3969,6 @@ function Nav.list_targets(boxed)
                     -- the item is findable from wherever the quest marker dropped the player,
                     -- instead of being filtered out by the tight collectible cap and leaving them
                     -- in an empty clearing.
-                    if want_item and Nav._wants_item(want_item, name) then grp = "quests" end
                     add_target(a, grp, noun, nil, "collectible", name, c.state)
                 end
             end

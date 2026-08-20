@@ -63,4 +63,5 @@ notes are the evidence behind them.
 | [Localization + config menu](dbz-kakarot-localization-config.md) | External TXT localization (13 languages) and the in-game config menu |
 | [Map travel + pending](dbz-kakarot-map-travel-and-pending.md) | The map open/close rule and the open TODO list as of 2026-07-10 |
 | [Mod installer tool](mod-installer-tool.md) | The reusable config-driven GitHub-release installer used to ship this mod |
+- [Character side: ally or enemy](dbz-kakarot-character-side.md) — the polymorphic `AttributeComponent` is the game's only per-actor side statement (a party member is NOT `AT_CharacterPlayableBase`), plus the party-roster dead ends and why a global dedup hid nearby NPCs.
 - [Quest item tracking](dbz-kakarot-quest-item-tracking.md) — guiding to the required ITEM instead of the quest site: why the quest data path is native-only, and the HUD row that carries the item name and counter.

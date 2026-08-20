@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-08-18
+**Last updated:** 2026-08-19
 names now come from the `CharacterType` enum (~107 vs 4).
 
 ## Where the mod stands
@@ -36,17 +36,28 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
-1. **Point the radar AT the quest item, not the quest site** (half done 2026-08-19 — the other
-   half is the next real piece of work). Users get sent to the quest DESTINATION and stand in an
-   empty clearing, not realising the item is a separate radar target. DONE: a collectible the
-   active quest still asks for is promoted into the **quests** group (no distance cap), and
-   `quest_objective.Quest.item_requirement()` returns `{name, got, need}` from the HUD checklist
-   row. TODO: make AUTO-TRACK prefer that item over the NAVI marker, advance to the next as each
-   is picked up, and hand back to the marker when the count is met. Left for its own pass on
-   purpose — the acquire/preempt/resume path has a documented history of subtle bugs; read
-   `reference/dbz-kakarot/notes/dbz-kakarot-quest-item-tracking.md` FIRST (it records the measured
-   HUD fields, the three rules the parse must keep, and why the quest-data path is native-only and
-   must not be retried).
+0. **Verify the two radar character fixes** (2026-08-19, user-reported, coded and never played —
+   do these first, they are regressions in shipped behaviour). (a) Walk around with a companion:
+   **Krillin must be a companion, not an enemy**, and Compañeros must list him. (b) Stand next to a
+   talkable NPC who is ALSO your current quest target: **Personajes must exist and list them**, as
+   well as Misiones. Both derivations are in
+   [character side](reference/dbz-kakarot/notes/dbz-kakarot-character-side.md).
+
+1. **Point the radar AT the quest item, not the quest site** (BOTH halves now coded, 2026-08-19,
+   never played). Users got sent to the quest DESTINATION and stood in an empty clearing. A
+   collectible the active quest still asks for is promoted into the **quests** group (no distance
+   cap), and the auto-track now ELECTS it ahead of the NAVI marker, advances to the next as each is
+   picked up, and hands back to the marker when the count is met. Design and what to listen for:
+   `reference/dbz-kakarot/notes/dbz-kakarot-quest-item-tracking.md`. Test: accept a collection
+   sub-quest, walk in, and listen for the item announced WITH its count (*"Fruta namekuseijin
+   (0/4)"*), a retarget within ~2 s of each pickup, and a clean return to the marker at the end.
+   Nothing may announce twice for one event — if it does, grep the log for
+   `nav quest item released`.
+   **Settle one thing FIRST, with `kak_dev navdump` while standing next to the item:** which
+   actor class the quest collectible actually is. The promotion matches on the localized item
+   name, which only access-point classes can supply — a fruit/small-fish SPAWNER VOLUME carries no
+   `ItemTableComponent`, so it can never be named, promoted or elected. The log line
+   `nav quest item promoted:` says whether the promotion fired at all.
 
 2. **Widen the character-name check** (wired 2026-08-18/19). Names come from the GAME, localized,
    via three id sources in order: `speakerID`, the enemy's Blueprint class name, and the actor's
@@ -184,11 +195,13 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Telepathic messages (King Kai) | todo | Probably nothing to answer: no telepathy widget, no accept/reply function. The one hit is `ATDebugSendTelepathyNotice()` (AT.hpp:26783) — telepathy belongs to the ambient CrossTalk / Notice family. GAP: zero mod coverage by name, so if the line does not route through `Xcmn_Subtitles_C` it is silent. Needs the user's go-ahead. |
 | Radar: Exits category | wip | `nav_tracker.lua` ~1531. The ghost filter dropped doors because an `ATriggerBox` is `bHidden` by definition, so an exit could never be tracked at all. `chainable()` now excludes `"exit"`. Unverified. |
 | Radar: Exits category — round 1 | done | `AATDoorVolume` < `ATriggerBox` (AT.hpp:13004): `AreaName` @0x378, `DoorName` @0x370, `AreaMessageId` @0x358, `PlayerStartTransform` @0x390, `DestinationDoor*` @0x560. Group `"exit"`, 300 m cap. Needs restart; unverified. |
-| Radar: Companions category | done | `companions` group reusing the Shift+F5 collector (player / spawn-type enemy / parked pool excluded, 300 m cap); names via `enemy_display_name`. Unverified. |
+| Radar: Companions category | done (unverified) | REWRITTEN 2026-08-19 after the user heard Krillin announced as an ENEMY. Side now comes from the game: `Nav._char_side` reads the polymorphic `AAT_Character.AttributeComponent` (Player/Support/LimitedSupport = ally, Enemy/Atrocious = enemy). `IsA(AT_CharacterPlayableBase)` is a CLASS-IDENTITY test and a party member's blueprint need not derive it — Krillin's does not. Kept as the fallback for a nil component (16 of 76 actors have none). See [character side](reference/dbz-kakarot/notes/dbz-kakarot-character-side.md). |
 | Radar: ghost-enemy fix (hidden actors) | done | `enemies_list()` + `companions()` filter `bHidden` via `char_visible`. NEVER read `CurrentHiddenType` on `AT_Character` — it is `AQuestCharacter`-only (AT.hpp:17553), so it is an uncatchable abort. Verified 2026-07-17. |
 | Radar: enemy levels | done | Enemy level = `ATEnemyStatus+0x390` int32; on the player that offset is a pointer, so the reader is enemy-only. Pinned at runtime as `StatusInstance+0x1C`; HP = `SI+0x394` f32. Unverified. |
 | Radar: quest FOCUS (stay on the side story) | done (unverified) | `classify()` now asks the navi widget's switcher (1 = main / 2 = sub / 3 = DLC6-sub) before `ATMapIconComponent.MapIconType`. New standing `preempt.focus`, released only by `Nav.notify_objective_gone()` after 3 polls against a READABLE HUD. |
 | Radar: objective auto-track (smart radar) | done | `quest_objective.lua` diffs the HUD signature → `Nav.notify_objective_change()` → preempt in `nav_tracker` (~10-scan TTL); B restores the stashed pick. Idle re-arm makes a freshly activated objective auto-track persistently. Verified 2026-07-17. |
+| Radar: talkable NPCs hidden by the quest marker | done (unverified) | A quest-target NPC was claimed by the navi-icon walk into *Misiones*, and `add_target`'s dedup is by ADDRESS and GLOBAL, so the NPC scan lost her — emptying *Personajes* entirely (measured live 2 m from Bulma). The NPC scan now opts out (`dup_ok`) and keeps its own dedup, so she is listed in both. |
+| Radar: quest COLLECTION item auto-track | done (unverified) | `Nav._quest_item_target` is asked before `best_candidate`, so a promoted quest collectible outranks the NAVI marker; pickup edge = the HUD counter (a taken point stays a valid UObject), absence of the requirement debounced one election interval, snapshot only requested when there is something to elect and then gated on `EXPLORE_RESCAN_DIST` of travel. `quest_objective` requirement now carries `kind` so `preempt.focus` is respected. |
 | Radar: gathering chain fixes | done | Stateful points (`AccessPoint*` / `MiningPoint*` / `PlacementObjectInfo` < `AAccessPointBase`) advance on `InteractState = Taken`; `ASpawner*Volume` (fruit / small fish) have no taken state, so they use the wide `ARRIVE_DIST` (8 m). Verified 2026-07-17. |
 | Localization (external TXT + all game languages) | done | `i18n.lua` overlays `Scripts/lang/<code>.txt` on the built-in es/en tables (external wins). 13 languages from the game's own `ELanguageType`. Resolution: ext[lang] → S[lang] → S.en → key. Verified 2026-07-17. |
 | Mod config menu (L3+R3) | done | `config_menu.lua`, opens with L3+R3 in the overworld (`Nav.field_ready()`): audio cues, cue volume, radar auto-activate, language. Persists to `Scripts/config.txt`. Mutex `_G.__KakarotPadModal` with the radar picker. Verified 2026-07-17. |
@@ -235,6 +248,15 @@ Open work only. How each item was derived is in the archive and the git log.
 - **2026-07-15 batch, coded and never verified in game**: quest HUD, level-up toast, radar
   `resume_pick`, subtitles option gate, episode-card reader (`screen_questcard.lua`), Soul Emblems
   grid.
+- **`Nav.SW.lists` survives `release_world_refs`.** The raw `FindAllOf` results of an in-flight
+  BOXED build are not dropped when the world gate closes (only `targets_snap` is), so a build
+  interrupted by a battle resumes on the other side re-walking pre-gate actor handles — and this
+  file's own ledger says a recycled address passes `Core.valid`. Pre-existing (the R3 picker
+  already armed boxed builds), but the quest-item election makes an in-flight build routine, so
+  the exposure is now everyday. Fix is probably `Nav.SW.lists, Nav.SW.partial = nil, false` in
+  `release_world_refs`, at the cost of restarting the build; not done blind in the same batch that
+  raised the exposure.
+
 - **Battle results read a constant "222" for every stat.** Read `dumps/dump_results.txt` (round 2
   dumps each brush material's parameters), fix the decode or pin the value natively, then turn
   `DEBUG` off. `screen_results.lua`.
