@@ -134,6 +134,11 @@ end
 -- REQUEUE_MAX times so an unlucky estimate (or a busy menu) can't make it immortal.
 local REQUEUE_MAX = 2
 local pending = {}   -- { text, until_, requeues }
+-- How long an important line (say_protected) still owns the reader. Declared here, above
+-- flush_pending, rather than beside the two functions that use it further down: a local read
+-- above its own declaration compiles to a GLOBAL access, is nil at runtime and takes the mod
+-- down from wherever it is called (the lesson the globals lint exists to catch).
+local protect_until = 0
 
 local function prune_pending()
     local now, keep = os.clock(), {}
@@ -141,6 +146,23 @@ local function prune_pending()
         if p.until_ > now then keep[#keep + 1] = p end
     end
     pending = keep
+end
+
+-- Forget every queued line still eligible for a requeue. Registered with the transition gate
+-- (app.lua), i.e. it runs the moment the world changes (user 2026-09-07: "mod messages get
+-- repeated after a loading screen"). A queued line's requeue window is up to six seconds, and a
+-- loading screen fits inside one comfortably — so a beacon distance or a pickup toast queued a
+-- breath before the load was re-appended after it and described a world that no longer exists.
+-- This does NOT touch the backend: whatever the reader is still speaking is the load screen's
+-- business, and the next interrupt clears it. It only stops US from putting it back.
+function Speech.flush_pending()
+    pending = {}
+    -- The protection window is the same kind of stale promise: a reward line protected a breath
+    -- before the load keeps EVERY reader in the mod deferring to it for up to six seconds on the
+    -- far side, against a screen that has nothing to do with it. Same argument as `pending`, so
+    -- the same reset (2026-09-07 review). `protect_until` is assigned rather than routed through
+    -- release_protection() because that function is declared further down this file.
+    protect_until = 0
 end
 
 -- Speak text. interrupt=true (default) cuts off current speech (use on context changes).
@@ -200,8 +222,6 @@ end
 -- important line is spoken, PROTECT it for roughly its spoken duration; lower-priority
 -- readers check Speech.protected() and DEFER their readout until it clears, so the
 -- instruction is heard in full, then the panel reads.
-local protect_until = 0
-
 -- Speak an important line (interrupt=true — win immediately) and protect it.
 function Speech.say_protected(text)
     if not loaded or not text or text == "" then return end

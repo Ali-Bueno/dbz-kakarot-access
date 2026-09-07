@@ -263,7 +263,14 @@ local function objective_text()
     -- The 4th return is "the quest HUD was READABLE this poll", which is a different fact from
     -- "there was an objective on it" and the only safe basis for concluding that a quest class
     -- ENDED (see presence_check). A host with nothing on it is still a readable host.
-    if #parts == 0 then return nil, nil, nil, true end
+    -- An empty reading is only EVIDENCE of an empty HUD when the rows could actually be asked.
+    -- Every title/row fetch above goes through the STRICT member gate, which refuses the name
+    -- whenever the host's property set is unavailable or partial this tick — so "host found,
+    -- nothing on it" and "host found, nothing askable" arrive here identical. `Core.prop_ready`
+    -- separates them, and both consumers of this flag need it: presence_check would otherwise
+    -- read a budget-starved tick as "the side story ended", and step() would delete the line the
+    -- on-demand readers fall back on (caught in review, 2026-09-07).
+    if #parts == 0 then return nil, nil, nil, Core.prop_ready(host) end
     return table.concat(parts, ". "), sigs.main, sigs.sub, true
 end
 
@@ -289,6 +296,11 @@ end
 -- between phases, so one empty frame means nothing.
 local GONE_POLLS = 3
 local gone_hold = { main = 0, sub = 0 }
+
+-- Consecutive polls on which a READABLE quest HUD carried no objective at all. Same debounce as
+-- gone_hold above and for the same reason (the HUD repaints between phases, so one empty poll
+-- proves nothing); it drives the clearing of `last_text` in step(), see the comment there.
+local empty_hold = 0
 
 -- Did this quest class DISAPPEAR? Only ever answered when the HUD host itself was readable this
 -- poll: the HUD is also hidden by a level load, a fight and any open menu, and treating those as
@@ -363,12 +375,22 @@ local function forget_candidate()
     cand, cand_since = nil, nil
 end
 
+-- A poll that returned before looking at the HUD. Drops the settle candidate AND resets the
+-- empty counter: three "consecutive" empty observations that straddle a menu, a cutscene or a
+-- map load are not consecutive at all, and that counter is the only thing standing between a
+-- repaint and deleting the objective. The file's own rule that a debounce measured in CALLS is
+-- not a debounce, reached from the starved side exactly as STABLE_S was.
+local function defer_poll()
+    forget_candidate()
+    empty_hold = 0
+end
+
 -- Poll step: announce the objective only when it changes, and only when no menu is
 -- open and no level transition is in flight (never talk over a menu or a cutscene load).
 local function step()
     Mem.mark("quest.step")
-    if Transition.active() then forget_candidate() return end
-    if Registry.active_adapter() then forget_candidate() return end
+    if Transition.active() then defer_poll() return end
+    if Registry.active_adapter() then defer_poll() return end
     -- CUTSCENES AND CONVERSATIONS (user report 2026-07-31: a stale "go back and talk to Krillin"
     -- spoken once at the start of the Raditz cutscene). The adapter gate above does NOT cover
     -- them: the dialogue adapter commits IN on every subtitle line and OUT in every gap between
@@ -379,12 +401,12 @@ local function step()
     -- free roam" — i.e. the whole cinematic state), so it is the gate that matches the report.
     -- Drops the settle candidate like its siblings: a reading taken before a cutscene is not
     -- evidence about anything observed after it.
-    if Core.scan_quiet() then forget_candidate() return end
+    if Core.scan_quiet() then defer_poll() return end
     -- Don't cut a PROTECTED line (a reward notice / tutorial instruction still
     -- playing): the objective would interrupt "Emblemas de alma recibidos…" a few
     -- seconds in (user 2026-07-16). Deferring keeps `last_key` stale, so it re-announces
     -- once the protected line finishes (diff gate still fires).
-    if Speech.protected() then forget_candidate() return end
+    if Speech.protected() then defer_poll() return end
     -- This loop is independent of the menu Registry loop, so it must seed its own
     -- per-tick FindAllOf budget (Core.begin_scan_tick), or first_on_screen could find
     -- no budget left and never locate the HUD host.
@@ -409,10 +431,30 @@ local function step()
     local settled = false
     if not text then
         forget_candidate()
-    elseif text == cand then
-        settled = cand_since ~= nil and (os.clock() - cand_since) >= STABLE_S
+        -- NO OBJECTIVE AT ALL, AND WE CAN PROVE IT. `host_ok` means the quest HUD was itself on
+        -- screen and readable this poll, so an empty reading is the game saying nothing is
+        -- tracked — as opposed to the HUD being hidden by a menu, a battle or a load, which
+        -- reads the same way from here and means nothing of the kind. Debounced like its sibling
+        -- above, and it clears ONLY `last_text`, never `last_key`: the diff gate staying stale is
+        -- what keeps the same objective from re-announcing when it comes back, while a stale
+        -- `last_text` is what made L3+Y read out a quest finished hours earlier (user
+        -- 2026-09-07). See read_now for the other half.
+        if host_ok then
+            empty_hold = empty_hold + 1
+            if empty_hold == GONE_POLLS and last_text then
+                last_text = nil
+                print("[KakarotAccess] objective -> none (quest HUD readable and empty)\n")
+            end
+        else
+            empty_hold = 0
+        end
     else
-        cand, cand_since = text, os.clock()
+        empty_hold = 0
+        if text == cand then
+            settled = cand_since ~= nil and (os.clock() - cand_since) >= STABLE_S
+        else
+            cand, cand_since = text, os.clock()
+        end
     end
     signal_check(sig_main, sig_sub, host_ok, settled)
     if not text or not settled then return end
@@ -425,6 +467,12 @@ local function step()
     -- re-announces the old one. The signatures are title + the bare objective lines, without the
     -- volatile counters — the same value the radar's change signal has always been gated on.
     local key = sig_key(sig_main, sig_sub)
+    -- KEEP THE ON-DEMAND TEXT FRESH EVEN WHEN NOTHING IS ANNOUNCED. The two variables are
+    -- refreshed on different conditions on purpose: `last_key` is the diff gate (an unchanged
+    -- objective must stay silent), `last_text` is what L3+Y and the map re-read speak when the
+    -- HUD itself cannot be read. Committing the text only alongside an announcement left those
+    -- readers empty-handed for the rest of a quest after any poll that cleared it above.
+    last_text = text
     if key == last_key then return end
     -- One line per announcement, naming the COMPOSITION that produced it (see `shape`). The
     -- 2026-07-31 report arrived with no log at all, and the open question it left — which part of
@@ -462,6 +510,12 @@ function Quest.reannounce(interrupt)
         -- poll loop must not repeat it the moment the map closes.
         last_key, last_text = sig_key(sig_main, sig_sub), text
         Speech.say(text, interrupt)
+    else
+        -- SAY SOMETHING. `last_text` is nil either because nothing has ever been announced or
+        -- because step() concluded there is no objective, and the quest HUD is normally hidden
+        -- on the map — so before this branch, opening the map after either produced silence,
+        -- which to a screen-reader user is indistinguishable from a key that does not work.
+        Speech.say(I18n.t("objective_none"), interrupt)
     end
 end
 
@@ -565,10 +619,21 @@ end
 -- merely unhelpful but WRONG: the mod knows the objective, it announced it. Live read first (it
 -- is the freshest), the last announced line second, the "nothing" string only when we genuinely
 -- have never seen one.
+--
+-- THE CACHE STILL HAS TO BE EMPTIED, though, or this reads back a quest finished hours ago
+-- (user 2026-09-07). That happens in step(), on a debounce, and never here — see the note
+-- inside.
 local function read_now()
     if Transition.active() then return end
     tick = tick + 1
     Core.begin_scan_tick()
+    -- NO PER-PRESS VERDICT ON "there is no objective". The tempting version of this reads the
+    -- 4th return and answers `objective_none` when the HUD was readable and empty, so the cache
+    -- can never be stale. It was written and rejected on review (2026-09-07): the HUD
+    -- repopulates progressively, so ONE sample under a keypress catches a repaint and denies a
+    -- live quest. The staleness is dealt with where the debounce already lives — step() clears
+    -- `last_text` after GONE_POLLS readable-and-empty polls — which is at most ~900 ms behind,
+    -- and this key then answers from an empty cache on its own.
     local text, sig_main, sig_sub = objective_text()
     if DUMP then pcall(dump_state, text) end
     if text then last_key, last_text = sig_key(sig_main, sig_sub), text end

@@ -512,6 +512,20 @@ function Core.member(o, name, strict)
     end
     return v
 end
+-- Was this object's property set actually AVAILABLE and COMPLETE this tick?
+--
+-- `Core.member(o, n, true)` returns nil for two very different reasons: the class genuinely has
+-- no member `n`, or the gate could not answer -- the per-tick enumeration budget is one set
+-- shared by every adapter, a walk can come back PARTIAL, and every set is flushed on a map
+-- transition. A caller that reads several strict candidates and gets nil from all of them cannot
+-- tell "this widget is empty" from "nothing was askable this tick", and quest_objective draws a
+-- conclusion from exactly that difference (it decides whether the player HAS an objective). So
+-- it asks here first. Complete sets only: a partial walk may be missing an inherited name.
+function Core.prop_ready(o)
+    if not Core.valid(o) then return false end
+    local set, _, partial = prop_set(o)
+    return set ~= nil and not partial
+end
 
 -- Guarded hop through a STRUCT handle: `Core.struct_member(h, "ResourceObject")` for what the
 -- call sites still write raw as `o.Brush.ResourceObject`, `s.LayoutData.Offsets`,

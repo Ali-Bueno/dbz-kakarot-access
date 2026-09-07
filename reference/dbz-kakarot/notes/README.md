@@ -65,3 +65,4 @@ notes are the evidence behind them.
 | [Mod installer tool](mod-installer-tool.md) | The reusable config-driven GitHub-release installer used to ship this mod |
 - [Character side: ally or enemy](dbz-kakarot-character-side.md) — the polymorphic `AttributeComponent` is the game's only per-actor side statement (a party member is NOT `AT_CharacterPlayableBase`), plus the party-roster dead ends and why a global dedup hid nearby NPCs.
 - [Quest item tracking](dbz-kakarot-quest-item-tracking.md) — guiding to the required ITEM instead of the quest site: why the quest data path is native-only, and the HUD row that carries the item name and counter.
+- [Speech arbitration](dbz-kakarot-speech-arbitration.md) — why the requeue queue re-speaks nav cues into a conversation and which cues may lose one, the two fixes review rejected (a story-text mute, a per-press "no objective" verdict), and why `host_ok` needed `Core.prop_ready` to mean anything.

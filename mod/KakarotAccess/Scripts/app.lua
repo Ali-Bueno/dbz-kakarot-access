@@ -13,6 +13,7 @@ local Keyhelp = require("keyhelp")
 local KeyhelpWatch = require("keyhelp_watch")
 local HeaderReader = require("header_reader")
 local Speech = require("speech")
+local Transition = require("transition")
 local I18n = require("i18n")
 local Nav = require("nav_tracker")
 local RadarMenu = require("radar_menu")
@@ -175,6 +176,10 @@ QuestObjective.set_on_gone(function(kind) Nav.notify_objective_gone(kind) end)
 local App = {}
 
 function App.start()
+    -- Drop stale queued speech whenever the world changes: a line queued just before a
+    -- loading screen must not be re-appended on the far side of it (speech.lua:flush_pending).
+    -- Keyed by name, so a Ctrl+Shift+R reload replaces this entry instead of stacking one.
+    Transition.on_begin("speech", Speech.flush_pending)
     -- Re-apply the language override to the freshly-(re)loaded i18n (Settings survives a
     -- reload in the protected snapshot; i18n does not, so it loses the override each time).
     I18n.force_language(Settings.language())

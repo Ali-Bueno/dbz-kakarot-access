@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-08-19
+**Last updated:** 2026-09-07
 names now come from the `CharacterType` enum (~107 vs 4).
 
 ## Where the mod stands
@@ -42,6 +42,19 @@ Two things are outstanding, and both are **unrun rather than unfinished**:
    talkable NPC who is ALSO your current quest target: **Personajes must exist and list them**, as
    well as Misiones. Both derivations are in
    [character side](reference/dbz-kakarot/notes/dbz-kakarot-character-side.md).
+
+0b. **Verify the speech-arbitration fixes** (2026-09-07, user-reported, coded and never played;
+   same priority as 0 — shipped behaviour). (a) Talk to a field NPC while the radar tracks
+   something: the beacon cues must **stop repeating** around the subtitle lines. They will still
+   be heard BETWEEN lines, and that is intended — a full mute was tried and rejected, see the
+   note. (b) Cross a loading screen while tracking: nothing from before the load is spoken after
+   it. (c) Finish a quest, then press **L3 + Triangle** in the field: it must say *no active
+   objective*, not the quest just finished — give it a second, the clearing is debounced over
+   three polls — then open a menu and press it again with a quest active, where it must still
+   read the current one. (d) Open the map with no objective: it must SAY *no active objective*,
+   not go silent. Mechanisms, the two designs that review rejected, and the log line to grep
+   (`objective -> none`), in
+   [speech arbitration](reference/dbz-kakarot/notes/dbz-kakarot-speech-arbitration.md).
 
 1. **Point the radar AT the quest item, not the quest site** (BOTH halves now coded, 2026-08-19,
    never played). Users got sent to the quest DESTINATION and stood in an empty clearing. A
@@ -175,6 +188,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Skill tree / learn super attacks | done | `screen_skilltree.lua`, `Start_Skilltree_C` < `UAT_UISkillTreeMenu`. Lock read from the native per-node state byte. Orbs `WL_Skilltree_Zorb00` (1–6 = cost, 7–12 = owned). KNOWN LIMIT: a lv2/3 node reached without passing its lv1 node announces no lock. Verified 2026-07-14; the 2026-07-29 substrate patch is unverified and needs a restart. |
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` / `keyhelp.lua` — prompts read on entering any menu and again only when the set changes; 30 s same-phrase cooldown. The poll may use ONLY `Core.cached_all`, never a raw `FindAllOf` (stalls the game thread). Ctrl+F2 needs a restart. Verified 2026-07-17. |
 | Quest objective HUD (text) | done | `quest_objective.lua`. A single-objective quest puts the text in the TITLE node (`Txt_Main00`/`WL_MainQuestListTitle`). 2026-07-31: signature diff, fallback to last known text, L3+Y repeats. Verified 2026-07-15; the 07-31 changes are unverified. |
+| Quest objective: the cached line is never stale | done (unverified) | 2026-09-07. `objective_text`'s 4th return is now `Core.prop_ready(host)` — the rows are read through the STRICT member gate, so "host found, nothing on it" and "host found, nothing askable" were indistinguishable. `step` clears `last_text` (never `last_key`, the diff gate) after `GONE_POLLS` readable-and-empty polls, `defer_poll()` resets that counter on every gated poll, and `last_text` is refreshed on every settled reading. `read_now` is deliberately unchanged: a per-press verdict was rejected (the HUD repopulates progressively). `Quest.reannounce` now says `objective_none` instead of nothing. Logs `objective -> none`. |
 | Episode title cards | wip | `screen_questcard.lua`, `AT_UIQuestMainStart.TitleText` @0x3E0 via `{"fm","QuestMainStart"}` @0x558. `fm.QuestMainLogo` is image-only, unread by design. A cinematic chapter card went unread 2026-07-17; trace armed. Unverified. |
 | Cooking menu | done | `screen_cooking.lua`; entry menu via the second `Shop_Top_C`. CAVEAT: the ghost pane reads `vis=0 opacity=1.0`, so `pane_live` does NOT discriminate it — the shadowing is killed by the yields plus spoken-key suppression. `LATCH_DEBUG` on. Verified 2026-07-15. |
 | Fishing minigame | done | `screen_fishing.lua`. `AT_UIBattleRushSpeedCore` deliberately unmapped (the game never sets that pointer). `ring_core()` picks the on-screen pool instance. Phase 2 = bare letter on `fishing.phase == 2`. Verified 2026-07-15. |
@@ -202,6 +216,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Radar: objective auto-track (smart radar) | done | `quest_objective.lua` diffs the HUD signature → `Nav.notify_objective_change()` → preempt in `nav_tracker` (~10-scan TTL); B restores the stashed pick. Idle re-arm makes a freshly activated objective auto-track persistently. Verified 2026-07-17. |
 | Radar: talkable NPCs hidden by the quest marker | done (unverified) | A quest-target NPC was claimed by the navi-icon walk into *Misiones*, and `add_target`'s dedup is by ADDRESS and GLOBAL, so the NPC scan lost her — emptying *Personajes* entirely (measured live 2 m from Bulma). The NPC scan now opts out (`dup_ok`) and keeps its own dedup, so she is listed in both. |
 | Radar: quest COLLECTION item auto-track | done (unverified) | `Nav._quest_item_target` is asked before `best_candidate`, so a promoted quest collectible outranks the NAVI marker; pickup edge = the HUD counter (a taken point stays a valid UObject), absence of the requirement debounced one election interval, snapshot only requested when there is something to elect and then gated on `EXPLORE_RESCAN_DIST` of travel. `quest_objective` requirement now carries `kind` so `preempt.focus` is respected. |
+| Radar: ambient cue channel (no repeats around dialogue) | done (unverified) | 2026-09-07. The 7 beacon cues whose latch RE-ARMS FROM MOVEMENT (direction, elevation, distance, stealth, explore focus, go-around) go through `Nav.say_cue` = `Speech.say(t, false, true)` — queued and **never requeued**, because `speech.lua` re-appends unfinished queued lines after every `interrupt=true` and a conversation is a stream of those. The 4 one-shot lines (retarget label, enemy in range, arrival prompt, sweep done) KEEP the requeue: their latch is committed before the say, so a truncated line is gone for good. A `reads_story` mute was written and REJECTED — ambient street bubbles claim the same adapter, so it would have silenced navigation in towns. `Speech.flush_pending` (pending + `protect_until`) is wired to the transition gate from `app.lua`. |
 | Radar: gathering chain fixes | done | Stateful points (`AccessPoint*` / `MiningPoint*` / `PlacementObjectInfo` < `AAccessPointBase`) advance on `InteractState = Taken`; `ASpawner*Volume` (fruit / small fish) have no taken state, so they use the wide `ARRIVE_DIST` (8 m). Verified 2026-07-17. |
 | Localization (external TXT + all game languages) | done | `i18n.lua` overlays `Scripts/lang/<code>.txt` on the built-in es/en tables (external wins). 13 languages from the game's own `ELanguageType`. Resolution: ext[lang] → S[lang] → S.en → key. Verified 2026-07-17. |
 | Mod config menu (L3+R3) | done | `config_menu.lua`, opens with L3+R3 in the overworld (`Nav.field_ready()`): audio cues, cue volume, radar auto-activate, language. Persists to `Scripts/config.txt`. Mutex `_G.__KakarotPadModal` with the radar picker. Verified 2026-07-17. |

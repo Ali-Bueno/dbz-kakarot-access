@@ -38,6 +38,34 @@ local Mem = require("mem")
 
 local Nav = {}
 
+-- AMBIENT CUE CHANNEL -- the beacon's own transient lines, and only those.
+--
+-- Queued (never cuts what is being read) and NEVER REQUEUED. speech.lua re-appends unfinished
+-- queued lines after every interrupt=true, which is right for a line that is said once and lost
+-- otherwise -- and wrong here: a conversation is a stream of interrupt=true lines, so one beacon
+-- distance queued as the player starts talking is spoken again after each subtitle, up to
+-- REQUEUE_MAX times. That is the "mod messages mix into dialogues" report (user 2026-09-07).
+--
+-- WHICH LINES BELONG HERE, and the mistake to avoid: only the ones whose latch RE-ARMS FROM
+-- ORDINARY MOVEMENT -- the direction word, the elevation zone, the distance filler, the stealth
+-- side, the explore focus, the go-around hint. Truncating one of those costs nothing, because
+-- walking a few steps produces the next. Everything the radar says ONCE per event (the retarget
+-- label, an enemy coming into range, arriving at a target, a sweep ending) KEEPS the requeue:
+-- its latch is committed before the say, so a truncated line is gone for good -- the enemy
+-- warning would not come back until the enemy is at HALF the distance, and the arrival prompt
+-- never would (caught in review before this shipped, 2026-09-07).
+--
+-- Deliberately NOT a mute. A gate here on "an adapter is reading story text" was written and
+-- REJECTED the same day: the dialogue adapter also claims ambient street chatter, which pops
+-- constantly while walking through a town, and a pooled talk window can sit on a stale line
+-- indefinitely -- so it would have silenced navigation, unboundedly, in the busiest place there
+-- is. A conversation already wins without it: its lines interrupt, so a cue in flight is cut and
+-- (being un-requeued) stays cut.
+function Nav.say_cue(text)
+    Speech.say(text, false, true)
+end
+
+
 -- ---- tunables ----------------------------------------------------------------
 -- The feel constants (cadence range, volume slope, behind-pitch) are the values
 -- validated by ear in the XV2 mod (reference/audio-navigation); distances are
@@ -2088,7 +2116,7 @@ local function step()
     -- announced once when steering begins, re-armed when the way is clear again.
     if avoid_steering and not avoid_cued then
         avoid_cued = true
-        Speech.say(I18n.t("nav_around"), false)
+        Nav.say_cue(I18n.t("nav_around"))
     elseif not avoid_steering and avoid_cued then
         avoid_cued = false
     end
@@ -2142,7 +2170,7 @@ local function step()
     if dir ~= last_dir_cue and ms - last_dir_ms >= DIR_CUE_MS then
         last_dir_cue, last_dir_ms = dir, ms
         last_dist_ms = ms
-        Speech.say(string.format("%s, %s", I18n.t(dir), dist_txt), false)
+        Nav.say_cue(string.format("%s, %s", I18n.t(dir), dist_txt))
     end
     -- Vertical: angle-based zone (up / level / down), spoken only when the zone CHANGES
     -- (like the horizontal word) — a steady climb announces once, not on a timer, and a
@@ -2154,15 +2182,15 @@ local function step()
         last_elev_zone, last_elev_ms = ez, ms
         if ez ~= "nav_level" then
             last_dist_ms = ms
-            Speech.say(string.format("%s, %s", I18n.t(ez), dist_txt), false)
+            Nav.say_cue(string.format("%s, %s", I18n.t(ez), dist_txt))
         elseif prev then   -- returned to level from above/below (not the first read)
             last_dist_ms = ms
-            Speech.say(I18n.t("nav_level"), false)
+            Nav.say_cue(I18n.t("nav_level"))
         end
     end
     if ms - last_dist_ms >= DIST_CUE_MS then
         last_dist_ms = ms
-        Speech.say(dist_txt, false)
+        Nav.say_cue(dist_txt)
     end
 
     -- AIM-ALIGNMENT cue (user request 2026-07-06, the dino hunt: "how do I know I'm
@@ -2207,7 +2235,7 @@ local function step()
                     or "nav_stealth_side"
                 if zone ~= last_stealth_zone and ms - last_stealth_ms >= STEALTH_CUE_MS then
                     last_stealth_zone, last_stealth_ms = zone, ms
-                    Speech.say(I18n.t(zone), false)
+                    Nav.say_cue(I18n.t(zone))
                 end
             end
         end
@@ -2410,7 +2438,7 @@ local function explore_tick()
             local ez = elev_zone(focus.z - pz, math.sqrt((focus.x - px) ^ 2 + (focus.y - py) ^ 2))
             if ez ~= "nav_level" then parts[#parts + 1] = I18n.t(ez) end
             parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(math.sqrt(focus_d2)))
-            Speech.say(table.concat(parts, ", "), false)
+            Nav.say_cue(table.concat(parts, ", "))
         end
         if ms - explore_focus_ms >= EXPLORE_FOCUS_PING_MS then
             explore_focus_ms = ms
