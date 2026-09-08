@@ -158,12 +158,14 @@ Keyboard (optional extras — not required to play):
 
 TRANSLATIONS
 ------------
-Every spoken line comes from Scripts\lang\<code>.txt (en, es, fr, de, it, pt,
+The mod's interface labels come from Scripts\lang\<code>.txt (en, es, fr, de, it, pt,
 ru, pl, ja, ko, zh, ar, th). Open your language's file in a plain-text editor,
 change the text on the RIGHT of each "key = value" line, keep the %s and %d
 placeholders exactly, and save as UTF-8. Changes apply on the next launch (or
 instantly with Ctrl+Shift+R). If a line is missing it falls back to English, so
-you can't break it. See Scripts\lang\README.txt for the full rules.
+you can't break it. See Scripts\lang\README.txt for the full rules. The new
+cutscene-description catalog is English-only and lives in audio_description_cues.lua;
+changing the interface language does not translate those descriptions.
 
 
 NOT YET SUPPORTED (coming)
