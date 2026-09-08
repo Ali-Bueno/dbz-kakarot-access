@@ -51,8 +51,9 @@ local cached_screen, cached_name = nil, nil
 local cached_sid = nil     -- START_TOP_LIST_ID of the focused row (see the watch below)
 local last_dbg = nil
 
--- AT_enums.hpp START_TOP_LIST_ID: COMMUNITY_EMBLEM = 8 (the "Soul Emblems" row of the
--- Community fixed submenu — same source as FIXED_SUB_BY_SID above).
+-- AT_enums.hpp START_TOP_LIST_ID: COMMUNITY_BOARD = 7, COMMUNITY_EMBLEM = 8 (the two
+-- rows of the Community fixed submenu — same source as FIXED_SUB_BY_SID above).
+local SID_COMMUNITY_BOARD = 7
 local SID_COMMUNITY_EMBLEM = 8
 
 -- Arm the grid watch if the emblems row was focused within this long before the ring
@@ -62,9 +63,11 @@ local SID_COMMUNITY_EMBLEM = 8
 -- Long enough to survive the close animation; short enough that navigating away and
 -- backing out doesn't false-arm (and a false arm is just one bounded 5s watch anyway).
 local EMBLEM_ARM_GRACE_S = 2.0
-local sid_emblem_clock = nil   -- os.clock when the emblems row was last seen focused
+local sid_commu_clock = nil    -- os.clock when a Community row (board/emblems) was last focused
+local sid_commu_row = nil      -- which one it was: SID_COMMUNITY_BOARD or SID_COMMUNITY_EMBLEM
 local ring_was_open = false    -- edge for the one-line close trace below
-local RING_DEBUG = false       -- one line per ring close with the sid (2026-07-16 diagnosis)
+local RING_DEBUG = true        -- one line per ring close with the sid (2026-07-16 diagnosis;
+                               -- ON again 2026-09-08: no watch ever armed in a whole session)
 
 -- The UAT_UIStartTopList item at 0-based `idx` of a reflected TArray member of `top`, or nil.
 local function list_item(arr_name, idx)
@@ -187,9 +190,11 @@ function Field.is_active()
         -- last polled tick (see EMBLEM_ARM_GRACE_S); watch_grid covers BOTH host
         -- classes (run 2 caught the menu flow materializing the NATIVE-named one).
         if ring_was_open then
-            local age = sid_emblem_clock and (os.clock() - sid_emblem_clock) or nil
+            local age = sid_commu_clock and (os.clock() - sid_commu_clock) or nil
             if age and age < EMBLEM_ARM_GRACE_S then
-                require("screen_community").watch_grid()
+                local commu = require("screen_community")
+                if sid_commu_row == SID_COMMUNITY_BOARD then commu.watch_board()
+                else commu.watch_grid() end
             end
             if RING_DEBUG then
                 print(string.format(
@@ -199,7 +204,7 @@ function Field.is_active()
             end
         end
         ring_was_open = false
-        sid_emblem_clock = nil
+        sid_commu_clock, sid_commu_row = nil, nil
         cached_screen, cached_name, cached_sid = nil, nil, nil
         return false
     end
@@ -224,7 +229,9 @@ function Field.is_active()
     -- Context change (ring <-> submenu) -> re-announce the screen name + item (menus.md).
     if screen ~= cached_screen then ann:reset() end
     cached_screen, cached_name, cached_sid = screen, name, sel_sid
-    if sel_sid == SID_COMMUNITY_EMBLEM then sid_emblem_clock = os.clock() end
+    if sel_sid == SID_COMMUNITY_EMBLEM or sel_sid == SID_COMMUNITY_BOARD then
+        sid_commu_clock, sid_commu_row = os.clock(), sel_sid
+    end
     return true
 end
 

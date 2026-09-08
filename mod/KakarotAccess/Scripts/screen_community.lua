@@ -551,13 +551,21 @@ local grid_slots, grid_byai = nil, nil
 -- first cut declared these below it, so inside grid_host they resolved as (nil)
 -- GLOBALS, not upvalues, and the gate lines silently never printed (a Lua local is
 -- only an upvalue of functions defined AFTER it).
-local ENTRY_DEBUG = false   -- verified 2026-07-16 (first visit ~1.5s, re-entry, no stutters)
+local ENTRY_DEBUG = true    -- verified 2026-07-16 (first visit ~1.5s, re-entry, no stutters);
+                            -- ON again 2026-09-08 (10-20 s entries, no watch line in the log)
 local entry_t0, entry_gates = nil, nil
 
 -- BOTH grid host classes must be watched: run 2 (2026-07-16) caught the first-of-session
 -- menu flow materializing the NATIVE-named instance (AT_UICommunityStart, live host in
 -- the gates log) while the watch covered only the BP name — 13 scans of the wrong pool.
 local GRID_CLASSES = { "AT_UICommunityStart", "Start_Commu_Emb_C" }
+-- The BOARD host needs the same lane (2026-09-08, user: "10-20 s before it reads"): it is
+-- deliberately not directory-mapped (see ui_directory), never watched, so a re-visit
+-- whose pool still held a VALID parked instance from the last visit sat on the ~30 s
+-- alive-pool refresh — a uniform 0-30 s wait, mean 15 s, matching the report and the
+-- 9 s / 15 s claims in that session's log. The ring's "Community Board" row arms it.
+local BOARD_CLASSES = { "Start_Commu_Brd_C" }
+local watched = GRID_CLASSES   -- the class list the current arm covers (renew/unwatch)
 -- Staggered so the two per-class cadences interleave (combined one 65ms scan per
 -- ~400ms, not two back-to-back — the navigation lag spikes, user 2026-07-16).
 local WATCH_STAGGER = 4
@@ -573,28 +581,50 @@ local ROAM_RECENT_S = 30
 local last_roam_t = -1e9
 
 -- FRESH arm (ring close / ghost board): starts the wait window renewals extend.
-local function watch_grid()
+local last_refusal = nil
+local function arm_watch(classes)
     -- A fresh arm requires: NOT quiet (cutscene state), a RECENT USER PRESS
     -- (Registry.hot — every legit entry signal is press-driven and detected within
     -- the ~1s hot window), and RECENT GAMEPLAY (see ROAM_RECENT_S above).
-    if Core.scan_quiet() or not Registry.hot() then return end
-    if os.clock() - last_roam_t > ROAM_RECENT_S then return end
+    -- A refused arm is logged (deduped per reason): the 2026-09-08 session had NO
+    -- `watch` line at all, and nothing said which of these three gates was closed.
+    local why = (Core.scan_quiet() and "quiet")
+        or (not Registry.hot() and "not-hot")
+        or (os.clock() - last_roam_t > ROAM_RECENT_S and "no-recent-roam")
+        or nil
+    if why then
+        if why ~= last_refusal then
+            last_refusal = why
+            print(string.format("[KakarotAccess] commu watch arm REFUSED (%s) for %s t=%.2f\n",
+                why, classes[1], os.clock()))
+        end
+        return
+    end
+    last_refusal = nil
+    if watched ~= classes then   -- switching lanes (board -> grid handoff): drop the old
+        for _, cls in ipairs(watched) do Core.watch_clear(cls) end
+        watched = classes
+    end
     wait_clock = os.clock()
     if ENTRY_DEBUG then entry_t0, entry_gates = os.clock(), nil end
-    for i, cls in ipairs(GRID_CLASSES) do
+    for i, cls in ipairs(classes) do
         Core.watch_for(cls, nil, (i - 1) * WATCH_STAGGER)
     end
 end
+local function watch_grid() arm_watch(GRID_CLASSES) end
+local function watch_board() arm_watch(BOARD_CLASSES) end
 -- RENEWAL: extends the deadline only — no stagger reset, no wait_clock reset (a renewal
 -- that re-anchored the cap would never expire).
 local function renew_grid()
-    for _, cls in ipairs(GRID_CLASSES) do Core.watch_for(cls) end
+    for _, cls in ipairs(watched) do Core.watch_for(cls) end
 end
 local function unwatch_grid()
-    for _, cls in ipairs(GRID_CLASSES) do Core.watch_clear(cls) end
+    for _, cls in ipairs(watched) do Core.watch_clear(cls) end
 end
--- Exported for screen_field's ring-close arm (the class list lives here only).
+-- Exported for screen_field's ring-close arm (the class lists live here only):
+-- "Soul Emblems" row -> grid lane, "Community Board" row -> board lane.
 Commu.watch_grid = watch_grid
+Commu.watch_board = watch_board
 
 -- The Soul Emblems grid host. The MENU-opened grid ("EMBLEMAS DE ALMA") is the
 -- BLUEPRINT class Start_Commu_Emb_C (census 2026-07-15) — FindAllOf on the native
@@ -846,8 +876,22 @@ function Commu.is_active()
                         grid_slots, grid_byai = slots()
                         if #grid_slots > 0 then m = "grid" end
                     end
-                    if not m then m = "board" end
-                    handoff_armed = false
+                    if not m then
+                        m = "board"
+                        -- Board opening and NO grid yet: the 2026-09-08 session sat here for
+                        -- 7 s reading the board while the user had picked Soul Emblems, and
+                        -- the grid pool (a valid parked instance from the last visit) was on
+                        -- its ~30 s refresh with no lane armed. Same treatment as mode 10:
+                        -- arm the grid lane once, renew while this state persists.
+                        if not handoff_armed then
+                            handoff_armed = true
+                            watch_grid()
+                        elseif wait_clock and os.clock() - wait_clock < WAIT_RENEW_S then
+                            renew_grid()
+                        end
+                    else
+                        handoff_armed = false
+                    end
                 elseif BOARD_LIVE_MODES[mode_v or -1] then
                     m = "board"
                     handoff_armed = false
@@ -888,6 +932,10 @@ function Commu.is_active()
     end
     -- The watched screen actually reads now — stop the scan lane (any_valid can't do
     -- it in ui_core: a VALID parked instance is not the fresh screen, pane_live is).
+    if m == "board" and watched == BOARD_CLASSES then
+        unwatch_grid()     -- the board lane is satisfied; the grid lane (handoff) is separate
+        wait_clock = nil
+    end
     if m == "grid" then
         unwatch_grid()
         handoff_armed = false
