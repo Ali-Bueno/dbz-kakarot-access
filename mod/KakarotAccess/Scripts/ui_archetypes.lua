@@ -466,6 +466,9 @@ local function glyph_word(name)
     return nil
 end
 
+-- Reuse the same device vocabulary for keyhelp textures and inline tutorial icons.
+A.navigation_glyph = glyph_word
+
 -- The spoken button for ANY KeyConfigId (direct button id or action alias resolved
 -- through the icon-data asset), with NO "controller:" prefix. For inline-icon markup
 -- (dialogs, tutorials, prompts) where we just want the button name. nil if unresolvable.

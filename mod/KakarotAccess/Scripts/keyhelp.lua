@@ -155,12 +155,16 @@ local function glyph_of(plat)
     for _, t in ipairs(toks) do
         if not is_nav_texture(t) then nav = false end
         local nm = I18n.keyhelp(t)
+        -- Only expand names for textures already classified as navigation here.
+        -- Other directional textures still need the semantic-token path below;
+        -- naming them early would otherwise turn them into apparent actions.
+        if not nm and is_nav_texture(t) then nm = A.navigation_glyph(t) end
         if nm then parts[#parts + 1] = nm end
     end
     if #parts > 0 then return table.concat(parts, I18n.t("combo_join")), nav end
-    -- No spoken name from the textures. The nav VERDICT still stands, though: the stick
-    -- glyphs (Stk_Nut_R = "Rotar") are navigation and have no name in any table, so a
-    -- `return nil, false` here would silently promote them back to actions — which is how
+    -- No spoken name from the textures. The nav VERDICT still stands for an unknown
+    -- navigation glyph, so a `return nil, false` here would silently promote it to an
+    -- action. Known sticks now share the inline tutorial vocabulary; previously this is how
     -- "Rotar" leaked into the announcement and, sitting right before "botón B: Atrás",
     -- sounded like Rotar WAS the B button (2026-07-14).
     local tok = A.platbtn_token(plat)

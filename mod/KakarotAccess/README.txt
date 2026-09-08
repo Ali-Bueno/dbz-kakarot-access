@@ -36,6 +36,11 @@ HOW ANNOUNCEMENTS WORK
   item; moving the cursor reads the new item; changing a value reads just what
   changed. A change of context interrupts the voice; small updates do not.
 - NPC dialogue and subtitles are read as they appear.
+- Authored cutscenes from the opening through the Raditz aftermath include
+  timed visual descriptions. Dialogue and subtitles always take priority.
+  Compact descriptions may play over music and sound effects. The Raditz-arrival
+  scene uses ViddyScribe-assisted text (https://viddyscribe.com), locally edited
+  and retimed against the original video. Other scenes retain their existing cues.
 - The current quest objective is announced automatically whenever it changes.
 - Level-ups and item pickups are announced.
 - On-screen button prompts ("A: use", "X: assign", ...) can be announced
@@ -43,6 +48,25 @@ HOW ANNOUNCEMENTS WORK
   to hear them.
 - Press F1 to repeat the focused item / last announcement. Press Ctrl+F8 to
   silence the voice immediately.
+
+
+DOWNLOADABLE CONTENT
+---------------------
+The selected DLC's title, availability, story and details are read from the game's
+visible detail pane. Use the game's normal selection controls; F1 repeats the
+current entry. No DLC is purchased, unlocked or launched by the reader.
+
+
+COMMUNITY BOARD / SOUL EMBLEMS
+------------------------------
+The board uses the LEFT STICK to move its cursor. Listen for the panel number,
+the emblem occupying it (or an empty panel), and the leader label. Its automatic
+button help includes movement and page controls as well as the current actions.
+
+Press F1 to repeat the current tutorial instruction when one is showing; otherwise
+it repeats the current selection and board summary. Press F2 for the full current
+control bar, including confirm and back when the game offers them. Tutorial
+popups can temporarily disable board movement until the instruction advances.
 
 
 THE NAVIGATION RADAR
@@ -76,12 +100,20 @@ CHOOSING WHAT TO TRACK — THE TARGET PICKER (R3)
 Enemies are announced with their LEVEL. Press Shift+F5 to cycle tracking through
 your nearest party members and back to the quest objective.
 
+Dragon Balls use the game's currently displayed markers in the loaded area.
+Open the picker with R3 (or V), choose Dragon Balls, and select a ball. Follow
+the beacon or press F5 for its direction and distance. The sweep advances when
+the marker disappears after collection. Empty categories are skipped; this does
+not unlock balls early or reveal hidden spawn locations. This local test build's
+Dragon Ball detection and collection flow still need in-game confirmation.
+
 
 THE CONFIG MENU (L3 + R3)
 -------------------------
 Hold L3 and tap R3 in the overworld to open the mod's settings:
 - Audio cues on / off (mutes the radar beacon and pings).
 - Cue volume 0-100% in 10% steps (plays a sample as you change it).
+- Cutscene descriptions on / off.
 - Radar auto-activation on / off (manual R3 picks still work when off).
 - Language: "auto" or any of the 13 supported languages.
 Move with the d-pad (up/down between options, left/right to change a value; A

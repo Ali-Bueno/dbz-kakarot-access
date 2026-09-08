@@ -7,6 +7,19 @@
 -- Offsets are byte offsets from the object base (obj:GetAddress()).
 
 return {
+    -- UAT_UIMiniMapIcon, original installed executable SHA-256 8DDDFE8B...DA826.
+    -- Ghidra 2026-09-08: FUN_1415e80a0 reuses slots when +0x88 == 0 or
+    -- TargetActor == null, then sets +0x88 = 1. FUN_1415f50d0 writes the
+    -- EMapIcon byte at +0x89; FUN_1415e6950 returns that byte. SpawnDragonball
+    -- (FUN_141552c30) registers type 28 directly, bypassing ATMapIconComponent.
+    -- Retirement does not clear +0x88 in the traced path. WL_Icon_ImgSw visibility
+    -- is load-bearing, not optional: pool occupancy is not pickup availability.
+    miniMapIcon = {
+        active = 0x88,
+        iconType = 0x89,
+        dragonBallType = 28,    -- EMapIcon::DRAGON_BALL, AT_enums.hpp
+    },
+
     -- Field / overworld Start menu: UAT_UIStartTop.
     -- CONFIRMED: In_Curs impl (Ghidra FUN_1417bb1c0) reads the selected ring index as
     --   idx = *(int*)(this+0x4e4);  item = UIStartTopList[idx]  (bounds-checked 0<=idx<count)

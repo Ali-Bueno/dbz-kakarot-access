@@ -87,6 +87,7 @@ cfg_auto = 自动
 cfg_pct = 百分之 %d
 cfg_audio_cues = 音效提示
 cfg_cue_volume = 提示音音量
+cfg_audio_descriptions = 过场动画解说
 cfg_radar_autotrack = 自动雷达
 cfg_braille = 盲文输出
 cfg_language = 语言

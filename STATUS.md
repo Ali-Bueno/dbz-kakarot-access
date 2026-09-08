@@ -14,8 +14,15 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-09-07
-names now come from the `CharacterType` enum (~107 vs 4).
+**Last updated:** 2026-09-08 (accessibility contribution; earlier gameplay backlog retained below).
+
+## Accessibility contribution — gameplay verification status
+
+- **DLC reader:** reads the selected native detail pane and releases parked panes. Positive user feedback; continue checking fast selection changes, back to the ring and F1 repeat.
+- **Community Board:** native movement/page help, leader labels, popup-safe summary history and F1 holding reminder. Controls are unchanged; tutorial/select/hold/place and F1/F2 need further user testing.
+- **Opening-through-Raditz descriptions:** 60 cues across 15 sources; six GDM scenes have introductory lines only. The 16 Raditz-arrival cues are ViddyScribe-assisted, frame-reviewed and compact. [Timing evidence and limits](reference/dbz-kakarot/notes/dbz-kakarot-cutscene-descriptions.md).
+- **Dragon Balls:** native displayed markers feed the picker/beacon with stale-pick rejection, retirement and menu-resume handling. Use R3 / V → Dragon Balls when a ball is ordinarily available; test F5, collection, next-ball chaining, pause/resume and area changes. Positive in-game verification is pending. [Evidence and limits](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
+- **Offline coverage:** `tools/run-lua-tests.ps1` exercises the readers, native-clock adapter, cue engine/catalog, control help, Dragon Ball tracking and world-gate cleanup. Run this plus `tools/lint-lua.ps1` before packaging; neither proves native audibility or marker lifetime.
 
 ## Where the mod stands
 
@@ -204,6 +211,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Crash diagnostics (black box + breadcrumb) | done (unverified) | `mem_bridge.mark()` — a 64-slot ring in `crash_trail.bin`; `main.lua` prints the previous session's trail at boot. Named the crash site on BOTH crashes it has seen. Tested with TerminateProcess. |
 | Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). The constant-"222" bug: all digits share one atlas `Ins_Num_Result02`, so the digit must be a MATERIAL PARAMETER on the MID. Round-2 dump goes to `dumps/dump_results.txt`. Unverified. |
 | Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`. 2026-07-26 hardening: 24 bare `:IsValid()` and ~95 naked fetches on streamed/destroyed actors migrated; an expired-but-unrefreshable list is now dropped, never served. Battle-interruption resume. Unverified. |
+| Radar: sweep world handles dropped at gates | done (unverified) | 2026-09-03: `release_world_refs` AND the map-transition flush now clear `Nav.SW.lists`/`partial` plus the per-world manager cache, so a BOXED build interrupted by a battle/LoadMap restarts instead of resuming pre-gate handles. Pinned by the first offline Lua regression test (`pwsh tools/run-lua-tests.ps1`, stubs UE4SS, no game needed). |
 | Radar categories 2.0 (sites/enemies/collectibles) | done | Verified 2026-07-15. |
 | R3 radar target picker (modal) | done (regression fixed, unverified) | 2026-07-28 it was dead on both binds: `Core.member`'s result gate called `IsValid` on `UniqueId`, an FName, which raises THROUGH pcall. Fixed in the substrate (gate narrowed to Array/Struct, new `Core.name_str`). The bind is R3, not R2. |
 | Telepathic messages (King Kai) | todo | Probably nothing to answer: no telepathy widget, no accept/reply function. The one hit is `ATDebugSendTelepathyNotice()` (AT.hpp:26783) — telepathy belongs to the ambient CrossTalk / Notice family. GAP: zero mod coverage by name, so if the line does not route through `Xcmn_Subtitles_C` it is silent. Needs the user's go-ahead. |
@@ -228,17 +236,12 @@ written and lint-clean but never seen working in game. The full derivation of ev
 ## Player requests (2026-08-14)
 
 Asked for by players; scoped against the code the same day, so the entry says what is already built
-and what is genuinely missing. None of these is started.
+and what is genuinely missing. Local follow-ups are dated below.
 
-- **Dragon Balls in the R3 radar.** The category is already wired — `dragonball` is in `GROUP_ORDER`
-  (`nav_tracker.lua:112`), `EMapIcon 28` maps to it (:136) and it has its own spoken noun
-  `cat_dragonball` (:174) — but it is the one radar group with **no VERIFIED tag**, and no world
-  pickup actor has ever been identified. `AT_UIStartDragonBallMenu` is the *menu* of balls you own,
-  not a world actor; the only other hits are debug execs (`ATDebugWishDragonBall`,
-  `ATDebugChangeDragonBallUsedState`). So this is most likely a **bug, not a feature**: find out
-  whether the balls carry an `ATMapIconComponent` at all, and whether `bShowMapIcon` is what hides
-  them before the Dragon Radar is obtained (a variant reader that ignores that flag already exists,
-  `nav_tracker.lua:460-473`). One MCP session standing next to a ball should settle it.
+- **Dragon Balls in the R3 radar — implemented locally 2026-09-08, live test pending.** Ghidra
+  proved direct type-28 marker registration without an actor map-icon component. The installed
+  reader uses the rendered marker, not spawn/save tables. Collection visibility and before-unlock
+  parity still need a real pickup session; [native evidence and tests](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
 - **Announce a boss / unusually strong enemy and its direction.** Most of this exists. `SpawnType`
   is reflected and `ENEMY_NOUN_BY_SPAWN` already maps `3` → `cat_enemy_boss`
   (`nav_tracker.lua:1182`); `ICON_GROUP` separately knows `EVIL_ENEMY_BOSS` (31/35) and
@@ -263,15 +266,6 @@ Open work only. How each item was derived is in the archive and the git log.
 - **2026-07-15 batch, coded and never verified in game**: quest HUD, level-up toast, radar
   `resume_pick`, subtitles option gate, episode-card reader (`screen_questcard.lua`), Soul Emblems
   grid.
-- **`Nav.SW.lists` survives `release_world_refs`.** The raw `FindAllOf` results of an in-flight
-  BOXED build are not dropped when the world gate closes (only `targets_snap` is), so a build
-  interrupted by a battle resumes on the other side re-walking pre-gate actor handles — and this
-  file's own ledger says a recycled address passes `Core.valid`. Pre-existing (the R3 picker
-  already armed boxed builds), but the quest-item election makes an in-flight build routine, so
-  the exposure is now everyday. Fix is probably `Nav.SW.lists, Nav.SW.partial = nil, false` in
-  `release_world_refs`, at the cost of restarting the build; not done blind in the same batch that
-  raised the exposure.
-
 - **Battle results read a constant "222" for every stat.** Read `dumps/dump_results.txt` (round 2
   dumps each brush material's parameters), fix the decode or pin the value natively, then turn
   `DEBUG` off. `screen_results.lua`.

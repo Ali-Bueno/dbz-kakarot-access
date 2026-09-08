@@ -9,8 +9,8 @@
 -- `keyhelp_auto = false` (its prompts are urgent, or it already speaks them itself).
 --
 -- What it speaks and when, per the verbosity rules in CLAUDE.md §9:
---   * ACTION entries only — the cursor-movement ones ("move", "change tab") are dropped by
---     Keyhelp.actions(); they carry no choice;
+--   * ACTION entries normally; free-cursor adapters can request navigation too with
+--     keyhelp_navigation, so the player learns how to reach the available actions;
 --   * once on entering a screen, then ONLY when the set of actions CHANGES (diff-gated):
 --     hovering an item you can't use drops "A: use", and that IS news;
 --   * always queued (interrupt=false): the screen's own readout (title + focused item) and
@@ -46,6 +46,7 @@ local recent = {}        -- phrase -> os.clock() when last spoken; deliberately 
 
 local enabled = true
 local armed = false      -- the active screen wants the automatic read
+local include_navigation = false
 local spoken_sig = nil   -- label signature of the last bar announced (nil = announce the next)
 local spoken_phrase = nil   -- and what it actually said (a nav-only label change must not repeat it)
 local cand, cand_n = nil, 0
@@ -62,6 +63,7 @@ end
 function W.screen_changed(adapter)
     clear()
     armed = enabled and adapter ~= nil and adapter.keyhelp_auto ~= false
+    include_navigation = adapter ~= nil and adapter.keyhelp_navigation == true
 end
 
 -- Called after the active adapter's update(), on the game thread, transition-gated by the
@@ -90,7 +92,8 @@ function W.update()
 
     spoken_sig, cand, cand_n = sig, nil, 0
     -- Only now (the labels really moved) is it worth resolving the glyphs.
-    local phrase = Keyhelp.phrase(Keyhelp.actions(tick))
+    local entries = include_navigation and Keyhelp.read(true, tick) or Keyhelp.actions(tick)
+    local phrase = Keyhelp.phrase(entries)
     if phrase and phrase ~= spoken_phrase then
         spoken_phrase = phrase
         local now = os.clock()

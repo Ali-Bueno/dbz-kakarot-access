@@ -16,6 +16,8 @@ mod/KakarotAccess/Scripts/audio_bridge.dll
 mod/KakarotAccess/Scripts/input_bridge.dll
 # Lua syntax-validator (built from libs/lua54/src/luac.c)
 libs/lua54/luac.exe
+# Offline-test interpreter (built on demand by tools/run-lua-tests.ps1)
+libs/lua54/lua.exe
 
 # PRISM prebuilt binaries (downloaded release, not source)
 libs/prism/bin/

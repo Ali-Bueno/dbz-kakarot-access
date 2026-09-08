@@ -21,7 +21,8 @@ changing how the game plays for everyone else.
   through the same screen reader. On by default when your reader supports it.
 - **Audio navigation radar** with a directional beacon and arrival cues.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
-- **Fully translatable** — every spoken line lives in an editable text file (13 languages).
+- **Translatable menus and announcements** — editable text files in 13 languages.
+  The new development cutscene-description catalog is English-only.
 
 > Engine: Unreal Engine 4.21 · Loader: **UE4SS** · Screen reader: **PRISM**
 
@@ -73,6 +74,7 @@ See [BUILD.md](BUILD.md) for the exact layout
 - **Skill Palette** (Super Attack equip slots) and the **Skill Tree** (node name, level, Ki cost,
   description, owned orbs, locked/acquired state).
 - The Soul Emblems grid and the Community board.
+- The Downloadable Content menu's selected title, availability, story and details.
 - Cooking, fishing (with hook-timing cues and the catch-result sheet), and results screens.
 - On-screen **button-prompt bar** ("A: use", "X: assign", …), announced with the real button glyphs.
 
@@ -130,6 +132,11 @@ If something you need isn't listed, let me know (see the links at the bottom).
 | **Xbox X / PS Square** (either map) | Describe what's selected: destination + position in the list + what the cursor is over. On the area map, re-reads the point of interest under the cursor |
 | **Left stick** (Community board) | Move around (d-pad support planned, like the map) |
 
+The Community Board's automatic button help includes movement/page controls as well
+as actions. **F1** repeats the current tutorial instruction, or the current panel
+and board summary when no instruction is showing. **F2** reads the full control bar.
+Brief popups should not repeatedly restart the long board summary.
+
 ### Keyboard (optional extras)
 
 Handy shortcuts that mirror or complement the controller — not required to play:
@@ -169,6 +176,8 @@ Open the in-game config menu with **L3 + R3** in the overworld:
 
 - **Audio cues** — on / off (mutes the radar beacon and pings).
 - **Cue volume** — 0–100 % in 10 % steps (plays a sample as you change it).
+- **Cutscene descriptions** — on / off. The opening through the immediate Raditz aftermath has
+  locally-authored timed visual descriptions; dialogue and subtitles always take priority.
 - **Radar auto-activation** — on / off (manual R3 picks still work when off).
 - **Braille output** — `auto` / `on` / `off`. Everything the mod speaks is also sent to a
   refreshable **braille display** through your screen reader. `auto` (the default) turns it on when

@@ -87,6 +87,7 @@ cfg_auto = 自動
 cfg_pct = %d パーセント
 cfg_audio_cues = 音声キュー
 cfg_cue_volume = キュー音量
+cfg_audio_descriptions = カットシーンの音声解説
 cfg_radar_autotrack = 自動レーダー
 cfg_braille = 点字出力
 cfg_language = 言語

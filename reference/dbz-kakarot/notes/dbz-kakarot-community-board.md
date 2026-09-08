@@ -128,3 +128,53 @@ ring closed" must use a ~2s recency grace, not last-tick state. The working entr
 `screen_field` arms `Core.watch_for` on ring-close-with-emblems-row-recent (sid 8); renewals
 anchored to real arms only, cancelled by minimap OR battle HUD (see
 [dbz-kakarot-perf-architecture](dbz-kakarot-perf-architecture.md) for the watch-lane primitive).
+
+## 2026-09-05 local Community Board readability pass
+
+User clarified that the troublesome "story board" is Community Board / Soul Emblems
+and approved retaining the game's controls while improving instructions, current
+panel/emblem, holding status and confirm/back help. Updated Claude Teammate was used
+for the reader audit and initial summary/leader implementation; Codex reviewed it,
+removed an unsafe timeout assumption, and added the remaining regression coverage.
+
+Evidence: the current installed log contains repeated `screen_dialog` /
+`screen_community` switches during the reported session. Registry resets clear
+`last_title`, so those switches could requeue the full entry summary. The log proves
+adapter activation, not what was audible or which exact popup caused the confusion.
+The current native header declares both leader widgets on
+`UAT_UICommunityBoard_Panel`: `WL_Pnl_Pedestal_Leader` at 0x4F8 and
+`WL_Ins_Icon_Leader` at 0x500. Strict-gate metadata misses were logged for `Brd_Emb_C`.
+
+Changes:
+
+- `Commu.keyhelp_navigation` opts this adapter into the whole visible help bar.
+  Existing full F2 reads remain available. Stick textures reuse the established
+  inline-glyph vocabulary; ordinary menus retain their action-only automatic help.
+- Leader widgets use the normal declared-property gate in both the selected-panel
+  label and the placed-emblem summary. No new offsets or unguarded native calls.
+- Summary history survives resets, missing reads and even long modal pauses. It
+  re-arms on free roam, a map transition, a different board, explicit F1, or an
+  observed native close (mode 5/0) with no other live Community mode winning.
+  The close-mode evidence is the versioned Ghidra derivation in
+  `dbz-kakarot-status-history.md` (FUN_1414ca430); its original scratch decompile is
+  no longer available. A timeout is not used as a substitute for native state.
+- F1 also repeats the current emblem-in-hand reminder. Protected tutorial speech
+  still wins; panel feedback and help resume after it. No input remapping, cursor
+  snapping, automated placement or hidden-state advantages were added.
+
+Offline regressions: 32 Community reader checks, 12 glyph checks and 9 keyhelp-watch
+checks, with targeted failing runs before each correction. Tests use native-boundary
+stubs; they do not prove runtime reads or speech timing. If a quick close/reopen is
+never observed by the reader, F1 remains the explicit way to request the summary.
+Adjacent-panel geometry and gifting are not newly implemented by this pass.
+
+User test after restart: enter the tutorial; use F1 for the current instruction;
+advance its popup before moving the native left-stick cursor; check occupied,
+empty and leader panels; open Soul Emblems, select one and return holding it;
+check the holding reminder and F1 repeat; use F2 for the current visible actions;
+place/cancel, then close and reopen. Report the last instruction and panel heard
+if anything still leaves the next action unclear.
+
+The local test deployment preserved configuration, mod enablement and native
+dependencies. Native runtime and audible output still need the gameplay checks
+above; local backups and deployment artifacts are not part of the contribution.

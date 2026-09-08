@@ -87,6 +87,7 @@ cfg_auto = automatique
 cfg_pct = %d pour cent
 cfg_audio_cues = Signaux sonores
 cfg_cue_volume = Volume des signaux
+cfg_audio_descriptions = Descriptions des cinématiques
 cfg_radar_autotrack = Radar automatique
 cfg_braille = Sortie braille
 cfg_language = Langue
