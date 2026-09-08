@@ -26,10 +26,10 @@
 
 ## Where the mod stands
 
-44 screen adapters, PRISM speech, 4 native bridges, an audio radar with 14 target categories, and
+45 screen adapters, PRISM speech, 4 native bridges, an audio radar with 14 target categories, and
 external localization in 13 languages. Most of it is verified in game; the table below says which.
 
-Two things are outstanding, and both are **unrun rather than unfinished**:
+The earlier upstream backlog includes the following unrun checks:
 
 - The last code batch (2026-08-03, post-battle radar re-acquisition) is **source-only, never
   played**. Lint clean over 75 files. Needs a full restart.
@@ -239,7 +239,7 @@ Asked for by players; scoped against the code the same day, so the entry says wh
 and what is genuinely missing. Local follow-ups are dated below.
 
 - **Dragon Balls in the R3 radar — implemented locally 2026-09-08, live test pending.** Ghidra
-  proved direct type-28 marker registration without an actor map-icon component. The installed
+  proved direct type-28 marker registration without an actor map-icon component. The new
   reader uses the rendered marker, not spawn/save tables. Collection visibility and before-unlock
   parity still need a real pickup session; [native evidence and tests](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
 - **Announce a boss / unusually strong enemy and its direction.** Most of this exists. `SpawnType`
@@ -253,11 +253,10 @@ and what is genuinely missing. Local follow-ups are dated below.
   vs the player), noted in [status level](reference/dbz-kakarot/notes/dbz-kakarot-status-level.md).
 - **Improve the character detector.** Needs the player to say what actually fails (names, range,
   misses, noise) before it can be scoped.
-- **Accessibilize the DLC menu.** No adapter exists. The overworld ring entry is already named
-  (`START_TOP_LIST_ID` DLC = 14; widget selector `DLC = 35` in `i18n.lua`), but the screen itself is
-  unread. Requires DLC installed and a census with the menu open — and it must be **directory-mapped
-  by pointer, not scanned**, because every class name that is never instantiated costs a ~65 ms
-  `FindAllOf` every `ABSENT_BACKOFF` (~4 s) forever.
+- **DLC menu — implemented locally, positive user feedback.** `screen_dlc.lua` reads the
+  selected native pane and releases parked panes; the screen is directory-mapped through the
+  manager, without a new class scan. Further checks: rapid selection changes, back to the ring
+  and F1 repeat. The reader does not purchase, unlock or launch DLC.
 
 ## Backlog
 

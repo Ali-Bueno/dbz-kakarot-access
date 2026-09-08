@@ -301,6 +301,29 @@ for _ = 1, 80 do tick_once() end
 Nav.where()
 check(speech[#speech]:find("30 meters", 1, true) ~= nil,
     "a failed native read during resume is retried instead of losing the selected ball")
+
+-- Enumeration can succeed just before acceptance becomes unreadable. Fault the
+-- pure marker query for the next ball only; keep discovery, selection and ticks
+-- real so ignoring set_manual_target's rejection strands this sweep.
+mm.MapIconList = { icon, far_icon }
+Nav.set_manual_target(ball, tostring(ball.addr), "Dragon Ball", "dragonball", false)
+mm.MapIconList = { far_icon }
+local contains = Nav._dragonball_marker.contains
+Nav._dragonball_marker.contains = function(map, actor)
+    if actor == far_ball then return nil end
+    return contains(map, actor)
+end
+tick_once()
+Nav._dragonball_marker.contains = contains
+for _ = 1, 80 do tick_once() end
+Nav.where()
+check(speech[#speech]:find("60 meters", 1, true) ~= nil,
+    "a next-ball acceptance failure retries and resumes the same sweep")
+-- A refreshed pooled marker for the already visited ball must not undo progress.
+mm.MapIconList = { icon }
+tick_once()
+check(speech[#speech] == "radar_chain_done",
+    "retrying next-ball acceptance preserves the sweep's visited keys")
 check(#nav_errors == 0, "the real navigation and explore ticks raise no harness errors")
 
 if fails > 0 then print(fails .. " check(s) FAILED"); os.exit(1) end

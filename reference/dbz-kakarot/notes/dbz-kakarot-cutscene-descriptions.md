@@ -12,6 +12,9 @@ time. Seek, skip, replay, settings changes and world transitions are handled by
 the cue engine/adapter. Visible dialogue/subtitles take priority; descriptions
 are non-interrupting and disposable rather than requeued after an interruption.
 Music and sound effects, including important impacts, may accompany narration.
+An absent active-clock sample retains plain cue/time history: pause or an unreadable
+poll must not repeat a consumed cue. Positive transition/free-roam gates, new sources
+and actual rewinds still reset it. No actor/player handles are retained for this.
 
 The catalog is English-only. The config menu and Scripts/config.txt expose the
 audio_descriptions switch. No network service, API key, generated narration audio,
@@ -55,6 +58,8 @@ Arrival timing tests use independently recorded common voice gaps and check
 cue.at + 0.5 + character_count/14 + 0.35 against the next dialogue boundary
 and the next description. The extra 0.35 seconds covers late-start allowance.
 Three older cues failed before correction; the revised cues pass.
+Adapter regressions also cover paused movie/master-sequence clocks and temporary
+source/time/actor-list gaps; these repeated a cue before the history-preservation fix.
 
 The cue's before field is QA metadata, not a runtime speech cutoff. Some essential
 battle beats have no before field and rely on the live dialogue reader. The

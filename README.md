@@ -177,7 +177,8 @@ Open the in-game config menu with **L3 + R3** in the overworld:
 - **Audio cues** — on / off (mutes the radar beacon and pings).
 - **Cue volume** — 0–100 % in 10 % steps (plays a sample as you change it).
 - **Cutscene descriptions** — on / off. The opening through the immediate Raditz aftermath has
-  locally-authored timed visual descriptions; dialogue and subtitles always take priority.
+  locally-authored timed visual descriptions that yield to visible dialogue/subtitles.
+  Actual voice separation still needs gameplay verification.
 - **Radar auto-activation** — on / off (manual R3 picks still work when off).
 - **Braille output** — `auto` / `on` / `off`. Everything the mod speaks is also sent to a
   refreshable **braille display** through your screen reader. `auto` (the default) turns it on when

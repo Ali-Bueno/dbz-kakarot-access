@@ -147,6 +147,12 @@ function Description.step()
     local source, seconds, playing, key = movie_clock()
     if not source then source, seconds, playing, key = sequence_clock() end
 
+    -- No active clock can mean pause or a transient read gap, not a new scene.
+    -- Preserve only the engine's plain cue/time history so resuming at the same
+    -- clock cannot repeat a consumed line. Positive transition/free-roam gates
+    -- above, a new source or an actual rewind still reset that history.
+    if not source then return end
+
     if key and not logged[key] then
         logged[key] = true
         print(string.format("[KakarotAccess] audio description source: %s\n", key))

@@ -37,7 +37,8 @@ HOW ANNOUNCEMENTS WORK
   changed. A change of context interrupts the voice; small updates do not.
 - NPC dialogue and subtitles are read as they appear.
 - Authored cutscenes from the opening through the Raditz aftermath include
-  timed visual descriptions. Dialogue and subtitles always take priority.
+  timed visual descriptions that yield to visible dialogue/subtitles. Actual voice
+  separation still needs gameplay verification; keep game subtitles enabled.
   Compact descriptions may play over music and sound effects. The Raditz-arrival
   scene uses ViddyScribe-assisted text (https://viddyscribe.com), locally edited
   and retimed against the original video. Other scenes retain their existing cues.

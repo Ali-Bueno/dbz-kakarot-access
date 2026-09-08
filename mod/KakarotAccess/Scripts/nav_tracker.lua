@@ -1147,8 +1147,14 @@ local function chain_to_next(grp)
         if c.key == grp then
             for _, it in ipairs(c.items) do   -- nearest first
                 if not chain_seen[it.key] then
-                    Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
-                        it.grp, it.stateful, true)   -- true: keep the sweep's seen-set
+                    if not Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
+                        it.grp, it.stateful, true) then   -- keep the sweep's seen-set
+                        -- A marker may become unreadable between enumeration and
+                        -- acceptance. Reuse the bounded, handle-free resume lane;
+                        -- dropping this rejected pick would strand the sweep.
+                        resume_pick = { key = it.key, grp = it.grp,
+                                        stateful = it.stateful, tries = 0 }
+                    end
                     return
                 end
             end

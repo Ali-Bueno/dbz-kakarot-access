@@ -66,6 +66,8 @@ cannot restore a hidden marker. Selection revalidates the current list instead
 of trusting a cached picker row. Approach and arrival-wait consumers recheck
 availability. contains returns true / false / nil, so unreadable native state
 is not treated as collection. A rejected resume keeps the existing bounded retry.
+Next-ball acceptance uses the same handle-free retry lane when validation fails
+after enumeration, preserving the sweep's visited keys instead of stranding it.
 
 There are no new world scans, but active tracking walks the minimap list every
 100 ms. Representative late-game cost is not measured.
@@ -75,7 +77,8 @@ There are no new world scans, but active tracking walks the minimap list every
 The offline suite exercises real enumeration, selection, beacon ticks, collection
 chaining and menu resume with engine-boundary doubles. It covers component-free
 and derived icons, duplicate/order handling, inactive/hidden/reused markers,
-stale selection, unreadable state and a temporary failure during resume. Failing
+stale selection, unreadable state and temporary failures during resume and next-ball
+acceptance. Failing
 regressions were observed before the corresponding corrections.
 
 Still test with an ordinary save where a Dragon Ball is available:

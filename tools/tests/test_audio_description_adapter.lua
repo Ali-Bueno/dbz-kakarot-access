@@ -192,6 +192,68 @@ do
         "free roam skips the demo class probes entirely (no absent-scan tax)")
 end
 
+-- A missing active clock is not evidence that the scene restarted. The old
+-- adapter reset its consumed-cue history here and repeated the same timely line
+-- after pausing or one unreadable poll. Keep the real adapter and engine coupled.
+for _, gap in ipairs({ "paused", "source", "clock", "actors" }) do
+    Description.reset()
+    spoken = {}
+    local missing = false
+    local source = named("ManaMovie C01_000_S010_mov")
+    local actors = { { ManaPlayer = {
+        IsPlaying = function() return not (missing and gap == "paused") end,
+        GetTime = function()
+            if missing and gap == "clock" then error("unreadable clock") end
+            return 0.11
+        end,
+        GetSource = function()
+            if missing and gap == "source" then error("unreadable source") end
+            return source
+        end,
+    } } }
+    movie_actors, sequence_actors = actors, {}
+    registered.fn()
+    missing = true
+    if gap == "actors" then movie_actors = {} end
+    registered.fn()
+    missing, movie_actors = false, actors
+    registered.fn()
+    check(#spoken == 1 and spoken[1][1] == "A bamboo forest.",
+        "does not repeat a consumed movie cue after a " .. gap .. " gap")
+end
+
+do
+    Description.reset()
+    spoken = {}
+    local playing = true
+    local actor = named("LevelSequenceActor C01_020_S010_gdm_Master")
+    actor.SequencePlayer = {
+        IsPlaying = function() return playing end,
+        GetPlaybackPosition = function() return 0.26 end,
+    }
+    movie_actors, sequence_actors = {}, { actor }
+    registered.fn()
+    playing = false
+    registered.fn()
+    playing = true
+    registered.fn()
+    check(#spoken == 1 and spoken[1][1]:match("Flying Nimbus"),
+        "does not repeat a consumed master-sequence cue after pause/resume")
+
+    local before_transition = #spoken
+    in_transition = true
+    registered.fn()
+    in_transition = false
+    registered.fn()
+    check(#spoken == before_transition + 1, "a positive world transition still resets scene history")
+    local before_roam = #spoken
+    roaming = true
+    registered.fn()
+    roaming = false
+    registered.fn()
+    check(#spoken == before_roam + 1, "returning to free roam still resets scene history")
+end
+
 Description.stop()
 check(registered == nil, "unregisters cleanly on hot reload or shutdown")
 

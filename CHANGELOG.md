@@ -12,7 +12,8 @@
 - **Opening-through-Raditz visual descriptions.** A switchable development catalog
   of 60 compact cues across 15 MOV/GDM sources, driven by the native playback clock.
   Six real-time scenes have introductory lines only, not full visual coverage.
-  Descriptions may accompany music/effects; spoken dialogue retains priority.
+  Descriptions may accompany music/effects and yield to visible dialogue/subtitles.
+  Pause or temporary clock-read gaps do not repeat an already consumed cue.
   Raditz-arrival text was drafted with ViddyScribe, frame-reviewed and retimed.
 
 ### Fixes
@@ -22,7 +23,8 @@
   F1 emblem-in-hand reminder clarify the board without changing game controls.
 - **Dragon Balls radar category.** Reads displayed native markers even when the
   pickup lacks an ordinary map-icon component. Revalidates selection and collection,
-  and retries temporary failures during menu resume. No early unlocks or spawn/save
+  and retries temporary failures during menu resume and next-ball acceptance.
+  No early unlocks or spawn/save
   table inspection; positive in-game detection/collection testing remains pending.
 - **Radar world-gate cleanup.** Releases in-flight sweep lists and per-world manager
   handles when menus, battles or map transitions make them unsafe to retain.
