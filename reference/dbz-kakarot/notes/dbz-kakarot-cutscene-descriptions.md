@@ -26,8 +26,13 @@ still wins). Names follow each language's DBZ Kakarot / anime localization; flag
 native check: de Radditz / Jindujun / Höllenspirale (game text may say Raditz / Kinto Un /
 Makankosappo), ru Радиц / Макканкосаппо / Каме Хаус (no official Russian game text to
 check against), ar attack/scouter calques, zh 龟屋 (vs 龟仙屋), ko 내퍼 (vs 납파), th names
-(fan convention; the game ships no Thai), es Chi-Chi and rastreador (Spain dub: Milk /
-scouter), it Raditz / Piccolo (dub: Radish / Junior), fr Chichi unhyphenated.
+(fan convention; the game ships no Thai), it Raditz / Piccolo (dub: Radish / Junior), fr
+Chichi unhyphenated. **Spanish is VERIFIED against the game's own tables** (2026-09-08,
+`AT/Content/Message/PLAT_W/{es_ES,es_MX}/messageData.uexp` via `repak get`, string counts):
+es_ES prints Chi-chi, Krilin, Piccolo, Nube voladora, Bola Dragón de cuatro estrellas,
+Cañón de Haz Especial, rastreador; es_MX prints Milk, Krillin, Píkoro, nube voladora, Esfera del
+Dragón, Makankosappo, Rastreador. The game ships them as SEPARATE languages, so the mod gained
+regional-variant overlays (`I18n.VARIANTS`, `lang/es_mx.txt` holds only the differing lines).
 The config menu and Scripts/config.txt expose the
 audio_descriptions switch. No network service, API key, generated narration audio,
 modified movie or new native dependency is required at runtime.

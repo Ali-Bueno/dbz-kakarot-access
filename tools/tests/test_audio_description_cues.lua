@@ -77,6 +77,33 @@ for i, cue in ipairs(arrival) do
 end
 check(count >= 45, "catalog contains at least 45 timed visual descriptions")
 
+-- Regional-variant OVERLAYS (I18n.VARIANTS) carry only the lines that differ from their
+-- base file, so they are not required to be complete -- but every key they do carry must
+-- be a real cue (a typo in an overlay key would silently fall back to the base wording).
+local OVERLAYS = { "es_mx" }
+local catalog_keys = {}
+for _, list in pairs(Cues) do
+    for _, cue in ipairs(list) do catalog_keys[cue.key] = true end
+end
+for _, code in ipairs(OVERLAYS) do
+    local path = here .. "../../mod/KakarotAccess/Scripts/lang/" .. code .. ".txt"
+    local f = io.open(path, "r")
+    check(f ~= nil, "lang/" .. code .. ".txt exists")
+    local carried, orphans = 0, 0
+    if f then
+        for line in f:lines() do
+            local key, val = line:match("^%s*([^#=%s][^=]-)%s*=%s*(.-)%s*$")
+            if key and key:match("^ad_") then
+                carried = carried + 1
+                if not catalog_keys[key] or val == "" then orphans = orphans + 1 end
+            end
+        end
+        f:close()
+    end
+    check(carried > 0 and orphans == 0,
+        "lang/" .. code .. ".txt overlay names only real cues (" .. carried .. " lines, " .. orphans .. " orphans)")
+end
+
 -- Every language file carries every cue under its derived key (the adapter speaks the
 -- English catalog text only as a fallback). Parsed with the same line pattern as
 -- i18n.lua's load_ext, so a line the mod could not read fails here too.

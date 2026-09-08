@@ -37,6 +37,15 @@ Your edits take effect on the next game launch, or immediately with Ctrl+Shift+R
 If a file is missing or a key is deleted, the mod falls back to English (built in), so you
 can never break it — worst case a line is spoken in English.
 
+Regional variants (overlays)
+----------------------------
+The game ships two Spanish text tables, Spain (es_ES) and Latin America (es_MX), and the
+character names differ between them (Chi-chi / Milk, Krilin / Krillin, Piccolo / Píkoro,
+Bola Dragón / Esfera del Dragón). es_mx.txt is an OVERLAY on es.txt: it holds only the lines
+that differ, and every other line is read from es.txt. The mod picks it when the game runs in
+Latin American Spanish; the config menu can also force "Español latino (es_mx)". To add a
+line to the overlay, copy its key from es.txt and give it the Latin American wording.
+
 Adding a NEW language
 ---------------------
 The game ships 13 languages (see the list above). If the game adds one the mod doesn't know,

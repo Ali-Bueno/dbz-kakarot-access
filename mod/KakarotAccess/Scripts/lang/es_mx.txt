@@ -1,0 +1,19 @@
+# KakarotAccess language file — Latin American Spanish (es_mx), OVERLAY on es.txt
+# The game ships two Spanish text tables (es_ES and es_MX) whose character names differ.
+# This file holds ONLY the lines that differ from es.txt; every other line comes from es.txt.
+# Names below are the ones the game's own es_MX table prints (2026-09-08): Píkoro, Milk,
+# Krillin, Esfera del Dragón, Makankosappo. Same rules as es.txt (key = value, '#' comments).
+
+# ---- Cutscene audio descriptions (audio_description_cues.lua) ------------------------
+ad_C01_000_S010_MOV_3780 = Píkoro aparece detrás de Goku.
+ad_C01_000_S010_MOV_5350 = Goku y Píkoro se lanzan uno contra otro.
+ad_C01_000_S020_MOV_15 = Píkoro dispara.
+ad_C01_000_S020_MOV_880 = El rayo azul de Goku choca con el de Píkoro.
+ad_C01_010_S030_MOV_1750 = La Esfera del Dragón de cuatro estrellas brilla.
+ad_C01_010_S030_MOV_6780 = Milk se despide con la mano.
+ad_C01_010_S070_GDM_25 = Goku y Gohan se reúnen con Krillin frente a Kame House.
+ad_C01_010_S080_MOV_10400 = Píkoro flota sobre una cresta.
+ad_C01_020_S010_GDM_25 = Goku vuela en la Nube voladora y Píkoro va a su lado.
+ad_C01_020_S030_GDM_25 = Goku y Píkoro encaran a Raditz en el páramo rocoso.
+ad_C01_020_S040_MOV_13500 = Píkoro alza dos dedos y la energía se concentra en las puntas.
+ad_C01_020_S040_MOV_15100 = Píkoro lanza el Makankosappo en espiral.

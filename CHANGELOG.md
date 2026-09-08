@@ -14,6 +14,10 @@
   Six real-time scenes have introductory lines only, not full visual coverage.
   Spoken in all 13 mod languages: the lines live in `Scripts\lang\<code>.txt` like
   every other string, with the English catalog text as the fallback.
+- **Latin American Spanish.** The game ships Spain and Latin America as separate text
+  tables with different character names (Milk, Krillin, Píkoro, Esfera del Dragón); the
+  mod now follows that split with an `es_mx.txt` overlay on `es.txt`, picked from the
+  game's language or forced from the config menu ("Español latino").
   Descriptions may accompany music/effects and yield to visible dialogue/subtitles.
   Pause or temporary clock-read gaps do not repeat an already consumed cue.
   Raditz-arrival text was drafted with ViddyScribe, frame-reviewed and retimed.

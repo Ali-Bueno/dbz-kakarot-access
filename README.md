@@ -22,7 +22,7 @@ changing how the game plays for everyone else.
 - **Audio navigation radar** with a directional beacon and arrival cues.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
 - **Translatable menus and announcements** — editable text files in 13 languages,
-  cutscene descriptions included.
+  cutscene descriptions included; Spanish follows the game's Spain / Latin America split.
 
 > Engine: Unreal Engine 4.21 · Loader: **UE4SS** · Screen reader: **PRISM**
 

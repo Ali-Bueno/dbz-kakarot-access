@@ -20,6 +20,8 @@ local I18n = {}
 local DEFAULT = "en"
 local lang = nil -- cached base code ("es", "en", …) once resolved
 local forced = nil -- explicit override from the mod config (nil = follow the game)
+local forced_variant = nil -- its regional variant, when the override names one (es_mx)
+local variant = nil -- detected regional variant of `lang`, or nil
 -- FAILURE MEMO (crash/perf audit RANK 18, 2026-07-31). `lang` used to be the sentinel for both
 -- "never detected" and "detect NOW", with no throttle: every I18n.t/button/key/keyhelp/header/
 -- startlist call routes through I18n.language() below, so a failed detect() — the boot/title
@@ -35,12 +37,18 @@ local LANG_RETRY_EVERY_S = 1.0
 -- exist for and the config menu can force. Order = the config menu's cycle order. Names
 -- are endonyms (spoken in their own script if the reader has the voice; the code is
 -- appended so selecting is always unambiguous by ear).
-I18n.LANGS = { "auto", "en", "es", "fr", "de", "it", "pt", "ru", "pl", "ja", "ko", "zh", "ar", "th" }
+I18n.LANGS = { "auto", "en", "es", "es_mx", "fr", "de", "it", "pt", "ru", "pl", "ja", "ko", "zh", "ar", "th" }
 I18n.LANG_NAMES = {
-    en = "English", es = "Español", fr = "Français", de = "Deutsch", it = "Italiano",
-    pt = "Português", ru = "Русский", pl = "Polski", ja = "日本語", ko = "한국어",
+    en = "English", es = "Español", es_mx = "Español latino", fr = "Français", de = "Deutsch",
+    it = "Italiano", pt = "Português", ru = "Русский", pl = "Polski", ja = "日本語", ko = "한국어",
     zh = "中文", ar = "العربية", th = "ไทย",
 }
+-- Regional VARIANTS the game ships as separate text tables whose NAMES differ from the base
+-- language's (counted in the two Message/PLAT_W tables, 2026-09-08: es_MX says Milk, Krillin,
+-- Esfera del Dragón, Makankosappo where es_ES says Chi-chi, Krilin, Bola Dragón, Cañón de Haz
+-- Especial). A variant is an OVERLAY: lang/<variant>.txt carries only the lines that differ,
+-- and every lookup tries it before the base file. Codes are lowercase (settings lowercases).
+I18n.VARIANTS = { es_mx = "es" }
 
 -- ---- language detection ----------------------------------------------------
 
@@ -61,8 +69,13 @@ local function detect()
         local dt = Core.member(mm, "DataTable")
         if Core.valid(dt) then path = dt:GetFullName() end
     end)
-    -- ".../Message/PLAT_W/es_ES/messageData…" → "es" (es_ES and es_MX both → es).
-    return path and path:match("/Message/[%w_]+/(%a%a)_%u%u") or nil
+    -- ".../Message/PLAT_W/es_ES/messageData…" → base "es"; the region only matters when it
+    -- names a known variant overlay ("es_MX" → "es_mx"), otherwise it is dropped.
+    if not path then return nil, nil end
+    local base, region = path:match("/Message/[%w_]+/(%a%a)_(%u%u)")
+    if not base then return nil, nil end
+    local v = base .. "_" .. region:lower()
+    return base, (I18n.VARIANTS[v] and v or nil)
 end
 
 -- Active base language: the config override wins; otherwise follow the game (cached;
@@ -70,23 +83,36 @@ end
 function I18n.language()
     if forced then return forced end
     if not lang and os.clock() >= lang_next then
-        lang = detect()
+        lang, variant = detect()
         if not lang then lang_next = os.clock() + LANG_RETRY_EVERY_S end
     end
     return lang or DEFAULT
 end
 
+-- Active regional variant code (see I18n.VARIANTS), or nil when the language has none.
+function I18n.variant()
+    if forced then return forced_variant end
+    I18n.language()   -- runs detection when it is due; sets `variant` alongside `lang`
+    return variant
+end
+
 -- Force a language from the mod config ("auto"/nil/"" = follow the game). Re-applied by
 -- app.lua on every reload (this module reloads and loses the override).
 function I18n.force_language(code)
-    if code == nil or code == "" or code == "auto" then forced = nil else forced = code end
+    if code == nil or code == "" or code == "auto" then
+        forced, forced_variant = nil, nil
+    elseif I18n.VARIANTS[code] then
+        forced, forced_variant = I18n.VARIANTS[code], code   -- a variant forces its base too
+    else
+        forced, forced_variant = code, nil
+    end
 end
 
 -- Drop the cached language so the next lookup re-detects (call after a language change).
 -- Also clears the RANK 18 failure memo: an explicit refresh must retry AT ONCE, not sit out a
 -- backoff left over from an earlier failed detection (config_menu.lua calls this right after
 -- the player picks a language, and expects the very next read to reflect it).
-function I18n.refresh() lang = nil lang_next = 0 end
+function I18n.refresh() lang, variant = nil, nil lang_next = 0 end
 
 -- ---- external string files (lang/<code>.txt) -------------------------------
 -- Users can override any string by dropping an editable text file next to the mod. A
@@ -141,6 +167,23 @@ end
 local function ext(code)
     if EXT[code] == nil then EXT[code] = load_ext(code) or false end
     return EXT[code] or nil
+end
+
+-- One value out of the external files for the ACTIVE language: the regional variant
+-- overlay first (it carries only the lines that differ), then the base language file.
+-- `get(e)` reads the wanted field from a parsed file table; nil = not there.
+local function ext_get(get)
+    local v = I18n.variant()
+    if v then
+        local e = ext(v)
+        if e then
+            local r = get(e)
+            if r ~= nil then return r end
+        end
+    end
+    local e = ext(I18n.language())
+    if e then return get(e) end
+    return nil
 end
 
 -- ---- string tables ---------------------------------------------------------
@@ -705,8 +748,8 @@ local S = {
 -- A plain localized string by key (falls back to English, then the key itself).
 function I18n.t(key)
     local L = I18n.language()
-    local e = ext(L)
-    if e and e[key] ~= nil then return e[key] end
+    local r = ext_get(function(e) return e[key] end)
+    if r ~= nil then return r end
     local t = S[L]
     if t and t[key] ~= nil then return t[key] end
     local d = S[DEFAULT][key]
@@ -718,12 +761,13 @@ end
 -- tokens use the language's "%s" fallback template so nothing is dropped.
 function I18n.button(token)
     local L = I18n.language()
-    local e = ext(L)
-    if e and e.buttons and e.buttons[token] then return e.buttons[token] end
+    local r = ext_get(function(e) return e.buttons and e.buttons[token] end)
+    if r then return r end
     local t = S[L] or S[DEFAULT]
     local b = t.buttons and t.buttons[token]
     if b then return b end
-    local fb = (e and e.button_fallback) or t.button_fallback or S[DEFAULT].button_fallback or "%s"
+    local fb = ext_get(function(e) return e.button_fallback end)
+        or t.button_fallback or S[DEFAULT].button_fallback or "%s"
     return string.format(fb, token)
 end
 
@@ -734,8 +778,8 @@ end
 function I18n.key(token)
     if token == nil or token == "" then return nil end
     local L = I18n.language()
-    local e = ext(L)
-    if e and e.keys and e.keys[token] then return e.keys[token] end
+    local r = ext_get(function(e) return e.keys and e.keys[token] end)
+    if r then return r end
     local t = S[L]
     return (t and t.keys and t.keys[token])
         or (S[DEFAULT].keys and S[DEFAULT].keys[token]) or token
@@ -745,8 +789,8 @@ end
 -- if the token has no descriptive name in any table.
 function I18n.keyhelp(token)
     local L = I18n.language()
-    local e = ext(L)
-    if e and e.keyhelp and e.keyhelp[token] then return e.keyhelp[token] end
+    local r = ext_get(function(e) return e.keyhelp and e.keyhelp[token] end)
+    if r then return r end
     local t = S[L]
     return (t and t.keyhelp and t.keyhelp[token])
         or (S[DEFAULT].keyhelp and S[DEFAULT].keyhelp[token]) or nil
@@ -756,8 +800,8 @@ end
 -- the value has no mapped name (then the reader stays silent rather than guessing).
 function I18n.header(ft)
     local L = I18n.language()
-    local e = ext(L)
-    if e and e.header and e.header[ft] then return e.header[ft] end
+    local r = ext_get(function(e) return e.header and e.header[ft] end)
+    if r then return r end
     local t = S[L]
     return (t and t.header and t.header[ft])
         or (S[DEFAULT].header and S[DEFAULT].header[ft]) or nil
@@ -788,8 +832,8 @@ end
 -- 0x404 byte), or nil if unmapped. This is the game's main-menu item id, NOT EXCmnHeaderFontType.
 function I18n.startlist(id)
     local L = I18n.language()
-    local e = ext(L)
-    if e and e.startlist and e.startlist[id] then return e.startlist[id] end
+    local r = ext_get(function(e) return e.startlist and e.startlist[id] end)
+    if r then return r end
     local t = S[L]
     return (t and t.startlist and t.startlist[id])
         or (S[DEFAULT].startlist and S[DEFAULT].startlist[id]) or nil

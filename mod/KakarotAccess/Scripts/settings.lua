@@ -21,7 +21,7 @@ local SCHEMA = {
     { key = "audio_descriptions", kind = "bool", def = true, comment = "Spoken cutscene descriptions on/off (on|off)" },
     { key = "radar_autotrack", kind = "bool", def = true,  comment = "Radar auto-tracks a new objective by itself (on|off)" },
     { key = "braille",         kind = "mode", def = "auto", comment = "Send everything spoken to a braille display too: auto (on if the screen reader supports it) | on | off" },
-    { key = "language",        kind = "lang", def = "auto", comment = "Mod language: auto (follow the game) or a code: en es fr de it pt ru pl ja ko zh ar th" },
+    { key = "language",        kind = "lang", def = "auto", comment = "Mod language: auto (follow the game) or a code: en es es_mx fr de it pt ru pl ja ko zh ar th" },
 }
 
 local DEFAULTS = {}
@@ -60,7 +60,7 @@ local function to_pct(raw, def)
 end
 
 local VALID_LANG = {
-    auto = true, en = true, es = true, fr = true, de = true, it = true, pt = true,
+    auto = true, en = true, es = true, es_mx = true, fr = true, de = true, it = true, pt = true,
     ru = true, pl = true, ja = true, ko = true, zh = true, ar = true, th = true,
 }
 
