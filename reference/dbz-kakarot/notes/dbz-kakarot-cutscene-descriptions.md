@@ -16,7 +16,19 @@ An absent active-clock sample retains plain cue/time history: pause or an unread
 poll must not repeat a consumed cue. Positive transition/free-roam gates, new sources
 and actual rewinds still reset it. No actor/player handles are retained for this.
 
-The catalog is English-only. The config menu and Scripts/config.txt expose the
+The catalog text is the English source; every cue carries a derived key
+(`ad_<scene>_<centiseconds>`, set at load) and lang/<code>.txt carries the same line for the
+other 12 languages (2026-09-08; the adapter falls back to the catalog text when a key is
+absent, and test_audio_description_cues.lua fails if any language lacks a cue). The
+translations were produced from the English cues, not from the frames, so they inherit
+the English timing; per-language speech-duration fit is NOT checked (the live dialogue gate
+still wins). Names follow each language's DBZ Kakarot / anime localization; flagged for a
+native check: de Radditz / Jindujun / Höllenspirale (game text may say Raditz / Kinto Un /
+Makankosappo), ru Радиц / Макканкосаппо / Каме Хаус (no official Russian game text to
+check against), ar attack/scouter calques, zh 龟屋 (vs 龟仙屋), ko 내퍼 (vs 납파), th names
+(fan convention; the game ships no Thai), es Chi-Chi and rastreador (Spain dub: Milk /
+scouter), it Raditz / Piccolo (dub: Radish / Junior), fr Chichi unhyphenated.
+The config menu and Scripts/config.txt expose the
 audio_descriptions switch. No network service, API key, generated narration audio,
 modified movie or new native dependency is required at runtime.
 

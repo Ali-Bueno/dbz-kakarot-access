@@ -164,9 +164,9 @@ ru, pl, ja, ko, zh, ar, th). Open your language's file in a plain-text editor,
 change the text on the RIGHT of each "key = value" line, keep the %s and %d
 placeholders exactly, and save as UTF-8. Changes apply on the next launch (or
 instantly with Ctrl+Shift+R). If a line is missing it falls back to English, so
-you can't break it. See Scripts\lang\README.txt for the full rules. The new
-cutscene-description catalog is English-only and lives in audio_description_cues.lua;
-changing the interface language does not translate those descriptions.
+you can't break it. See Scripts\lang\README.txt for the full rules. The cutscene
+descriptions are in those files too (the ad_ lines at the end); their timing lives in
+audio_description_cues.lua, whose English text is the fallback for a missing line.
 
 
 NOT YET SUPPORTED (coming)

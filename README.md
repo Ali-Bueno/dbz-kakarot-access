@@ -21,8 +21,8 @@ changing how the game plays for everyone else.
   through the same screen reader. On by default when your reader supports it.
 - **Audio navigation radar** with a directional beacon and arrival cues.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
-- **Translatable menus and announcements** — editable text files in 13 languages.
-  The new development cutscene-description catalog is English-only.
+- **Translatable menus and announcements** — editable text files in 13 languages,
+  cutscene descriptions included.
 
 > Engine: Unreal Engine 4.21 · Loader: **UE4SS** · Screen reader: **PRISM**
 

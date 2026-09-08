@@ -7,6 +7,7 @@
 
 local Core = require("ui_core")
 local Speech = require("speech")
+local I18n = require("i18n")
 local Dialogue = require("screen_dialogue")
 local Settings = require("settings")
 local Transition = require("transition")
@@ -30,8 +31,13 @@ local function log_no_cues(key)
 end
 
 local engine = Engine.new(Cues,
-    function(text, interrupt, no_requeue)
-        Speech.say(text, interrupt, no_requeue)
+    function(text, interrupt, no_requeue, key)
+        -- The catalog text is the English source; lang/<code>.txt carries the same line
+        -- under `key` for the other languages. I18n.t answers the key itself when a
+        -- language lacks the entry, and English has none (the catalog IS its text).
+        local line = key and I18n.t(key) or nil
+        if not line or line == key then line = text end
+        Speech.say(line, interrupt, no_requeue)
     end,
     function()
         -- This performs a fresh, guarded surface read only when a cue is due.

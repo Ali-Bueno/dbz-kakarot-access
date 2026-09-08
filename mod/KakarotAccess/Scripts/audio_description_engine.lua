@@ -112,7 +112,7 @@ function Player:update(raw_source, seconds, playing, enabled)
     -- Queue behind any speech already reaching the reader. no_requeue=true makes
     -- an immediately following subtitle discard the description instead of
     -- reviving it after the scene has moved on.
-    self.say(cue.text, false, true)
+    self.say(cue.text, false, true, cue.key)
     return true
 end
 

@@ -34,6 +34,11 @@ stub("speech", {
         spoken[#spoken + 1] = { text, interrupt, no_requeue }
     end,
 })
+-- Mirrors I18n.t: a key with no entry in the active language answers the key itself.
+local translations = {}
+stub("i18n", {
+    t = function(key) return translations[key] or key end,
+})
 stub("screen_dialogue", {
     is_active = function() return dialogue end,
 })
@@ -94,6 +99,27 @@ do
         "reads the exact Mana playback clock and emits the matching movie cue")
     check(spoken[1] and spoken[1][2] == false and spoken[1][3] == true,
         "preserves non-interrupting, no-requeue speech priority")
+end
+
+do
+    -- The same cue in a language that carries the line under its lang-file key.
+    Description.reset()
+    spoken = {}
+    translations["ad_C01_000_S010_MOV_10"] = "Un bosque de bambú."
+    local clock = 0
+    local source = named("ManaMovie /Game/Art/DEMO/C01/000/S010/mov/C01_000_S010_mov")
+    movie_actors = { { ManaPlayer = {
+        IsPlaying = function() return true end,
+        GetTime = function() return clock end,
+        GetSource = function() return source end,
+    } } }
+    sequence_actors = {}
+    registered.fn()
+    clock = 0.11
+    registered.fn()
+    check(#spoken == 1 and spoken[1][1] == "Un bosque de bambú.",
+        "speaks the localized line when the active language carries the cue's key")
+    translations["ad_C01_000_S010_MOV_10"] = nil
 end
 
 do

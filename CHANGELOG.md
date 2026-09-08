@@ -12,6 +12,8 @@
 - **Opening-through-Raditz visual descriptions.** A switchable development catalog
   of 60 compact cues across 15 MOV/GDM sources, driven by the native playback clock.
   Six real-time scenes have introductory lines only, not full visual coverage.
+  Spoken in all 13 mod languages: the lines live in `Scripts\lang\<code>.txt` like
+  every other string, with the English catalog text as the fallback.
   Descriptions may accompany music/effects and yield to visible dialogue/subtitles.
   Pause or temporary clock-read gaps do not repeat an already consumed cue.
   Raditz-arrival text was drafted with ViddyScribe, frame-reviewed and retimed.

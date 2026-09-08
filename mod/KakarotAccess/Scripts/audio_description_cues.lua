@@ -11,7 +11,7 @@
 -- GDM entries are restrained scene-setting lines for real-time sequencer demos.
 -- They are keyed by the master sequence name recovered from the installed PAKs.
 
-return {
+local CUES = {
     C01_000_S010_MOV = {
         { at = 0.10,  before = 1.85,  text = "A bamboo forest." },
         { at = 11.60, before = 13.91, text = "Young Gohan watches." },
@@ -122,3 +122,15 @@ return {
         { at = 73.10, before = 75.73, text = "They streak away." },
     },
 }
+
+-- Every cue carries a stable lang-file key, `ad_<source>_<at in centiseconds>`, so the
+-- text above stays the English source (and the timing QA below stays valid for it) while
+-- lang/<code>.txt supplies the same line in the mod's other languages. The adapter looks
+-- the key up and falls back to `text` when a language has no entry.
+for source, list in pairs(CUES) do
+    for _, cue in ipairs(list) do
+        cue.key = string.format("ad_%s_%d", source, math.floor(cue.at * 100 + 0.5))
+    end
+end
+
+return CUES

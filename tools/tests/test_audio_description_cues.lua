@@ -77,6 +77,32 @@ for i, cue in ipairs(arrival) do
 end
 check(count >= 45, "catalog contains at least 45 timed visual descriptions")
 
+-- Every language file carries every cue under its derived key (the adapter speaks the
+-- English catalog text only as a fallback). Parsed with the same line pattern as
+-- i18n.lua's load_ext, so a line the mod could not read fails here too.
+local LANGS = { "ar", "de", "es", "fr", "it", "ja", "ko", "pl", "pt", "ru", "th", "zh" }
+for _, code in ipairs(LANGS) do
+    local path = here .. "../../mod/KakarotAccess/Scripts/lang/" .. code .. ".txt"
+    local f = io.open(path, "r")
+    check(f ~= nil, "lang/" .. code .. ".txt exists")
+    local entries = {}
+    if f then
+        for line in f:lines() do
+            local key, val = line:match("^%s*([^#=%s][^=]-)%s*=%s*(.-)%s*$")
+            if key then entries[key] = val end
+        end
+        f:close()
+    end
+    local missing = 0
+    for _, list in pairs(Cues) do
+        for _, cue in ipairs(list) do
+            local v = entries[cue.key]
+            if type(v) ~= "string" or v == "" then missing = missing + 1 end
+        end
+    end
+    check(missing == 0, "lang/" .. code .. ".txt carries all " .. count .. " cue lines (missing " .. missing .. ")")
+end
+
 if fails > 0 then
     print(("%d check(s) FAILED"):format(fails))
     os.exit(1)
