@@ -42,6 +42,8 @@ stub("settings", {
         assert(key == "audio_descriptions", "adapter asked for an unexpected setting")
         return enabled
     end,
+    -- Mirrors settings.lua: the adapter reads the toggle through this accessor.
+    descriptions_enabled = function() return enabled ~= false end,
 })
 stub("transition", {
     active = function() return in_transition end,

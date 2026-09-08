@@ -255,8 +255,14 @@ and what is genuinely missing. Local follow-ups are dated below.
   misses, noise) before it can be scoped.
 - **DLC menu — implemented locally, positive user feedback.** `screen_dlc.lua` reads the
   selected native pane and releases parked panes; the screen is directory-mapped through the
-  manager, without a new class scan. Further checks: rapid selection changes, back to the ring
-  and F1 repeat. The reader does not purchase, unlock or launch DLC.
+  manager, without a new class scan (a class that is never instantiated would cost a ~65 ms
+  `FindAllOf` every `ABSENT_BACKOFF` ~4 s forever — which is why it is pointer-mapped, not
+  scanned). Ring entry: `START_TOP_LIST_ID` DLC = 14; widget selector `DLC = 35` in `i18n.lua`.
+  Further checks: rapid selection changes, back to the ring and F1 repeat. The reader does not
+  purchase, unlock or launch DLC. Review note (2026-09-08, merge of PR #1): `is_active` claims
+  the tick on `pane_live(host)` alone and stays silent until the title settles — the
+  recovery-tab shape from the playbook; left as authored because it was user-tested, but if a
+  screen registered after it (save/load, tutorials) ever goes quiet, gate it on `title ~= nil`.
 
 ## Backlog
 

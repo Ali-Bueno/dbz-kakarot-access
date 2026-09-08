@@ -1286,9 +1286,11 @@ local function board_update()
         panel_cache = nil                    -- socket layout changes with the board
         last_idx, label_cache, label_idx = nil, nil, nil   -- labels too
     end
-    -- Separate speech history from the cache title above. Keep the entry summary
-    -- short: overall level/rank, placed emblems and action hint. Community skills
-    -- remain available through the game's Details action.
+    -- Separate speech history from the cache title above. Board entry summary —
+    -- kept SHORT (user 2026-07-16: the full readout dumped all ~10 community skills
+    -- in one breath, "todo junto"): overall level/rank + placed emblems + the action
+    -- hint only; the community-skills LIST is on demand via the game's "Y: Detalles"
+    -- (skills_text() stays for a future dedicated key).
     if title and title ~= summary_title then
         summary_title = title
         local bits = {}

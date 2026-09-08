@@ -38,6 +38,8 @@ local Mem = require("mem")
 
 local Nav = {}
 Nav._dragonball_marker = require("dragonball_marker")
+-- NOTE: this file sits AT Lua's 200-upvalue/local limit for the main chunk. A new module-level
+-- `local` fails to compile ("too many local variables"); hang new state off `Nav` instead.
 
 -- AMBIENT CUE CHANNEL -- the beacon's own transient lines, and only those.
 --
@@ -1141,6 +1143,18 @@ end)
 -- already visited this sweep. Speaks the new target via set_manual_target; announces
 -- the sweep done (and ends it) when nothing is left. Game thread only; caller has
 -- already passed the world gates this tick.
+-- A pick set_manual_target REFUSED (a Dragon Ball whose native marker was unreadable
+-- at that instant) is parked in the bounded, handle-free resume lane instead of being
+-- dropped: the lane re-enumerates and retries it a few times, then gives up. Shared by
+-- the chained sweep and the R3/V picker so every caller handles a refusal the same way.
+-- A pick replaces whatever was tracked (as an accepted one does), so the old target is
+-- dropped silently here too — otherwise the resume lane, which only runs with no target,
+-- would sit on the deferred ball until the old target was reached and surface it then.
+function Nav.defer_pick(it)
+    if target then drop_target() Audio.stop() end
+    resume_pick = { key = it.key, grp = it.grp, stateful = it.stateful, tries = 0 }
+end
+
 local function chain_to_next(grp)
     local cats = Nav.list_targets()
     for _, c in ipairs(cats) do
@@ -1149,11 +1163,7 @@ local function chain_to_next(grp)
                 if not chain_seen[it.key] then
                     if not Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
                         it.grp, it.stateful, true) then   -- keep the sweep's seen-set
-                        -- A marker may become unreadable between enumeration and
-                        -- acceptance. Reuse the bounded, handle-free resume lane;
-                        -- dropping this rejected pick would strand the sweep.
-                        resume_pick = { key = it.key, grp = it.grp,
-                                        stateful = it.stateful, tries = 0 }
+                        Nav.defer_pick(it)   -- dropping it would strand the sweep
                     end
                     return
                 end
@@ -3689,7 +3699,7 @@ function Nav.list_targets(boxed)
         -- EMapIcon alone does not prove a ball is available. Only the displayed
         -- native marker path below may nominate one; component scans must not
         -- restore an inactive/hidden ball that path deliberately excluded.
-        if t == 28 and src ~= "dragonball" then return end
+        if t == Nav._dragonball_marker.ICON_TYPE and src ~= "dragonball" then return end
         if is_mission_marker(actor) then
             add_target(actor, "quests", "nav_other", nil, src)
             return
@@ -3757,7 +3767,7 @@ function Nav.list_targets(boxed)
                         -- Only a currently displayed, active native marker earns
                         -- the fallback. Other categories keep their existing path.
                         if Nav._dragonball_marker.actor(icon, mm) then
-                            add_icon(ta, 28, "dragonball")
+                            add_icon(ta, Nav._dragonball_marker.ICON_TYPE, "dragonball")
                         else
                             add_icon(ta, (icon_info(ta)), "mapicon")
                         end

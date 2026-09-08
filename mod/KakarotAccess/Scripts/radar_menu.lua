@@ -181,8 +181,12 @@ local function do_close(mode)
         local it = cat and cat.items[ii]
         if it and it.actor then
             -- grp/stateful drive the arrival chaining for pickup categories.
-            Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
-                it.grp, it.stateful)
+            -- A refused pick (Dragon Ball marker unreadable this instant) is parked
+            -- for a bounded retry rather than silently lost — same as the chained sweep.
+            if not Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
+                it.grp, it.stateful) then
+                Nav.defer_pick(it)
+            end
         end
     elseif mode == "stop" then
         Nav.stop_tracking()

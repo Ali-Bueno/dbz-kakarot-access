@@ -158,7 +158,7 @@ function Description.step()
         print(string.format("[KakarotAccess] audio description source: %s\n", key))
     end
 
-    engine:update(source, seconds, playing, Settings.get("audio_descriptions") ~= false)
+    engine:update(source, seconds, playing, Settings.descriptions_enabled())
 end
 
 function Description.start()

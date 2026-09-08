@@ -5,6 +5,9 @@ local Core = require("ui_core")
 local Mem = require("mem")
 local Off = require("native_offsets").miniMapIcon
 local Marker = {}
+-- EMapIcon::DRAGON_BALL (AT_enums.hpp) via native_offsets — the one place the value is named;
+-- nav_tracker reads it from here rather than carrying its own literal.
+Marker.ICON_TYPE = Off.dragonBallType
 local icon_class -- native UClass only; never a per-world actor/widget handle
 
 -- Returns the live pickup, or nil. The second result is false only when native
