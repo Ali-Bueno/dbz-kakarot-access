@@ -37,6 +37,13 @@ Your edits take effect on the next game launch, or immediately with Ctrl+Shift+R
 If a file is missing or a key is deleted, the mod falls back to English (built in), so you
 can never break it — worst case a line is spoken in English.
 
+Cutscene descriptions
+---------------------
+The ad_ lines at the end of each file are the timed cutscene descriptions (one block per
+scene: the opening before the main menu, then the story scenes up to Raditz). Their timing
+lives in Scripts\audio_description_cues.lua; here you only translate the words. Keep them
+SHORT — they are spoken between lines of dialogue, and a longer sentence talks over the next.
+
 Regional variants (overlays)
 ----------------------------
 The game ships two Spanish text tables, Spain (es_ES) and Latin America (es_MX), and the

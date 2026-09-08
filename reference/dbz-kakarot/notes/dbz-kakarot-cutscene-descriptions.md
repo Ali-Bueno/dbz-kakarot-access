@@ -33,9 +33,51 @@ es_ES prints Chi-chi, Krilin, Piccolo, Nube voladora, Bola Dragón de cuatro est
 Cañón de Haz Especial, rastreador; es_MX prints Milk, Krillin, Píkoro, nube voladora, Esfera del
 Dragón, Makankosappo, Rastreador. The game ships them as SEPARATE languages, so the mod gained
 regional-variant overlays (`I18n.VARIANTS`, `lang/es_mx.txt` holds only the differing lines).
+**Italian verified the same way** (it_IT table): Radish (100) not Raditz (0), Crilin, Piccolo, Freezer, Cell, Re Kaio, maestro Muten (not Genio delle Tartarughe), West City (not Città dell'Ovest), Kienzan, scimmione, Capsule Corporation, Super Saiyan; the Nimbus name did not resolve (neither Nuvola Speedy nor Nuvola d'oro occur — the table has a `Nuvola d…` form worth a closer look), so it.txt keeps Nuvola Speedy for now.
 The config menu and Scripts/config.txt expose the
 audio_descriptions switch. No network service, API key, generated narration audio,
 modified movie or new native dependency is required at runtime.
+
+## How to describe ANOTHER cutscene (the repeatable method, 2026-09-08)
+
+Everything needed is local; no service is required. What the PR author used, reduced to steps:
+
+1. **Find the movie.** Pre-rendered scenes are CriWare `.usm` files in
+   `…\DRAGON BALL Z KAKAROT\AT\Content\Movies\` (236 of them; NOT in the paks). The catalog
+   key is the file name upper-cased without `_mov`: `C00_000_S000_mov.usm` → `C00_000_S000_MOV`.
+   The mod tells you which one is playing: with descriptions on, an undescribed scene logs
+   `[KakarotAccess] audio description: no cues for <KEY>` — grep the log after a session and
+   you have the exact list of what the player saw and heard nothing for.
+2. **Look at it.** The installed FFmpeg (8.x) reads USM directly (mpeg1video + adpcm_adx):
+   `ffmpeg -ss <start> -t <len> -i <file>.usm -vf "fps=1,scale=400:-1,tile=4x6:padding=4:margin=4" -frames:v 1 sheet.png`
+   gives a contact sheet, one frame per second, read left-to-right per row (frame i is at
+   start + i s). Two passes: fps=1/2 for the whole movie to see the scenes, then fps=1 over the
+   fast-cut stretches. The assistant can view the PNG and describe it. (`drawtext` timestamps
+   need fontconfig, which the winget FFmpeg lacks — count tiles instead.)
+3. **Find the dialogue-free gaps.** Story movies carry spoken lines; a description must not
+   overlap one. `silencedetect` only finds true silence (useless under music); the PR author
+   analysed the two mono voice tracks of the USM's audio to get the gaps recorded as `before`.
+   For a pure music montage (the title intro) there are no gaps to respect.
+4. **Write compact cues** into `audio_description_cues.lua`: present tense, ≤ 7 words, `at` on
+   the file's own clock (the Mana clock the adapter reads is the same timeline), starts ≥ ~1.3 s
+   apart, `before` = the next dialogue boundary when there is one. `test_audio_description_cues.lua`
+   checks the English speech estimate against `before`.
+5. **Translate**: generate the `key = English` list, get the 12 languages (+ the `es_mx`
+   overlay for lines whose names differ), append under a per-scene header at the end of each
+   `lang/<code>.txt`, and run the tests — they fail if any language lacks a cue.
+6. **Verify Spanish names against the game's tables** (`repak get … Message/PLAT_W/<code>/messageData.uexp`,
+   then count candidate spellings); the same trick works for every language the game ships.
+
+Real-time GDM scenes are not movies: there is no file to look at, only in-game frames, which
+is why the six GDM entries are one-liners.
+
+### Title-screen opening — C00_000_S000_MOV (2026-09-08)
+
+41 cues over 1:49, authored from FFmpeg sheets (1 frame/s over every cut). Music montage, no
+dialogue; the log had already named the source at the title screen (`no cues for
+C00_000_S000_MOV`), so no adapter change was needed. Uncertain identifications, kept generic
+on purpose: the blond fighter lunging at ~80 s (not named), the figure blasted at 65 s
+(read as young Gohan), the golden burst at 66–67 s (read as Vegeta from the blue suit).
 
 ## Authoring and visual review — September 5, 2026
 

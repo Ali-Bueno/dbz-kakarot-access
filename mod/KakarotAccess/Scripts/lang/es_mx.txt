@@ -17,3 +17,16 @@ ad_C01_020_S010_GDM_25 = Goku vuela en la Nube voladora y Píkoro va a su lado.
 ad_C01_020_S030_GDM_25 = Goku y Píkoro encaran a Raditz en el páramo rocoso.
 ad_C01_020_S040_MOV_13500 = Píkoro alza dos dedos y la energía se concentra en las puntas.
 ad_C01_020_S040_MOV_15100 = Píkoro lanza el Makankosappo en espiral.
+
+# ---- Title-screen opening (C00_000_S000_MOV) ----------------------------------------
+ad_C00_000_S000_MOV_40 = Sobre rojo, se ilumina la Esfera del Dragón de cuatro estrellas.
+ad_C00_000_S000_MOV_1830 = La Esfera del Dragón de cuatro estrellas en el gorro de Gohan.
+ad_C00_000_S000_MOV_2830 = Goku en la nube voladora, Píkoro vuela a su lado.
+ad_C00_000_S000_MOV_3440 = Kaio fuera de su casa redonda.
+ad_C00_000_S000_MOV_4830 = Ciudad del Oeste y las cúpulas de la Corporación Cápsula.
+ad_C00_000_S000_MOV_5600 = Krillin alza un Kienzan.
+ad_C00_000_S000_MOV_6650 = Vegeta estalla en Supersaiyajin.
+ad_C00_000_S000_MOV_6920 = Píkoro carga un rayo en la punta de los dedos.
+ad_C00_000_S000_MOV_8120 = Cell lanza un rayo verde.
+ad_C00_000_S000_MOV_8240 = Vegeta en Supersaiyajin grita.
+ad_C00_000_S000_MOV_10430 = El equipo, tres de ellos Supersaiyajin.

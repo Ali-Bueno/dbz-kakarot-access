@@ -14,6 +14,8 @@
   Six real-time scenes have introductory lines only, not full visual coverage.
   Spoken in all 13 mod languages: the lines live in `Scripts\lang\<code>.txt` like
   every other string, with the English catalog text as the fallback.
+- **Title-screen opening described.** 41 cues over the 1:49 opening montage that plays
+  before the main menu, in all 13 languages.
 - **Latin American Spanish.** The game ships Spain and Latin America as separate text
   tables with different character names (Milk, Krillin, Píkoro, Esfera del Dragón); the
   mod now follows that split with an `es_mx.txt` overlay on `es.txt`, picked from the

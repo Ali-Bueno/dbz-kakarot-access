@@ -19,6 +19,7 @@ end
 -- battle is explicit here. An empty table is meaningful: that movie was reviewed
 -- but has no safe dialogue-free description window.
 local REQUIRED = {
+    "C00_000_S000_MOV",
     "C01_000_S010_MOV", "C01_000_S020_MOV", "C01_000_S040_MOV",
     "C01_010_S010_GDM", "C01_010_S020_GDM", "C01_010_S025_MOV",
     "C01_010_S030_MOV", "C01_010_S040_MOV", "C01_010_S070_GDM",

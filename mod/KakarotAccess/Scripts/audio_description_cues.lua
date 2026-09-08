@@ -12,6 +12,55 @@
 -- They are keyed by the master sequence name recovered from the installed PAKs.
 
 local CUES = {
+    -- Title-screen opening (Content/Movies/C00_000_S000_mov.usm, 1:49). A music montage
+    -- with no dialogue, so the cues run back to back with no `before` gaps to respect.
+    -- Authored 2026-09-08 from FFmpeg contact sheets of the installed USM (1 frame/s
+    -- across every cut), timed on the file's own clock, which is the Mana clock the
+    -- adapter reads (the log already named this source at the title screen).
+    C00_000_S000_MOV = {
+        { at = 0.40,   text = "On red, the four-star ball lights up." },
+        { at = 5.20,   text = "The Dragon Ball Z logo over a sunny sea." },
+        { at = 10.20,  text = "Kakarot completes the title." },
+        { at = 15.20,  text = "A fast flight over green cliffs." },
+        { at = 18.30,  text = "The four-star ball on Gohan's hat." },
+        { at = 20.60,  text = "Goku and Gohan smile side by side." },
+        { at = 24.20,  text = "A huge fish leaps from the water." },
+        { at = 26.30,  text = "Goku eats with chopsticks." },
+        { at = 28.30,  text = "Goku on the Nimbus, Piccolo flying beside him." },
+        { at = 30.40,  text = "Bulma waves." },
+        { at = 32.30,  text = "Master Roshi with his staff at Kame House." },
+        { at = 34.40,  text = "King Kai outside his round house." },
+        { at = 36.40,  text = "A frozen sea under snowy mountains." },
+        { at = 40.40,  text = "A green meadow among trees." },
+        { at = 44.30,  text = "Kame House on its tiny island." },
+        { at = 48.30,  text = "West City and the Capsule Corp domes." },
+        { at = 51.20,  text = "A dinosaur chases young Gohan." },
+        { at = 52.60,  text = "Goku grapples Raditz, then Frieza." },
+        { at = 56.00,  text = "Krillin raises a Destructo Disc." },
+        { at = 58.30,  text = "Goku roars, powering up." },
+        { at = 60.20,  text = "A Great Ape against the full moon." },
+        { at = 62.40,  text = "Fists fly at the camera." },
+        { at = 65.20,  text = "Gohan is blasted back." },
+        { at = 66.50,  text = "Vegeta erupts into Super Saiyan." },
+        { at = 69.20,  text = "Piccolo charges a beam at his fingertips." },
+        { at = 70.50,  text = "Trunks fires from his palm." },
+        { at = 73.20,  text = "Vegeta powers up in a crater." },
+        { at = 75.20,  text = "Goku crouches on a rock." },
+        { at = 76.50,  text = "Goku and Vegeta, face to face." },
+        { at = 78.20,  text = "Frieza screams." },
+        { at = 81.20,  text = "Cell fires a green beam." },
+        { at = 82.40,  text = "Super Saiyan Vegeta shouts." },
+        { at = 84.50,  text = "Vegeta bursts with pink energy." },
+        { at = 87.20,  text = "Goku dives, shouting." },
+        { at = 88.50,  text = "The land seen from far above." },
+        { at = 90.40,  text = "Goku grins in a fighting stance." },
+        { at = 92.40,  text = "Red rock towers across a wide valley." },
+        { at = 94.30,  text = "A Kamehameha builds and fires." },
+        { at = 98.20,  text = "Three pillars of light rise at night." },
+        { at = 100.50, text = "The heroes stand together on red." },
+        { at = 104.30, text = "The team, three of them Super Saiyan." },
+    },
+
     C01_000_S010_MOV = {
         { at = 0.10,  before = 1.85,  text = "A bamboo forest." },
         { at = 11.60, before = 13.91, text = "Young Gohan watches." },
