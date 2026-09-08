@@ -87,6 +87,7 @@ cfg_auto = تلقائي
 cfg_pct = %d بالمئة
 cfg_audio_cues = الإشارات الصوتية
 cfg_cue_volume = مستوى صوت الإشارات
+cfg_audio_descriptions = الوصف الصوتي للمشاهد
 cfg_radar_autotrack = الرادار التلقائي
 cfg_braille = إخراج البريل
 cfg_language = اللغة

@@ -37,6 +37,7 @@ local Mem = require("mem")
 -- lesson is not to add one. `require` is a cached table lookup after the first call.
 
 local Nav = {}
+Nav._dragonball_marker = require("dragonball_marker")
 
 -- AMBIENT CUE CHANNEL -- the beacon's own transient lines, and only those.
 --
@@ -1124,6 +1125,12 @@ Transition.on_begin("nav_tracker", function()
     -- The shared picker snapshot is a whole LIST of world-actor handles (Nav.targets_cached):
     -- every actor in it lived in the level that is being torn down.
     Nav.targets_snap, Nav.targets_snap_at = nil, 0
+    -- So is the in-flight boxed build: its raw scan lists are actors from the dead level, and
+    -- a surviving `partial` makes the next sweep RESUME them (list_targets spares a partial
+    -- build by design). Same pairing as in release_world_refs.
+    Nav.SW.lists, Nav.SW.partial = nil, false
+    -- Manager-list owners are GameMode components from this level, not process-lifetime roots.
+    Nav.SW.mgr = {}
     gated_prev = true        -- audio is being stopped right here
     Audio.stop()
 end)
@@ -1140,8 +1147,14 @@ local function chain_to_next(grp)
         if c.key == grp then
             for _, it in ipairs(c.items) do   -- nearest first
                 if not chain_seen[it.key] then
-                    Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
-                        it.grp, it.stateful, true)   -- true: keep the sweep's seen-set
+                    if not Nav.set_manual_target(it.actor, it.key, Nav.item_label(it),
+                        it.grp, it.stateful, true) then   -- keep the sweep's seen-set
+                        -- A marker may become unreadable between enumeration and
+                        -- acceptance. Reuse the bounded, handle-free resume lane;
+                        -- dropping this rejected pick would strand the sweep.
+                        resume_pick = { key = it.key, grp = it.grp,
+                                        stateful = it.stateful, tries = 0 }
+                    end
                     return
                 end
             end
@@ -1178,6 +1191,11 @@ local function chain_step(px, py, pz)
     end
     -- Only a handle that is non-nil AND fails validation counts as collected/despawned.
     local advance = not Core.valid(a)
+    if not advance and chain_wait.grp == "dragonball" then
+        -- Collection can retire the map marker before destroying/hiding its
+        -- actor. An unavailable read is NOT evidence that the ball was taken.
+        advance = Nav._dragonball_available(a) == false
+    end
     if not advance then
         local hidden, st = false, nil
         -- chain_wait.actor was captured on an earlier tick: streaming can free it.
@@ -1650,6 +1668,16 @@ function Nav.release_world_refs()
     -- is what makes the TTL safe — a served snapshot can then only ever contain handles gathered
     -- inside the SAME uninterrupted free-roam window as the caller asking for it.
     Nav.targets_snap, Nav.targets_snap_at = nil, 0
+    -- The in-flight BOXED build is the same hazard once more: Nav.SW.lists holds the sweep's
+    -- raw FindAllOf results — world-actor handles in bulk — and `partial` is what makes
+    -- list_targets RESUME that build instead of restarting it, so both must fall together or
+    -- the first sweep on the other side of the gate re-walks pre-gate handles (combat destroys
+    -- exactly those actors, and a recycled address passes Core.valid). The interrupted build
+    -- simply restarts: `targets_want` survives, and no build can reopen while the gates hold
+    -- field_ready() false.
+    Nav.SW.lists, Nav.SW.partial = nil, false
+    -- manager_list caches GameMode components; those owners die with the same world actors.
+    Nav.SW.mgr = {}
     -- Both of these are PER-WORLD engine objects that were released only by the map-transition
     -- hook (2026-07-31 audit). A battle, a cutscene or a streaming boundary closes this gate with
     -- no LoadMap, so the transition flush never ran and they survived — and unlike a Lua-side
@@ -1841,10 +1869,14 @@ local function step()
                 end
             end
             if found then
-                resume_pick = nil
+                -- Selection revalidates Dragon Ball markers and may refuse a
+                -- stale snapshot or an unreadable native state. Only a successful
+                -- set_manual_target clears resume_pick; otherwise retain the
+                -- existing bounded retry window instead of losing the user's pick.
                 Nav.set_manual_target(found.actor, found.key, Nav.item_label(found),
                     found.grp, found.stateful, true)   -- keep_sweep: resume, not a fresh pick
-            elseif resume_pick.tries >= RESUME_TRIES then
+            end
+            if resume_pick and resume_pick.tries >= RESUME_TRIES then
                 resume_pick = nil
             end
         end
@@ -2035,6 +2067,10 @@ local function step()
     -- and 1647 still drops the target when the misses reach LOST_SCANS.
     local coasting = target_missing > 0 and target.lx ~= nil
     if sweeping and not coasting then
+        if target.grp == "dragonball" and Nav._dragonball_available(target.actor) == false then
+            chain_over()
+            return
+        end
         local hidden, st = false, nil
         -- target.actor is a handle picked minutes ago; the actor can be freed under it.
         pcall(function() hidden = Core.member(target.actor, "bHidden") end)
@@ -2707,6 +2743,10 @@ end
 -- the world during a menu-covered teardown can abort).
 function Nav.field_ready()
     return not Transition.active() and not ui_muted() and world_alive()
+end
+
+function Nav._dragonball_available(actor)
+    return Nav._dragonball_marker.contains(minimap(), actor)
 end
 
 -- Snapshot the currently navigable field targets, grouped into the L1/R1 categories.
@@ -3646,6 +3686,10 @@ function Nav.list_targets(boxed)
     -- spoke the same "base enemiga" with nothing to tell them apart.
     local function add_icon(actor, t, src, noun_override)
         if not t then return end
+        -- EMapIcon alone does not prove a ball is available. Only the displayed
+        -- native marker path below may nominate one; component scans must not
+        -- restore an inactive/hidden ball that path deliberately excluded.
+        if t == 28 and src ~= "dragonball" then return end
         if is_mission_marker(actor) then
             add_target(actor, "quests", "nav_other", nil, src)
             return
@@ -3695,7 +3739,7 @@ function Nav.list_targets(boxed)
             end
         end
     end
-    -- 2) every minimap icon with a typed component
+    -- 2) minimap icons: native Dragon Ball markers, otherwise typed components
     local mm = minimap()
     if Core.valid(mm) then
         pcall(function()
@@ -3708,7 +3752,15 @@ function Nav.list_targets(boxed)
                     -- as best_candidate's mapicon fallback above.
                     local ta = Core.member(icon, "TargetActor")
                     if Core.valid(ta) then
-                        add_icon(ta, (icon_info(ta)), "mapicon")
+                        -- The game registers Dragon Ball markers directly with the
+                        -- minimap; their actor need not own an ATMapIconComponent.
+                        -- Only a currently displayed, active native marker earns
+                        -- the fallback. Other categories keep their existing path.
+                        if Nav._dragonball_marker.actor(icon, mm) then
+                            add_icon(ta, 28, "dragonball")
+                        else
+                            add_icon(ta, (icon_info(ta)), "mapicon")
+                        end
                     end
                 end
             end
@@ -4410,6 +4462,8 @@ end
 -- keep_sweep = internal (chain_to_next): keep the sweep's visited set; a player pick
 -- starts a FRESH sweep instead.
 function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
+    if grp == "dragonball" and (not Nav.field_ready()
+        or Nav._dragonball_available(actor) ~= true) then return false end
     if not Core.valid(actor) then return false end
     on = true
     auto_suppressed = false   -- an explicit pick resumes normal tracking

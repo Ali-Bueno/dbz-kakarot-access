@@ -2,6 +2,43 @@
 
 ---
 
+## Unreleased
+
+### New
+
+- **Downloadable Content menu reader.** Announces the selected DLC's visible title,
+  availability, story and details; F1 repeats the entry. Settles changing detail
+  text and releases parked panes without guessing from recycled list bars.
+- **Opening-through-Raditz visual descriptions.** A switchable development catalog
+  of 60 compact cues across 15 MOV/GDM sources, driven by the native playback clock.
+  Six real-time scenes have introductory lines only, not full visual coverage.
+  Descriptions may accompany music/effects and yield to visible dialogue/subtitles.
+  Pause or temporary clock-read gaps do not repeat an already consumed cue.
+  Raditz-arrival text was drafted with ViddyScribe, frame-reviewed and retimed.
+
+### Fixes
+
+- **Community Board / Soul Emblems.** Automatic help includes visible movement/page
+  prompts and stick names. Native leader labels, popup-safe summary history and an
+  F1 emblem-in-hand reminder clarify the board without changing game controls.
+- **Dragon Balls radar category.** Reads displayed native markers even when the
+  pickup lacks an ordinary map-icon component. Revalidates selection and collection,
+  and retries temporary failures during menu resume and next-ball acceptance.
+  No early unlocks or spawn/save
+  table inspection; positive in-game detection/collection testing remains pending.
+- **Radar world-gate cleanup.** Releases in-flight sweep lists and per-world manager
+  handles when menus, battles or map transitions make them unsafe to retain.
+
+### Validation
+
+- Added a self-contained offline Lua runner and regression suites for the new
+  readers, cue timing, control help, Dragon Ball tracking and world-handle cleanup.
+- The DLC screen has positive user feedback. Community Board changes, native
+  description audibility and Dragon Ball pickup behavior still need gameplay tests;
+  mocked engine-boundary tests are not substitutes for those checks.
+
+---
+
 ## v0.1.5 - July 31, 2026
 
 **Braille, and a pile of things that were quietly not working.** If you read with a braille display,

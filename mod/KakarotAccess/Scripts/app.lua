@@ -21,6 +21,7 @@ local ConfigMenu = require("config_menu")
 local Settings = require("settings")
 local Battle = require("battle_monitor")
 local QuestObjective = require("quest_objective")
+local AudioDescription = require("audio_description")
 
 -- Register most-specific screens FIRST: overlays win over the screens beneath them,
 -- which can still report visible underneath (the dispatcher picks the first active
@@ -151,6 +152,9 @@ Registry.register(require("screen_party"), "screen_party")                      
 -- pages, which stay on screen underneath.
 Registry.register(require("screen_compz"), "screen_compz")                         -- Z Encyclopedia
 Registry.register(require("screen_story"), "screen_story")                         -- Story
+-- Downloadable Content: manager-owned Start_DLC_C. Reads only the selected pane's
+-- visible title/story/details/state; no hidden DLC list or cursor inference.
+Registry.register(require("screen_dlc"), "screen_dlc")                              -- Downloadable content
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"), "screen_saveload")
 Registry.register(require("screen_tutorials"), "screen_tutorials")                     -- System > Tutorials list
@@ -191,9 +195,11 @@ function App.start()
     MapScreen.start()
     StatusScreen.start()
     QuestObjective.start()
+    AudioDescription.start()
 end
 
 function App.stop()
+    AudioDescription.stop()
     Registry.stop()
     Nav.stop()
     RadarMenu.stop()

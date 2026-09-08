@@ -87,6 +87,7 @@ cfg_auto = 자동
 cfg_pct = %d퍼센트
 cfg_audio_cues = 오디오 신호음
 cfg_cue_volume = 신호음 음량
+cfg_audio_descriptions = 컷신 음성 해설
 cfg_radar_autotrack = 자동 레이더
 cfg_braille = 점자 출력
 cfg_language = 언어

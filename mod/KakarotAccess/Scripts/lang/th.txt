@@ -87,6 +87,7 @@ cfg_auto = อัตโนมัติ
 cfg_pct = %d เปอร์เซ็นต์
 cfg_audio_cues = สัญญาณเสียง
 cfg_cue_volume = ระดับเสียงสัญญาณ
+cfg_audio_descriptions = คำบรรยายฉากคัตซีน
 cfg_radar_autotrack = เรดาร์อัตโนมัติ
 cfg_braille = เอาต์พุตอักษรเบรลล์
 cfg_language = ภาษา

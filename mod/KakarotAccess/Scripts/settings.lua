@@ -1,7 +1,7 @@
 -- User-editable mod configuration, persisted to Scripts/config.txt.
 --
 -- A single settings store other modules read (audio-cue master switch + volume,
--- radar auto-activation, language override). It is loaded ONCE from main.lua, before
+-- cutscene descriptions, radar auto-activation, language override). It is loaded ONCE from main.lua, before
 -- the protected snapshot, so it survives a Ctrl+Shift+R reload with its in-memory
 -- values intact (the config menu writes changes straight to disk as they happen).
 --
@@ -18,6 +18,7 @@ local Settings = {}
 local SCHEMA = {
     { key = "audio_cues",      kind = "bool", def = true,  comment = "Audio navigation cues on/off (on|off)" },
     { key = "cue_volume",      kind = "pct",  def = 100,   comment = "Audio cue volume, 0-100" },
+    { key = "audio_descriptions", kind = "bool", def = true, comment = "Spoken cutscene descriptions on/off (on|off)" },
     { key = "radar_autotrack", kind = "bool", def = true,  comment = "Radar auto-tracks a new objective by itself (on|off)" },
     { key = "braille",         kind = "mode", def = "auto", comment = "Send everything spoken to a braille display too: auto (on if the screen reader supports it) | on | off" },
     { key = "language",        kind = "lang", def = "auto", comment = "Mod language: auto (follow the game) or a code: en es fr de it pt ru pl ja ko zh ar th" },
@@ -168,6 +169,7 @@ end
 -- Convenience accessors used by the audio/radar layers.
 function Settings.cues_enabled()   return values.audio_cues ~= false end
 function Settings.cue_gain()       return (values.cue_volume or 100) / 100 end
+function Settings.descriptions_enabled() return values.audio_descriptions ~= false end
 function Settings.autotrack_enabled() return values.radar_autotrack ~= false end
 function Settings.language()       return values.language or "auto" end
 function Settings.braille()        return values.braille or "auto" end

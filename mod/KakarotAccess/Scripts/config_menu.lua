@@ -96,6 +96,15 @@ local OPTIONS = {
             return string.format(I18n.t("cfg_pct"), nv)
         end,
     },
+    {   -- Spoken descriptions for authored cutscenes
+        name = function() return I18n.t("cfg_audio_descriptions") end,
+        value = function() return on_off(Settings.get("audio_descriptions")) end,
+        change = function(dir)
+            local nv = not Settings.get("audio_descriptions")
+            Settings.set("audio_descriptions", nv)
+            return on_off(nv)
+        end,
+    },
     {   -- Radar auto-activation on/off
         name = function() return I18n.t("cfg_radar_autotrack") end,
         value = function() return on_off(Settings.get("radar_autotrack")) end,

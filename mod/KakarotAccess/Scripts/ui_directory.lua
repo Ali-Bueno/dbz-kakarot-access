@@ -283,6 +283,12 @@ local MAP = {
     -- the resolver does not care about — it returns the pointer, not a name match (same as
     -- Start_Save_Load_C above).
     ["Start_Quest_C"]          = { {"mm", "m_xQuestMenu", "m_UIStartQuest"} },
+    -- DOWNLOADABLE CONTENT: UMenuManager.m_xDlcMenu @0x190 ->
+    -- UDlcMenu.m_UIStartDlc @0x170. Both hops and the live blueprint instance
+    -- Start_DLC_C_1 were confirmed together in the 2026-09-04 header/object dump.
+    -- The screen adapter reads its selected detail pane directly, so no row scan
+    -- or hidden DlcItem_List access is needed.
+    ["Start_DLC_C"]            = { {"mm", "m_xDlcMenu", "m_UIStartDlc"} },
     ["Tips_C"]                 = { {"fm", "Tips"}, {"mm", "m_xTipsMenu", "m_UITips"},
                                    {"hud", "UIPause", "UITips"} },
 

@@ -15,13 +15,11 @@
 --     character icon → CHAR_TOKENS name) vs the constant "?" mask — CAUTION: the
 --     MID is ALSO named "Ins_Emb_Mask"; ImageUnacquired is never visible.
 --   * COMMUNITY BOARD — `Start_Commu_Brd_C` (blueprint of AT_UICommunityBoard; the
---     native class is never a live instance). Its free analog cursor is UNREADABLE
---     (verified 2026-07-04: WL_PanelCursor and 0x8C0 bytes of host+frame memory all
---     stayed frozen across a full move pass — the state is in the native input
---     system, like the battle pause). So the board is NOT cursor-tracked; on entry it
---     reads the summary (`WL_CommuBrdDetail`: title, overall level, rank, active
---     skills) + the emblems already placed (`WL_BrdFrame.WL_PanelTbl` → each
---     `WL_Emblem` face) + a hint that confirm opens the accessible Soul Emblems grid.
+--     native class is never a live instance). The free analog cursor uses the
+--     native hovered-panel cache, with the game's hit test replicated for empty
+--     panels and placement. Tutorial popup modes suspend cursor input; they are
+--     not evidence that the cursor is unreadable. Entry reads the board summary
+--     and placed emblems; current tutorial instructions take speech priority.
 --
 -- The header logos are image fonts, so the mod supplies the screen names from the
 -- game's own EXCmnHeaderFontType ids (I18n.header 5 = Soul Emblems, 1 = board).
@@ -40,6 +38,10 @@ local BOARD = OFF.commuBoard
 local GRID = OFF.commuGrid
 
 local Commu = {}
+
+-- The board uses a free analog cursor, not list navigation. Include the game's
+-- movement/page controls in automatic help along with its current actions.
+Commu.keyhelp_navigation = true
 
 -- Diagnostics (hunt-v2 memory diff + 2 s state snapshots to dumps/dump_community.txt).
 -- The cursor mystery is SOLVED (2026-07-04, verified in-game: tutorial modes freeze
@@ -63,7 +65,14 @@ local mode = nil            -- "detail" | "grid" | "board"; announcer resets on 
 local last_idx = nil        -- selection held between cursor moves (signals are transient)
 local label_cache, label_idx, label_tick = nil, nil, 0
 local LABEL_REFRESH = 10    -- ticks (~1 s) between forced refreshes of a same slot's label
-local last_title = nil      -- board title, gates the spoken board summary
+local last_title = nil      -- board title, gates the per-board cache invalidation
+-- Summary history survives dispatcher resets and board/grid handoffs. The stuck
+-- session's log contains repeated dialog/board flips; resetting last_title on each
+-- flip can requeue the full summary and obscure current panel feedback. Only clear
+-- this latch on positive closure evidence or explicit F1. Time without a probe is
+-- NOT closure: a higher-priority popup can prevent our is_active from running.
+local summary_title = nil   -- board title whose entry summary was already spoken
+local last_held = false      -- emblem-in-hand edge detector; F1 re-arms it
 local panel_cache = nil     -- { key, list = {panel...} } per board
 -- Placing-mode hover debounce state (helper defined below near board_update; declared
 -- HERE so clear_state — defined above that helper — resets the real upvalues, not
@@ -333,11 +342,12 @@ local function socket_label(p, idx, count)
         return Core.phrase(I18n.t("empty_socket"), where)
     end
     local lv = read(Core.member(p, "WL_Lv"))
-    -- Two socket-badge stylings exist depending on socket kind, so this is a genuine
-    -- multi-candidate probe: STRICT gate, per contract (a name expected absent here
-    -- must never be fetched raw).
-    local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader", true))
-        or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader", true))
+    -- Both names are declared on UAT_UICommunityBoard_Panel (current AT.hpp):
+    -- pedestal @0x4F8 and icon @0x500. They are not expected-absent candidates.
+    -- Use the normal property gate; strict mode refused the live Brd_Emb_C reads
+    -- when metadata was unavailable, which can omit the visible leader label.
+    local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader"))
+        or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader"))
     return Core.phrase(name,
         lv and string.format(I18n.t("lvl"), lv) or nil,
         leader and I18n.t("leader") or nil,
@@ -526,6 +536,8 @@ end
 -- audit; ui_core.lua flushes its own custom_props whitelist on this same hook). Pure Lua.
 Transition.on_begin("screen_community", function()
     clear_state()
+    summary_title = nil   -- a map switch is a genuine close (clear_state is not)
+    last_held = false
     skills_registered = false
 end)
 
@@ -736,10 +748,16 @@ local BOARD_OPENING_MODES = { [2] = true }
 function Commu.is_active()
     tick = tick + 1
     grid_slots, grid_byai = nil, nil
-    if Core.free_roam(tick) then last_roam_t = os.clock() end
+    if Core.free_roam(tick) then
+        last_roam_t = os.clock()
+        -- Positive closure: the minimap is only back once the board flow is over,
+        -- so the next board visit is a fresh one and earns its entry summary.
+        summary_title = nil
+    end
     menu_entry_signal()
     maintain_wait()
     local ghost_board = false
+    local board_closed = false
     local board_rej = nil   -- DEBUG: why the board was rejected this tick (or nil)
     -- pane_live gate (the standing pooled-pane rule): a PARKED detail sheet from an
     -- earlier visit keeps reporting on_screen and, checked FIRST, it claimed the
@@ -777,6 +795,10 @@ function Commu.is_active()
             -- did — so dropping it here is safe: a parked/ghost board reads a non-live
             -- mode and falls through below.
             local mode_v = Core.valid(frame) and Mem.i32(board, BOARD.mode) or nil
+            -- FUN_1414ca430: 5 is the out animation, then 0 is parked (Ghidra
+            -- derivation in dbz-kakarot-status-history.md). Read closure even if
+            -- that routine already collapsed the frame; unknown/nil is not close.
+            board_closed = mode_v == 0 or mode_v == 5
             board_rej =
                 (not Core.valid(frame) and "frame-invalid")
                 or (not Core.on_screen(frame) and "frame-offscreen")
@@ -857,6 +879,13 @@ function Commu.is_active()
         end
     end
     if m then ghost_refresh_done = false end
+    -- A parked backdrop must not reset history while the live emblem grid/detail
+    -- still owns this flow. No live community mode plus a known native close is
+    -- positive closure, unlike a missing pool, failed read or elapsed timeout.
+    if not m and board_closed then
+        summary_title = nil
+        last_held = false
+    end
     -- The watched screen actually reads now — stop the scan lane (any_valid can't do
     -- it in ui_core: a VALID parked instance is not the fresh screen, pane_live is).
     if m == "grid" then
@@ -895,6 +924,16 @@ function Commu.reset()
     ann:reset()
     mode = nil
     clear_state()
+end
+
+-- F1 (Registry.repeat_current prefers this over reset): re-speak the current
+-- selection AND the board entry summary. This is the deliberate, user-driven way
+-- back through the summary latch, which dispatcher resets can no longer open.
+function Commu.reannounce()
+    ann:reset()
+    summary_title = nil
+    label_cache, label_idx = nil, nil
+    last_held = nil   -- repeat the live holding reminder, if still applicable
 end
 
 -- The focused label, cached: recomputed only when the index changes or every
@@ -968,9 +1007,10 @@ local function placed_emblems(pc)
         end
         if name then
             local lv = read(Core.member(p, "WL_Lv"))
-            -- Multi-candidate leader badge (see socket_label) — STRICT gate.
-            local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader", true))
-                or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader", true))
+            -- Leader badge: NORMAL gate — both names are declared on the native
+            -- panel class, so nothing here is expected-absent (see socket_label).
+            local leader = Core.is_visible(Core.member(p, "WL_Pnl_Pedestal_Leader"))
+                or Core.is_visible(Core.member(p, "WL_Ins_Icon_Leader"))
             -- socket number first, so it correlates with the live cursor's "socket N"
             parts[#parts + 1] = Core.phrase(string.format("%d", i),
                 name,
@@ -1104,7 +1144,6 @@ local function grid_hunt()
     end
 end
 
-local last_held = false      -- emblem-in-hand edge detector
 last_sub = nil               -- last spoken link-bonus subtitle (declared local up by clear_state)
 local snap_tick = 0          -- DEBUG state-snapshot throttle
 
@@ -1246,10 +1285,12 @@ local function board_update()
         last_title = title
         panel_cache = nil                    -- socket layout changes with the board
         last_idx, label_cache, label_idx = nil, nil, nil   -- labels too
-        -- Board entry summary — kept SHORT (user 2026-07-16: the full readout dumped
-        -- all ~10 community skills in one breath, "todo junto"). Overall level/rank +
-        -- placed emblems + the action hint only; the community-skills LIST is on demand
-        -- via the game's "Y: Detalles" (skills_text() stays for a future dedicated key).
+    end
+    -- Separate speech history from the cache title above. Keep the entry summary
+    -- short: overall level/rank, placed emblems and action hint. Community skills
+    -- remain available through the game's Details action.
+    if title and title ~= summary_title then
+        summary_title = title
         local bits = {}
         local s = board_summary()
         if s then bits[#bits + 1] = s end

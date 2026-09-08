@@ -87,6 +87,7 @@ cfg_auto = automatic
 cfg_pct = %d percent
 cfg_audio_cues = Audio cues
 cfg_cue_volume = Cue volume
+cfg_audio_descriptions = Cutscene descriptions
 cfg_radar_autotrack = Automatic radar
 cfg_braille = Braille output
 cfg_language = Language

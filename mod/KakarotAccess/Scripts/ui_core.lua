@@ -1083,6 +1083,8 @@ local QUIET_EXEMPT = {
     ["Field_Talk_Win_C"]     = true, -- NPC talk window (screen_dialogue)
     ["Quest_Main_Telop_C"]   = true, -- area/quest telop banners (screen_telop)
     ["Xcmn_Win01_C"]         = true, -- notice window (boot notices, rewards — screen_dialog)
+    ["PreRenderDemoActor"]   = true, -- exact CriWare movie clock (audio_description)
+    ["LevelSequenceActor"]   = true, -- real-time master demo clock (audio_description)
     -- Loading screens: the post-transition state (mm reachable, no minimap, no
     -- adapter, no presses) IS the quiet state, and the transition flush empties
     -- these pools — without the exemption nothing could scan, the loading adapter

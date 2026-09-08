@@ -46,12 +46,14 @@ notes are the evidence behind them.
 | [Performance architecture](dbz-kakarot-perf-architecture.md) | The screen directory, scan budgets, the watch lane, quiet mode — and the experiments that froze the game |
 | [UE4SS perf audit review (2026-07-28)](dbz-kakarot-ue4ss-perf-audit-2026-07-28.md) | The external audit, verified claim by claim: what was applied, and **why four of its cache proposals are rejected** |
 | [Community board](dbz-kakarot-community-board.md) | Board + emblem grid: mode machine, cursor offsets, the latency saga |
+| [Cutscene descriptions](dbz-kakarot-cutscene-descriptions.md) | Opening-through-Raditz coverage limits and reviewed ViddyScribe plugin test |
 | [Status level](dbz-kakarot-status-level.md) | Enemy level/HP offsets, pinned by live vtable getter-chain decoding on a no-RTTI exe |
 | [Skill tree lock](dbz-kakarot-skilltree-ghidra-next.md) | Per-node state byte via Ghidra — and the origin of the dumps-vs-decompiler rule |
 | [Skill palette](dbz-kakarot-skillpalette-done.md) | Slot-button reader; the plate-border cursor pattern |
 | [Save/Load + Items](dbz-kakarot-saveload-items-done.md) | Native selection indices; why stale-UI menus need native flags |
 | [Fast-travel internals](dbz-kakarot-fasttravel-internals.md) | World/area map internals; lazily-spawned icons and the wake-nudge |
 | [Radar picker](dbz-kakarot-radar-picker.md) | The R3 modal target menu, the XInput hook, and why raycast avoidance is dead here |
+| [Dragon Ball radar](dbz-kakarot-dragonball-radar.md) | Native type/active fields, component-free pickup markers, collection handling, and local test-build limits |
 | [UI cache: no notify feed](dbz-kakarot-event-driven-ui-cache.md) | The reversed rule: construction notifies fire on the loader thread and corrupt the Lua state |
 
 ## Project history and open threads
