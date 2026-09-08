@@ -66,8 +66,8 @@ local EMBLEM_ARM_GRACE_S = 2.0
 local sid_commu_clock = nil    -- os.clock when a Community row (board/emblems) was last focused
 local sid_commu_row = nil      -- which one it was: SID_COMMUNITY_BOARD or SID_COMMUNITY_EMBLEM
 local ring_was_open = false    -- edge for the one-line close trace below
-local RING_DEBUG = true        -- one line per ring close with the sid (2026-07-16 diagnosis;
-                               -- ON again 2026-09-08: no watch ever armed in a whole session)
+local RING_DEBUG = false       -- one line per ring close with the sid (2026-07-16 diagnosis;
+                               -- 2026-09-08 board/grid lanes verified: both arms ~1.7 s to speech)
 
 -- The UAT_UIStartTopList item at 0-based `idx` of a reflected TArray member of `top`, or nil.
 local function list_item(arr_name, idx)

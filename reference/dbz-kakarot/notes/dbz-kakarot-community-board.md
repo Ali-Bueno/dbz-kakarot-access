@@ -178,3 +178,25 @@ if anything still leaves the next action unclear.
 The local test deployment preserved configuration, mod enablement and native
 dependencies. Native runtime and audible output still need the gameplay checks
 above; local backups and deployment artifacts are not part of the contribution.
+
+**2026-09-08 — entry latency again (10-20 s, user report after the PR #1 merge): SOLVED + VERIFIED.**
+Symptom: both the board and the emblems grid took 10-20 s to read, and after a board visit the
+grid read BOARD text. Log evidence (before the fix): not one `watch <cls>: n found` line in the
+whole session — the grid lane never armed — and the board host `Start_Commu_Brd_C` had never had
+a lane at all (deliberately not directory-mapped, see ui_directory). Both pools therefore sat on
+the ~30 s alive-pool refresh whenever a VALID parked instance from the previous visit kept the
+pool "alive" (`any_valid` true → no boost, no dead-backoff): a uniform 0-30 s wait, mean 15 s.
+The 9 s and 15 s claims in that log fit. The board-then-grid case was the mode-2 provisional
+branch: board found opening, grid not found (stale pool), `m = "board"` for 7 s.
+Fix (commit after 234c047): (1) the ring's *Community Board* row (sid 7) arms a BOARD lane the
+way the *Soul Emblems* row (sid 8) arms the GRID lane (`screen_field` captures whichever of the
+two rows was focused within `EMBLEM_ARM_GRACE_S`; `arm_watch(classes)` in `screen_community`
+tracks which lane is armed for renew/unwatch); (2) mode 2 with no grid arms/renews the grid lane
+like the mode-10 handoff; (3) a refused arm logs `commu watch arm REFUSED (quiet|not-hot|no-recent-roam)`
+once per reason — the missing evidence the first time round. Verified run: board `ring closed`
+t=79.19 → `watch Start_Commu_Brd_C: 1 found` t=80.27 → claim (mode 2) t≈80.9 → **~1.7 s**;
+grid `ring closed` t=89.79 → `emb grid commit +1.82s after entry edge` → **~1.8 s**. Note the
+close trace reads `sid=0` at the close tick (the documented depth-flag reset) — the arm relies
+on the 2 s recency, which is why it works. Residual, pre-existing and bounded: after leaving,
+the ghost-board arm plus the last renewal keep the grid lane scanning for up to ~3 s.
+Tracers (`RING_DEBUG`, `ENTRY_DEBUG`) back OFF.

@@ -43,18 +43,9 @@ The earlier upstream backlog includes the following unrun checks:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
--1. **Community Board / Soul Emblems entry latency (2026-09-08, user: 10-20 s before anything
-   reads; the emblems grid then read BOARD text).** Diagnosis from that session's log: NOT ONE
-   `watch <cls>: n found` line all session, so the grid watch lane never armed, and the board
-   host (`Start_Commu_Brd_C`) had no lane at all — both sat on the ~30 s alive-pool refresh
-   (uniform 0-30 s wait, mean 15 s). Coded, unplayed: (a) the ring's *Community Board* row
-   (sid 7) now arms a board lane like the *Soul Emblems* row (sid 8) arms the grid one;
-   (b) a board found in opening mode 2 with no grid arms/renews the grid lane (mirrors mode
-   10); (c) a REFUSED arm logs its reason (`commu watch arm REFUSED (quiet|not-hot|no-recent-roam)`);
-   (d) `RING_DEBUG` and `ENTRY_DEBUG` are ON. **Test:** from free roam open Community Board,
-   back out, open Soul Emblems, and note the wait before speech in each. **Then read the log**
-   for `ring closed sid=`, `watch `, `REFUSED`, `emb gates`, `commu claim=` — if a REFUSED line
-   names a gate, that gate is the bug, not the lanes. Turn both tracers off once settled.
+-1. ~~Community Board / Soul Emblems entry latency~~ **DONE + VERIFIED 2026-09-08** (was 10-20 s,
+   now ~1.7 s board / ~1.8 s grid from ring close to speech, both lanes armed, no refusal).
+   Details in [the community-board note](reference/dbz-kakarot/notes/dbz-kakarot-community-board.md).
 
 0. **Verify the two radar character fixes** (2026-08-19, user-reported, coded and never played —
    do these first, they are regressions in shipped behaviour). (a) Walk around with a companion:

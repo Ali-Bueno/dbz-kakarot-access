@@ -551,8 +551,8 @@ local grid_slots, grid_byai = nil, nil
 -- first cut declared these below it, so inside grid_host they resolved as (nil)
 -- GLOBALS, not upvalues, and the gate lines silently never printed (a Lua local is
 -- only an upvalue of functions defined AFTER it).
-local ENTRY_DEBUG = true    -- verified 2026-07-16 (first visit ~1.5s, re-entry, no stutters);
-                            -- ON again 2026-09-08 (10-20 s entries, no watch line in the log)
+local ENTRY_DEBUG = false   -- verified 2026-07-16 (first visit ~1.5s, re-entry, no stutters)
+                            -- and 2026-09-08 (board lane 1.7 s, grid lane +1.82 s after the edge)
 local entry_t0, entry_gates = nil, nil
 
 -- BOTH grid host classes must be watched: run 2 (2026-07-16) caught the first-of-session
