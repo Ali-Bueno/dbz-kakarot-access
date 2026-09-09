@@ -2,48 +2,128 @@
 
 ---
 
-## Unreleased
+## v0.1.6 - September 8, 2026
 
-### New
+**The radar learned everyone's name, and the game's cutscenes are described.** Until now the radar
+called every character "Goku", every enemy "alien" and every pickup a generic "item"; it now uses the
+game's own localized text for all of them. And the opening of the game - the title-screen montage,
+then everything from the first scene through the Raditz fight - now comes with spoken descriptions of
+what is on screen, in all 13 languages the mod speaks.
 
-- **Downloadable Content menu reader.** Announces the selected DLC's visible title,
-  availability, story and details; F1 repeats the entry. Settles changing detail
-  text and releases parked panes without guessing from recycled list bars.
-- **Opening-through-Raditz visual descriptions.** A switchable development catalog
-  of 60 compact cues across 15 MOV/GDM sources, driven by the native playback clock.
-  Six real-time scenes have introductory lines only, not full visual coverage.
-  Spoken in all 13 mod languages: the lines live in `Scripts\lang\<code>.txt` like
-  every other string, with the English catalog text as the fallback.
-- **Title-screen opening described.** 41 cues over the 1:49 opening montage that plays
-  before the main menu, in all 13 languages.
-- **Latin American Spanish.** The game ships Spain and Latin America as separate text
-  tables with different character names (Milk, Krillin, Píkoro, Esfera del Dragón); the
-  mod now follows that split with an `es_mx.txt` overlay on `es.txt`, picked from the
-  game's language or forced from the config menu ("Español latino").
-  Descriptions may accompany music/effects and yield to visible dialogue/subtitles.
-  Pause or temporary clock-read gaps do not repeat an already consumed cue.
-  Raditz-arrival text was drafted with ViddyScribe, frame-reviewed and retimed.
+This is also the first version with an outside contributor. **Thank you, buu420**, for the pull
+request that brought the DLC menu reader, the Community Board help, the Dragon Ball radar category
+and the whole cutscene-description catalog, plus an offline test runner so all of that can be checked
+without launching the game. A big chunk of what follows is that work.
 
-### Fixes
+The honest caveat, as usual: several of these changes were verified by reading and by offline tests
+rather than by a full playthrough. Where something still needs a real listening pass, it says so.
 
-- **Community Board / Soul Emblems.** Automatic help includes visible movement/page
-  prompts and stick names. Native leader labels, popup-safe summary history and an
-  F1 emblem-in-hand reminder clarify the board without changing game controls.
-- **Dragon Balls radar category.** Reads displayed native markers even when the
-  pickup lacks an ordinary map-icon component. Revalidates selection and collection,
-  and retries temporary failures during menu resume and next-ball acceptance.
-  No early unlocks or spawn/save
-  table inspection; positive in-game detection/collection testing remains pending.
-- **Radar world-gate cleanup.** Releases in-flight sweep lists and per-world manager
-  handles when menus, battles or map transitions make them unsafe to retain.
+### Cutscenes, described
 
-### Validation
+- **The opening is no longer silent.** 41 short cues describe the 1:49 montage that plays on the
+  title screen before the main menu, and a catalog of 60 cues covers the 15 story scenes from the
+  start of the game through the Raditz fight and its immediate aftermath. The descriptions never
+  interrupt anything: they sit under the music and step aside for any visible dialogue or subtitle.
+  Pausing, or a brief gap in the playback clock, does not make a cue repeat. Six scenes rendered live
+  by the game engine have an introductory line only, not full coverage yet. The Raditz text was
+  drafted with ViddyScribe, then reviewed and retimed frame by frame.
+- **In your language.** The cues are ordinary mod strings in `Scripts\lang\<code>.txt`, so they speak
+  in whichever of the 13 languages the mod is set to, with the English text as the fallback.
+- **Latin American Spanish is now its own language.** The game ships Spain and Latin America as two
+  separate text tables with different character and item names, and the mod used to hand both
+  regions the Spain wording. It now follows the game's split: it picks the right one from the game's
+  language, or you can force it with the new Latin American Spanish entry in the config menu. A few
+  differences in the Spain text were corrected against the game's own wording along the way.
+- Descriptions still need a proper end-to-end listening pass - through dialogue, skipping, replays
+  and area changes - so treat the timing as a first draft and report anything that lands late.
 
-- Added a self-contained offline Lua runner and regression suites for the new
-  readers, cue timing, control help, Dragon Ball tracking and world-handle cleanup.
-- The DLC screen has positive user feedback. Community Board changes, native
-  description audibility and Dragon Ball pickup behavior still need gameplay tests;
-  mocked engine-boundary tests are not substitutes for those checks.
+### The radar knows who it is pointing at
+
+- **Characters are named from the game's text.** The radar used to carry a small hand-typed table
+  of names, and a Blueprint default meant nearly every NPC it did not know came out as "Goku". It
+  now asks the game for the localized name of whoever it is pointing at, story characters and
+  anonymous townsfolk alike, so it says the same thing the subtitles would.
+- **Quest NPCs with no name of their own** - the Namekian child in the fruit quest, for instance -
+  are named from their dialogue component when nothing else names them.
+- **Enemies are named too**, and correctly: the real enemy name instead of "alien", the real rank
+  instead of always the first variant of a family, and Zarbon is Zarbon. Enemy bases announce their
+  faction ("Frieza Force base") instead of a generic "enemy base".
+- **Roaming enemies are no longer listed as companions**, and party members are no longer listed as
+  enemies. A Namek mob could be targeted as if it were in your party, and Krillin could show up as a
+  hostile while walking beside you.
+- **Pickups have real names.** Every collectible used to be a generic "item"; the mod now uses the
+  game's item name where one exists ("Namekian fruit") and a cleaned-up class name where it does not
+  ("Lost Seaweed", with the bookkeeping suffix stripped). If the game words one of those differently
+  on screen, tell us and its wording wins.
+- **Collected treasures disappear from the radar.** D-medals and fruits you already picked up were
+  still listed; they are dropped now.
+- The bonfire, which was silently unnamed, has a name; shops and food stalls moved out of "Sites"
+  into their own "Shops" category.
+
+### Quests
+
+- **Collection quests point at the item, not the marker.** The radar tracked the quest's site
+  marker, which for a fetch quest can be an empty clearing while the fruit sits a hundred metres
+  away. Quest collection items now join the Quests category with no distance cap, so the beacon walks
+  you to the thing you are meant to pick up.
+- **L3+Triangle reads the current objective**, not one from a quest you already finished.
+- **An objective announcement that got interrupted is no longer lost**: it is repeated once you are
+  free to hear it.
+- **Objectives that name a place now point at the exact spot.** The game's own quest marker is a
+  circle for many objectives, and the radar was leading you to its centre - for a fishing quest that
+  is the middle of the water, not the bank you cast from. The radar now reads the game's live
+  objective and, when it names a precise target, guides there instead: the fishing spot, a door, a
+  minigame, a campfire. Reaching an area, talking to someone and collecting items behave exactly as
+  before. Built and checked in play on a story objective, but not yet on a fishing quest itself, so
+  please report how the first one goes.
+
+### New: Dragon Balls on the radar
+
+- A new radar category finds Dragon Balls from the marker the game draws on the minimap, which
+  works even for pickups that have none of the ordinary map-icon data. It re-checks the ball when
+  you select it and when you collect it, and retries quietly if a menu resume or the hand-off to the
+  next ball fails for a moment. Picking a ball the radar could not read at that instant used to do
+  nothing at all, silently; it is now parked and retried. The category does nothing the game does
+  not - no early unlocks, no reading of spawn or save tables. Positive in-game detection and
+  collection still need a real playthrough to confirm, so please report how it behaves.
+
+### New: the Downloadable Content menu
+
+- The DLC screen was silent. It now reads the selected pack's title, availability, story and details,
+  waits for changing detail text to settle, and F1 repeats the entry. This one has already had
+  positive feedback in play.
+
+### The Community Board
+
+- **It starts reading straight away.** After re-entering the board or the emblems grid there could be
+  a wait of anywhere from nothing to thirty seconds before it said a word, because the mod was
+  leaving that screen to a slow background refresh. It now scans for it on purpose, and the board
+  answers in under two seconds; verified in play.
+- Automatic help includes the visible movement and page prompts with the stick names, leader labels
+  come from the game's own text, the board summary survives a popup, and F1 reminds you which emblem
+  you are holding. The game's controls are unchanged. The full tutorial, select, hold and place flow
+  still wants more gameplay testing.
+
+### Speech and stability
+
+- **The radar no longer talks over dialogue**, and no longer repeats itself around dialogue and
+  loading screens.
+- **A crash about eleven minutes into free roam** came from a slow world scan running on the
+  controller-polling loop. The scan is off that loop now.
+- **Smoother radar.** The mod was repeatedly scanning for screens that do not exist in this game;
+  cutting those ghost scans took more than half the scan time off and with it most of the radar's
+  dropouts and stutter.
+- The radar releases its in-flight sweep lists and per-world handles the moment a menu, battle or
+  map transition makes them unsafe to keep.
+- Three developer tools that could take the running game down with them no longer do.
+
+### For contributors
+
+- A self-contained offline Lua test runner (`tools\run-lua-tests.ps1`) with regression suites for
+  the new readers, cue timing, control help, Dragon Ball tracking and world-handle cleanup, plus a
+  lint pass over every Lua file. The running game can also be inspected from the assistant over MCP
+  without pressing keys in it. `STATUS.md` was pruned back to a dashboard; its history lives in the
+  reference notes.
 
 ---
 
