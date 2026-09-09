@@ -527,6 +527,17 @@ function Core.prop_ready(o)
     return set ~= nil and not partial
 end
 
+-- DEV PROBES ONLY. Grant one property-set derivation outside the per-tick budget and build it now.
+-- A probe runs inside ONE game-thread action, where the budget is whatever the loops left (usually
+-- nothing), so every strict read in it skipped for three consecutive runs on 2026-09-08 with the
+-- sets never built. Not for adapters: the budget exists so that a screen presenting several new
+-- classes cannot stall a tick, and a probe is a human pressing a key.
+function Core.prop_warm(o)
+    if not Core.valid(o) then return false end
+    if prop_budget < 1 then prop_budget = 1 end
+    return Core.prop_ready(o)
+end
+
 -- Guarded hop through a STRUCT handle: `Core.struct_member(h, "ResourceObject")` for what the
 -- call sites still write raw as `o.Brush.ResourceObject`, `s.LayoutData.Offsets`,
 -- `o.ColorAndOpacity.A`, `o.RenderTransform.Translation`.

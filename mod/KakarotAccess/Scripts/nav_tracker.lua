@@ -38,6 +38,9 @@ local Mem = require("mem")
 
 local Nav = {}
 Nav._dragonball_marker = require("dragonball_marker")
+-- Precise objective routing (fishing spot / door / minigame / campfire). On the module
+-- table for the same reason as the line above: this chunk is at Lua's 200-local ceiling.
+Nav._quest_route = require("quest_route")
 -- NOTE: this file sits AT Lua's 200-upvalue/local limit for the main chunk. A new module-level
 -- `local` fails to compile ("too many local variables"); hang new state off `Nav` instead.
 
@@ -1703,6 +1706,11 @@ function Nav.release_world_refs()
     -- debounce exists to prevent. `qreq_miss` is a POSITION, and a map change re-frames the
     -- coordinates, so keeping it could suppress the next look somewhere else entirely.
     Nav.qreq_gone_at, Nav.qreq_miss, Nav.qreq_bump, Nav.qreq_missn = nil, nil, nil, nil
+    -- The precise-route resolver holds the same class of thing in bulk: a per-world
+    -- QuestManager, the quest/phase objects it reads, and a whole find-id -> ACTOR index.
+    -- All of it dies with the world, and a recycled address passes Core.valid, so it falls
+    -- with everything else here rather than being re-validated on the other side.
+    Nav._quest_route.release()
 end
 
 local function step()
@@ -1934,7 +1942,14 @@ local function step()
         -- they need is the item. `_quest_item_target` answers nil for every other objective —
         -- and again the moment the count is met — so the marker is the normal answer and the
         -- hand-back at the end of a collection costs no code of its own.
+        -- AND THE PRECISE SPOT OUTRANKS THE MARKER TOO (2026-09-08), for the same reason one
+        -- rank up: a "fish here" / "go through that door" objective draws a RANGE circle and
+        -- the marker guides to its centre. `_quest_route_target` answers nil for every
+        -- objective kind the game does not name a precise actor for, so the marker stays the
+        -- normal answer; it sits BELOW the item override because a collection quest's item is
+        -- the more specific of the two.
         local best = Nav._quest_item_target(px, py, pz)
+            or Nav._quest_route_target()
             or best_candidate(px, py, pz, fresh and preempt.pri or preempt.focus)
         if best then
             -- Close the re-acquire window and MEASURE it. This line is the whole point of the
@@ -3181,6 +3196,28 @@ function Nav._quest_item_target(px, py, pz)
     return nil
 end
 
+-- THE EXACT SPOT the current objective needs, or nil — the generalisation of the item
+-- override above to every objective kind whose phase class NAMES a target actor (fishing
+-- spot, door, minigame host, campfire). All of the engine work lives in quest_route.lua
+-- (with the quest/phase reads themselves in quest_phase.lua);
+-- this is the election's half of it: the quest-focus rule and the record shape.
+--
+-- Shaped exactly like best_candidate's / _quest_item_target's record, so the caller's
+-- bookkeeping (stash, route, announce, re-adopt, drop) needs no special case at all. `grp`
+-- is "quests" — the routed actor IS the objective, so it wants the group with no distance
+-- cap and the wide auto arrival radius, and `qroute` marks where it came from for the log
+-- and for anything downstream that has to tell a routed spot from a plain navi marker.
+function Nav._quest_route_target()
+    local r = Nav._quest_route.resolve(tick)
+    if not r or not Core.valid(r.actor) then return nil end
+    -- Respect the standing quest focus, exactly as the item override does: a route belonging
+    -- to the OTHER quest group is not ours to track.
+    local pri = (r.quest == "sub") and PRI_SUB or PRI_MAIN
+    if preempt.focus and preempt.focus ~= pri then return nil end
+    return { actor = r.actor, key = r.key, pri = pri, grp = "quests",
+             label = I18n.t(r.label_key), qroute = true }
+end
+
 -- Resolve a character id ("Cpl059c02", "Cpl013") to a display name: the game's own
 -- GetCharacterName resolver first, retried without a trailing variation suffix ("...c02")
 -- when the full id has no entry, then the hand-verified CPL_NAMES fallback. nil = the game
@@ -4387,6 +4424,11 @@ end
 -- marker search toward that quest class. Cheap flag set — safe from any thread the
 -- quest loop runs on (it's the game thread anyway).
 function Nav.notify_objective_change(kind)
+    -- THE ROUTE RESOLVER'S OWN TRIGGER, and it is deliberately the FIRST thing here, above
+    -- every gate below: this is a flag set, it costs nothing, and the alternative is a
+    -- resolver whose cache silently outlives an objective change that happened while the
+    -- radar was off or focused elsewhere. The work itself still waits for an election.
+    Nav._quest_route.invalidate()
     if not on then return end   -- F3 off = the radar is fully off; respect it
     -- Mod config: "radar automático" off → don't auto-activate or disturb the manual pick.
     local cfg = _G.__KakarotSettings

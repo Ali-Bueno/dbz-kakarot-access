@@ -47,6 +47,17 @@ The earlier upstream backlog includes the following unrun checks:
    now ~1.7 s board / ~1.8 s grid from ring close to speech, both lanes armed, no refusal).
    Details in [the community-board note](reference/dbz-kakarot/notes/dbz-kakarot-community-board.md).
 
+0a. **Quest objective routing (2026-09-08, CODED, never played).** Every objective kind, not
+   only "collect N": `quest_phase.lua` + `quest_route.lua` resolve the actor the objective names for
+   **GetFish / Door / Minigame / Camping** and the election prefers it over the navi marker
+   (`Nav._quest_route_target`, `nav_tracker.lua`). Arrival / GetItem / SearchItem / TalkNpc are
+   unchanged. Evidence, the per-kind table and the forbidden TMaps in
+   [quest objective routing](reference/dbz-kakarot/notes/dbz-kakarot-quest-objective-routing.md).
+   **First live test: any fishing quest** — the radar must lead to the `FishingStartPoint`, not
+   the range circle, and say *"Rastreando zona de pesca, N metros"*. Watch the log for
+   `nav quest route: GetFish -> …`; its absence means the phase object never matched (see the
+   main-quest id heuristic in the note). Dev probe: `kak_dev questdump`.
+
 0. **Verify the two radar character fixes** (2026-08-19, user-reported, coded and never played —
    do these first, they are regressions in shipped behaviour). (a) Walk around with a companion:
    **Krillin must be a companion, not an enemy**, and Compañeros must list him. (b) Stand next to a
@@ -214,6 +225,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Crash hardening — full-codebase audit | done (unverified) | 71 Lua files + 4 bridges swept (48 candidates → 11 real). Fixed `Core.array_of`'s missing existence gate (`ui_core.lua:419`), a 32-bit overflow in `audio_bridge`'s RIFF bounds check, an unbounded write in `mem_bridge` (now `expect_class`). See the crash ledger. Needs restart. |
 | Crash diagnostics (black box + breadcrumb) | done (unverified) | `mem_bridge.mark()` — a 64-slot ring in `crash_trail.bin`; `main.lua` prints the previous session's trail at boot. Named the crash site on BOTH crashes it has seen. Tested with TerminateProcess. |
 | Story / battle results | wip | `screen_results.lua`, `screen_battleresult.lua` (rank from brush textures). The constant-"222" bug: all digits share one atlas `Ins_Num_Result02`, so the digit must be a MATERIAL PARAMETER on the MID. Round-2 dump goes to `dumps/dump_results.txt`. Unverified. |
+| Radar: route to the objective's own actor | done (unverified) | 2026-09-08. `quest_phase.lua` (engine reads) + `quest_route.lua` (index, caches, deferral state machine, nav API): QuestManager -> navigated quest -> `GetPhaseId()` -> the transient `QuestPhase_<Kind>` object -> its named target, resolved through a `QuestActorFindListComponent.m_id` index built once per world. Kinds: GetFish (guides to `AFishingArea.FishingStartPoint`), Door, Minigame, Camping. One `FindAllOf` per resolve call, resolves only on an objective change or a >=2 s `GetPhaseId` poll; dropped by `release_world_refs`. Every TMap member is forbidden (no Lua pusher). Offline tests: `tools/tests/test_quest_route.lua`. |
 | Quest navigation radar | done | `nav_tracker.lua` + `audio_bridge`. 2026-07-26 hardening: 24 bare `:IsValid()` and ~95 naked fetches on streamed/destroyed actors migrated; an expired-but-unrefreshable list is now dropped, never served. Battle-interruption resume. Unverified. |
 | Radar: sweep world handles dropped at gates | done (unverified) | 2026-09-03: `release_world_refs` AND the map-transition flush now clear `Nav.SW.lists`/`partial` plus the per-world manager cache, so a BOXED build interrupted by a battle/LoadMap restarts instead of resuming pre-gate handles. Pinned by the first offline Lua regression test (`pwsh tools/run-lua-tests.ps1`, stubs UE4SS, no game needed). |
 | Radar categories 2.0 (sites/enemies/collectibles) | done | Verified 2026-07-15. |

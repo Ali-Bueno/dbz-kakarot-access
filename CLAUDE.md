@@ -494,6 +494,20 @@ spoken-key flip-flop suppression (survives `reset()`, cleared only on genuine cl
 for F1) in the Kakarot mod's `screen_cooking.lua`. Apply this check to EVERY new menu adapter whose
 host is pooled.
 
+**Never queue `ExecuteInGameThread` from code that is ALREADY running inside one** (rule from
+the Kakarot `questdump` freeze, 2026-09-08, which also explained the `navdump` freeze of
+2026-08-18). RE-UE4SS 3.0.1 drains its action vector inside a `std::remove_if` and runs each
+callback from within it (`LuaMod.cpp:2919-2948`); a nested call does `emplace_back` on the same
+vector under the live iterators, and the reallocation that eventually follows is undefined
+behaviour that presents as a silent HANG — the callback never runs, so a dump file is never even
+created, nothing is logged, the process stays up. It works while the vector has spare capacity,
+which makes it look like a size or a safety problem for weeks. `main.lua`'s F10 comment had
+already refused to do this on the grounds that UE4SS documents nothing; the source now says why.
+Modules wrap their body for the keybind path (worker thread → game thread), and anything that
+calls them from a game-thread context — the dev channel, a hook, another action — must call the
+body directly. In the Kakarot mod that is centralised: `dev_channel.dispatch` shadows the global
+with "call it now" for the duration of a command.
+
 **A reflection walk that TRUNCATES is indistinguishable from a complete one unless you check where
 it STOPPED — and a cached "the class has no X" derived from a truncated walk is a guard that fails
 CLOSED forever on shared substrate** (rule from the Kakarot skill-tree crash episode, 2026-07-29). A

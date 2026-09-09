@@ -403,6 +403,10 @@ local S = {
         cat_submarine = "submarino",
         cat_windroad = "túnel de viento",
         cat_portal = "salida de zona",
+        -- routed quest objectives (quest_route.lua); fishing spots and campfires reuse
+        -- cat_fishing / cat_bonfire above, which already name the same thing.
+        cat_door = "puerta",
+        cat_minigame = "minijuego",
         -- field enemies
         cat_enemy = "enemigo",
         cat_enemy_quest = "enemigo de misión",
@@ -671,6 +675,10 @@ local S = {
         cat_submarine = "submarine",
         cat_windroad = "wind tunnel",
         cat_portal = "area exit",
+        -- routed quest objectives (quest_route.lua); fishing spots and campfires reuse
+        -- cat_fishing / cat_bonfire above, which already name the same thing.
+        cat_door = "door",
+        cat_minigame = "minigame",
         -- field enemies
         cat_enemy = "enemy",
         cat_enemy_quest = "quest enemy",

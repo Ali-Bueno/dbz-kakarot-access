@@ -59,6 +59,10 @@ module("ui_core", {
     peek_all = function() return {} end,
     take_scan_slot = function() return true end,
     scan_quiet = function() return false end,
+    -- Quest routing (quest_route.lua, reached through the election) gates every scan
+    -- of its own on this; false keeps it fully inert here. Its own coverage lives in
+    -- tools/tests/test_quest_route.lua.
+    free_roam = function() return false end,
     poll_world = function() end,
     findall = function(class)
         scans[class] = (scans[class] or 0) + 1

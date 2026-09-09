@@ -30,6 +30,7 @@ local Channel = {}
 local CMD_PATH = "kakarot_cmd.txt"
 local OUT_PATH = "kakarot_out.txt"
 local POLL_MS  = 500
+local BUSY_TIMEOUT_S = 30   -- longer than any dump; a command still "running" past it is dead
 
 --------------------------------------------------------------------------------
 -- output
@@ -71,6 +72,7 @@ function C.help()
         "navlevels             Ctrl+Shift+F5 -> Scripts/dumps/dump_enemy_level.txt",
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
+        "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
     }) do out("  " .. l) end
 end
 
@@ -167,6 +169,16 @@ function C.charnames()
              or ("charnames raised: " .. tostring(err)))
 end
 
+function C.questdump()
+    package.loaded.dev_questdump = nil
+    local ok, mod = pcall(require, "dev_questdump")
+    if not ok or not mod then return out("dev_questdump.lua unavailable: " .. tostring(mod)) end
+    -- run() queues its own ExecuteInGameThread, so the file lands a tick or two after this returns.
+    local rok, err = pcall(mod.run)
+    out(rok and "quest dump -> Scripts/dumps/dump_quest_state.txt"
+             or ("questdump raised: " .. tostring(err)))
+end
+
 --------------------------------------------------------------------------------
 -- dispatch
 --------------------------------------------------------------------------------
@@ -178,7 +190,22 @@ local function dispatch(line)
     if not cmd then return end
     local fn = C[cmd:lower()]
     if not fn then return out("unknown command: " .. cmd .. " (try 'help')") end
+    -- NEVER NEST ExecuteInGameThread FROM HERE (2026-09-08; it froze the game twice: `navdump`
+    -- on 2026-08-18 and `questdump` today, same signature both times — the channel answered, the
+    -- dump file was never even CREATED, both channels went silent, process still up). Dispatch
+    -- already runs inside a game-thread action, and every dump module wraps its body in its own
+    -- ExecuteInGameThread for the KEYBIND path. RE-UE4SS 3.0.1 drains the action vector inside a
+    -- `std::remove_if` and runs each callback from within it (LuaMod.cpp:2919-2948,
+    -- process_event_hook); a nested call does `emplace_back` on that same vector under the
+    -- iterators, which reallocates whenever capacity is exhausted — UB that shows up as a hang.
+    -- It works most of the time (spare capacity), which is why `census` never seemed to mind.
+    -- So while a command runs, the global is shadowed with "call it now": we ARE the game thread.
+    -- The shim reaches every module at once because none captures the global at load time
+    -- (grep `= ExecuteInGameThread` before adding one that does).
+    local real_eigt = ExecuteInGameThread
+    ExecuteInGameThread = function(cb) return cb() end
     local ok, err = pcall(fn, table.unpack(args))
+    ExecuteInGameThread = real_eigt
     if not ok then out("error: " .. tostring(err)) end
 end
 
@@ -210,20 +237,24 @@ function Channel.install(d)
     if last_cmd and last_cmd ~= "" then
         out("ignoring stale command from a previous session: " .. last_cmd)
     end
-    local busy = false
+    -- A DEADLINE, not a latch (2026-09-08). A pcall-piercing error inside a command unwinds
+    -- straight through the action callback below, so the `busy = false` at its end never runs
+    -- and a plain boolean left the channel dead for the rest of the session — one bad probe line
+    -- cost a game restart. A command that outlives the deadline is treated as gone.
+    local busy_until = nil
     LoopAsync(POLL_MS, function()
         -- Backlog guard (ue4ss-api-reference.md:144-149): never queue the next step until the
         -- previous one finished. `census` and `reload` are tens of milliseconds of game-thread work;
         -- without this, a caller that writes a second command while the first is still running gets
         -- them interleaved and the sequence markers stop bracketing anything.
-        if busy then return false end
+        if busy_until and os.clock() < busy_until then return false end
         local f = io.open(CMD_PATH, "r")
         if not f then return false end
         local line = f:read("*l")
         f:close()
         if not line or line == "" or line == last_cmd then return false end
         last_cmd = line
-        busy = true
+        busy_until = os.clock() + BUSY_TIMEOUT_S
         ExecuteInGameThread(function()
             -- pcall around the WHOLE body, including the markers: if anything in here raises, the
             -- END marker must still be written or the caller waits out its full timeout for an
@@ -234,7 +265,7 @@ function Channel.install(d)
                 dispatch(rest or line)
             end)
             if seq then pcall(out, "<<<END " .. seq .. ">>>") end
-            busy = false
+            busy_until = nil
         end)
         return false
     end)

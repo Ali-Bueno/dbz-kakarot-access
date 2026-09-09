@@ -25,6 +25,23 @@ npc-names note) answered the question this probe existed for, with no game runni
 
 # dbz-kakarot-crash-bug
 
+> **2026-09-08 — THE `navdump` FREEZE EXPLAINED, AND REPRODUCED WITH A NEW PROBE. Cause: an
+> `ExecuteInGameThread` queued from INSIDE the dev channel's own game-thread action.** `questdump`
+> (new, tiny, read-only) hung the game with the 2026-08-18 signature to the letter: the channel
+> wrote its answer, the dump file was never CREATED (so the callback never even reached
+> `io.open`), both MCP channels went silent, process still up, a 0-byte `.dmp`. Source-verified in
+> RE-UE4SS 3.0.1 `LuaMod.cpp:2919-2948` (`process_event_hook`): the action vector is drained inside
+> a `std::remove_if` and each callback runs FROM WITHIN it; a nested `ExecuteInGameThread` does
+> `emplace_back` on that vector under the live iterators, which reallocates when capacity runs out
+> — undefined behaviour that presents as a hang. Spare capacity is why `census` through the channel
+> "always worked" and why `navdump` had worked for weeks before 2026-08-18: it is a dice roll, not a
+> size problem. `Nav.dump` (nav_tracker.lua:4747), `Discover.run`, `dev_memdiff`, `dev_charnames`
+> and `dev_questdump` all wrap their body for the KEYBIND path, so all of them nested when driven by
+> the channel. Fix in ONE place: `dev_channel.dispatch` shadows the global with "call it now" for
+> the duration of a command (it already is the game thread). The keybind path is untouched.
+> Rule recorded in CLAUDE.md §8. The "bound the walk" advice below is not wrong, but it was not
+> the cause.
+
 > **2026-08-18 — `navdump` NOW FREEZES THE GAME OUTRIGHT. Do not run it on a live session.**
 > Ran it over the MCP while the player was in the field on Namek. The dev channel answered
 > `nav dump -> Scripts/dumps/dump_nav_targets.txt` — so the command was received and `Nav.dump`
