@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-09-21 (PRISM v0.18.2 + CJK speech fixes; earlier gameplay backlog retained below).
+**Last updated:** 2026-09-21 (v0.1.6 released, the first since v0.1.5; the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -43,13 +43,13 @@ The earlier upstream backlog includes the following unrun checks:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
--2. **Chinese speech (2026-09-21, CODED, never played).** PRISM bumped v0.16.7 -> v0.18.2: the old
+-2. ~~Chinese speech~~ **DONE + REPORTED WORKING, shipped in v0.1.6 (2026-09-21).** PRISM bumped v0.16.7 -> v0.18.2: the old
    build's bundled simdutf mangled CJK on AVX-512 CPUs. `prism_bridge.dll` was REBUILT (mandatory:
    `PrismConfig` changed size and is returned by value). Also: `Core.clip` for every log-path
    truncation of game text, U+3000 in the archetype trim, 4 missing keys in 11 languages, and
    `prism.say` now returns its `PrismError` (logged once per code), and `speak_seconds` counts
    characters instead of bytes (Cyrillic/Thai/Arabic were inflated 2-3x; CJK unchanged by design).
-   Offline-verified only — lint, 11 test files, and a bridge smoke test. **Ask the reporting user to confirm in Chinese.**
+   `package.ps1` now refuses to ship a stale prism.dll or an unrebuilt bridge.
    Evidence: [Chinese speech](reference/dbz-kakarot/notes/dbz-kakarot-chinese-speech.md).
 
 -1. ~~Community Board / Soul Emblems entry latency~~ **DONE + VERIFIED 2026-09-08** (was 10-20 s,
