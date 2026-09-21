@@ -334,7 +334,7 @@ local function enum_windows()
                 local t, v
                 pcall(function() t = Core.text_of(node) end)
                 pcall(function() v = Core.on_screen(node) end)
-                return string.format("%s(v%s)", tostring(t and t:sub(1, 18)), v and "1" or "0")
+                return string.format("%s(v%s)", tostring(t and Core.clip(t, 18)), v and "1" or "0")
             end
             local ti, de, he
             pcall(function() ti = cellinfo(w.Txt_Title) end)
@@ -686,9 +686,9 @@ function Dialog.is_active()
         local wn = "?"
         pcall(function() wn = win:GetFullName():match("([%w_]+_C)_%d+") or "?" end)
         local sig = string.format("%s msg=%s lbl=%d guide=%s new=%s spoken=%s",
-            wn, tostring(msg and msg:sub(1, 40)), #labels,
-            tostring(Guide.showing(win)), tostring(fresh and fresh:sub(1, 24)),
-            tostring(spoken and spoken:sub(1, 24)))
+            wn, tostring(msg and Core.clip(msg, 40)), #labels,
+            tostring(Guide.showing(win)), tostring(fresh and Core.clip(fresh, 24)),
+            tostring(spoken and Core.clip(spoken, 24)))
         if sig ~= dlg_last then
             dlg_last = sig
             print("[KakarotAccess] dlg " .. sig .. "\n")
@@ -805,7 +805,7 @@ function Dialog.update()
         end
         if DLG_TRACE then
             print(string.format("[KakarotAccess] dlg-notice speak=%s\n",
-                tostring((notice_full or composed):sub(1, 60))))
+                Core.clip(notice_full or composed, 60)))
         end
         Speech.say_protected(notice_full or composed)
         -- Mark the composed utterance, each node text AND each folded row: per-part

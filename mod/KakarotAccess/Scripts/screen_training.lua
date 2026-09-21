@@ -121,7 +121,7 @@ local function dump_sample(sig, row, idx)
         if not f then return end
         f:write(string.format("[%d] idx=%s row=%s cap00=%s sig=%s\n",
             os.time(), tostring(idx), tostring(row and row.name),
-            tostring(field_text("Txt_Cap00")), (sig or ""):sub(1, 160)))
+            tostring(field_text("Txt_Cap00")), Core.clip(sig, 160)))
         f:close()
     end)
 end

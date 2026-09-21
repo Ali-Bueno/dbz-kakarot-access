@@ -5,7 +5,7 @@
 > reference — not needed once the adapter is working. For *how the call physically reaches PRISM on
 > each engine* (the transport), see [the integration index](README.md).
 >
-> Checked against **PRISM v0.16.7** by downloading the asset and reading the binary/headers.
+> Checked against **PRISM v0.18.2** by downloading the asset and reading the binary/headers.
 > **No need to compile the PRISM repo or use CMake/vcpkg** to consume it: the release is enough.
 
 - **Per-platform releases** on GitHub (`ethindp/prism`, assets of the latest release). For Windows:
@@ -37,11 +37,23 @@
   compiled *into* the game (decomp / libultraship PC ports) can link `prism.lib` and call the API directly.
   The static `prism.lib` is **MSVC C++** → MSVC toolchain only (not MinGW). Still copy `prism.dll` (+
   `tolk.dll`) next to the exe as a POST_BUILD step.
-- **Version note — use PRISM ≥ v0.17.0.** Releases v0.16.2–v0.16.7 had a regression
+- **Version note — use PRISM ≥ v0.18.0** (v0.17.0 is NOT enough, see below). Releases v0.16.2–v0.16.7 had a regression
   ([issue #49](https://github.com/ethindp/prism/issues/49)) where the **NVDA backend's `initialize()`
   falsely succeeded when NVDA wasn't running, shadowing JAWS/other readers** — so `acquire_best` could
   pick a dead backend. **Fixed in v0.17.0** (2026-07-07); `acquire_best` is correct there. Only if you're
   pinned to an affected version, the workaround is to enumerate the registry and pick the highest-priority
   backend reporting `IS_SUPPORTED_AT_RUNTIME` instead of `acquire_best` — and retire that workaround once
   you upgrade to ≥ v0.17.0.
+- **Why v0.18.0 and not v0.17.x — CJK text is silently mangled below it.** Every release through
+  v0.17.3 bundles a simdutf whose **icelake (AVX-512)** UTF-8→UTF-16 kernel builds lane masks from a
+  signed `1 << n` with `n` up to 32 (UB). On a CPU that dispatches to that kernel (Zen 4/5, some
+  Intel) multi-byte characters lose the top 4 bits of their codepoint — Chinese/Japanese/Korean come
+  out as mixed-script garbage while ASCII is fine, on **every** backend. Fixed in v0.18.0
+  ([prism#96](https://github.com/ethindp/prism/issues/96), simdutf PR #1004). Pinned to an older
+  build? `SIMDUTF_FORCE_IMPLEMENTATION=haswell` in the environment works around it.
+- **Upgrading PRISM means REBUILDING your bridge — `PrismConfig` is not ABI-stable.** It went from
+  `{ uint8_t version; }` (v0.16.7) to 8 fields (v0.18.2), and `prism_config_init` returns it **by
+  value**: on the x64 MSVC ABI a struct over 8 bytes returns through a hidden pointer, so a bridge
+  compiled against the old header calls the new DLL with the wrong convention and corrupts memory.
+  Ship the header, the lib and the DLL from the SAME release, and recompile.
 - **Deploy**: copy `prism.dll` (+ `tolk.dll`) next to the mod DLL. That's all.

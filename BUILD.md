@@ -32,7 +32,7 @@ dragon ball kakarot access/            ← this repo
 │   ├── prism_bridge.dll               ← built by build.ps1
 │   ├── prism.dll                      ← PRISM runtime (copied by build.ps1; no tolk.dll needed)
 ├── libs/lua54/                        ← vendored Lua 5.4.4 source (UE4SS's exact version) + lua54.lib
-├── libs/prism/                        ← PRISM v0.16.7 prebuilt (bin/include/lib)
+├── libs/prism/                        ← PRISM v0.18.2 prebuilt (bin/include/lib); v0.18.0 is the MINIMUM
 └── reference/dbz-kakarot/             ← static recon (UI/text architecture)
 ```
 

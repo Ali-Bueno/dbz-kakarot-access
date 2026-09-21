@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Assemble a KakarotAccess release .zip for the installer to download.
 
@@ -71,6 +71,31 @@ $RequiredDlls = 'prism.dll', 'prism_bridge.dll', 'mem_bridge.dll', 'audio_bridge
 $missing = $RequiredDlls | Where-Object { -not (Test-Path (Join-Path $ScriptsSrc $_)) }
 if ($missing) {
     throw "Missing built DLLs in Scripts: $($missing -join ', '). Run the src\*\build.ps1 scripts first."
+}
+
+# --- the PRISM runtime must be COHERENT ----------------------------------------
+# Both of these ship silently and neither is a warning: a stale prism.dll mangles CJK text on
+# AVX-512 CPUs, and a prism_bridge.dll not rebuilt against the current prism.h is an ABI
+# mismatch (PrismConfig is returned BY VALUE and changed size between PRISM releases).
+# See reference\dbz-kakarot\notes\dbz-kakarot-chinese-speech.md
+$VendorPrism  = Join-Path $PSScriptRoot 'libs\prism\bin\prism.dll'
+$ShippedPrism = Join-Path $ScriptsSrc 'prism.dll'
+if (Test-Path $VendorPrism) {
+    if ((Get-FileHash $ShippedPrism -Algorithm SHA256).Hash -ne (Get-FileHash $VendorPrism -Algorithm SHA256).Hash) {
+        throw "Scripts\prism.dll differs from libs\prism\bin\prism.dll - it is stale. Run src\prism_bridge\build.ps1 to redeploy it."
+    }
+} else {
+    # Fail OPEN on "cannot tell": libs\prism\bin is gitignored, so a fresh clone has nothing
+    # to compare against. Only a real mismatch is evidence.
+    Write-Warning "libs\prism\bin\prism.dll not present - cannot verify which PRISM version is being shipped."
+}
+
+$BridgeBuilt = (Get-Item (Join-Path $ScriptsSrc 'prism_bridge.dll')).LastWriteTime
+$BridgeStale = @((Join-Path $PSScriptRoot 'src\prism_bridge\prism_bridge.c'),
+                 (Join-Path $PSScriptRoot 'libs\prism\include\prism.h')) |
+               Where-Object { (Test-Path $_) -and (Get-Item $_).LastWriteTime -gt $BridgeBuilt }
+if ($BridgeStale) {
+    throw "prism_bridge.dll is older than $($BridgeStale -join ', '). Rebuild it with src\prism_bridge\build.ps1."
 }
 
 # --- validate the Lua before anything is staged --------------------------------

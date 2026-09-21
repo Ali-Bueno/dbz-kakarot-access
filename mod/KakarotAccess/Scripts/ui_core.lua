@@ -728,6 +728,23 @@ function Core.read_text(node)
     return nil
 end
 
+-- Clip to `max` BYTES without splitting a UTF-8 character. A cut inside a multi-byte
+-- sequence yields invalid UTF-8, which UE4SS's `print` raises on (it transcodes to
+-- UTF-16) and which PRISM refuses outright. Never raises: it is used from log paths.
+function Core.clip(s, max)
+    s = tostring(s or "")
+    if #s <= max then return s end
+    local cut = max
+    while cut > 0 do
+        local b = s:byte(cut + 1)
+        -- 0x80-0xBF is the UTF-8 continuation-byte range (RFC 3629): while the byte just
+        -- past the cut is one, the cut is mid-character, so walk back to the lead byte.
+        if not b or b < 0x80 or b > 0xBF then break end
+        cut = cut - 1
+    end
+    return s:sub(1, cut)
+end
+
 -- Guarded TArray access: returns the array and its length, or nil, nil.
 --
 -- `owner[name]` does NOT return nil when things are wrong — UE4SS hands back an INVALID

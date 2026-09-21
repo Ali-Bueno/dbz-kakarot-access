@@ -5086,7 +5086,7 @@ function Nav.dump()
                                         end
                                     end
                                     f:write(string.format("  %s   e.g. \"%s\"\n",
-                                        key, tostring(txt or ""):sub(1, 40)))
+                                        key, Core.clip(txt, 40)))
                                 end
                             end
                         end

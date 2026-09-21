@@ -87,11 +87,48 @@ local function log_say(text, interrupt)
     end)
 end
 
--- Spanish TTS at a normal rate is ~14 chars/s; add a 0.5 s tail so the reader doesn't
--- clip the last word. Capped so a very long notice can't lock out the board forever.
+-- Estimated time to SPEAK a line. Both the queue windows and the protection window are built
+-- on it. Rate calibrated on Spanish TTS at a normal rate; the tail stops the reader clipping
+-- the last word, and the cap stops one long notice owning the reader.
+--
+-- Counted in CHARACTERS, not bytes: `#text` over-charged Cyrillic, Thai and Arabic by 2-3x
+-- (their letters are 2-3 UTF-8 bytes each) and held every window that much too long. Ideographs
+-- are the genuine exception -- a hanzi or a kana is a whole syllable, not a letter -- so they
+-- keep the weight `#text` already gave them and their estimate does not move.
+local CHARS_PER_S = 14
+local SPEECH_TAIL_S = 0.5
+local SPEECH_CAP_S = 6.0
+local IDEOGRAPH_WEIGHT = 3              -- what `#text` already charged a 3-byte character
+-- Unicode blocks whose characters are syllables rather than letters: Hiragana+Katakana,
+-- CJK Extension A, CJK Unified Ideographs, Hangul Syllables. Thai is NOT here: it is 3 bytes
+-- per letter but spoken at letter speed, which is why byte width cannot decide this.
+local IDEOGRAPH_RANGES = {
+    { 0x3040, 0x30FF }, { 0x3400, 0x4DBF }, { 0x4E00, 0x9FFF }, { 0xAC00, 0xD7A3 },
+}
+local IDEOGRAPH_MIN = IDEOGRAPH_RANGES[1][1]   -- skip the range walk for Latin/Cyrillic text
+
 local function speak_seconds(text)
-    return math.min(6.0, 0.5 + #tostring(text) / 14)
+    local s = tostring(text)
+    local units
+    -- utf8.codes RAISES on malformed input and this is the speech path, so on anything it
+    -- refuses fall back to the byte count rather than take the utterance down.
+    pcall(function()
+        local n = 0
+        for _, cp in utf8.codes(s) do
+            local w = 1
+            if cp >= IDEOGRAPH_MIN then
+                for _, r in ipairs(IDEOGRAPH_RANGES) do
+                    if cp >= r[1] and cp <= r[2] then w = IDEOGRAPH_WEIGHT break end
+                end
+            end
+            n = n + w
+        end
+        units = n
+    end)
+    return math.min(SPEECH_CAP_S, SPEECH_TAIL_S + (units or #s) / CHARS_PER_S)
 end
+
+Speech.speak_seconds = speak_seconds   -- exposed for the offline test
 
 -- Cost telemetry (2026-07-16 night: mods.txt A/B proved the residual cinematic stutter
 -- IS this mod, while the registry step measures only ~5% — something unmeasured). Every
@@ -107,11 +144,22 @@ end
 local RECENT_MAX = 12
 local recent, recent_n = {}, 0
 
+-- PRISM refuses a WHOLE utterance on some errors (invalid UTF-8, no backend) and speaks
+-- nothing at all. Report each distinct code ONCE: that silence is otherwise indistinguishable
+-- from a reader that is simply idle, and it left no trace anywhere (Chinese report, 2026-09-20).
+local reported_say_error = {}
+local function report_say_error(code)
+    local key = tostring(code)
+    if reported_say_error[key] then return end
+    reported_say_error[key] = true
+    print(string.format("[KakarotAccess] prism.say refused an utterance (PrismError %s)\n", key))
+end
+
 local function timed_say(text, interrupt)
     recent_n = recent_n + 1
     recent[(recent_n - 1) % RECENT_MAX + 1] = text
     local t0 = os.clock()
-    prism.say(text, interrupt)
+    local ok, err = prism.say(text, interrupt)
     -- Braille rides the same sink, so it is timed with it: it is a second backend call on the
     -- GAME THREAD, and this counter is exactly the instrument that would catch it costing more
     -- than it is worth. Guarded — a braille display going away must never take speech with it.
@@ -122,6 +170,8 @@ local function timed_say(text, interrupt)
     s.n = s.n + 1
     s.ms = s.ms + dt
     if dt > s.max then s.max = dt end
+    -- After the timing block: `print` is file I/O and would pollute the measurement.
+    if not ok then report_say_error(err) end
 end
 
 -- Queued (interrupt=false) lines the backend may not have FINISHED speaking yet. An

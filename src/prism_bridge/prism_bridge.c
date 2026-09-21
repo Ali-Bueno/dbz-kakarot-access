@@ -14,6 +14,7 @@
  * Lua usage:
  *   local prism = require("prism_bridge")
  *   prism.say("Hello", true)   -- speak (interrupt previous); interrupt defaults true
+ *                              -- say/output/braille all return: ok, PrismError code
  *   prism.say("queued", false) -- speak without interrupting
  *   prism.output("Hello", true)-- speak AND send to a braille display, in one backend call
  *   prism.braille("Hello")     -- braille display only, no speech
@@ -76,27 +77,33 @@ static int g_ready = 0;
 
 /* ---- Lua-callable functions ---- */
 
+/* Every speech entry point answers the same pair: ok, plus the PrismError behind it.
+ * The code is returned rather than swallowed because PRISM refuses a WHOLE utterance on
+ * some errors (PRISM_ERROR_INVALID_UTF8, say) and speaks nothing, which is otherwise
+ * indistinguishable from a dead screen reader. */
+static int push_result(lua_State *L, PrismError e) {
+    lua_pushboolean(L, e == PRISM_OK);
+    lua_pushinteger(L, (lua_Integer)e);
+    return 2;
+}
+
 static int l_say(lua_State *L) {
     const char* text = luaL_checkstring(L, 1);
     int interrupt = 1; /* default: interrupt */
     if (lua_gettop(L) >= 2) { interrupt = lua_toboolean(L, 2); }
-    if (!g_ready) { lua_pushboolean(L, 0); return 1; }
-    PrismError e = p_speak(g_backend, text, interrupt ? true : false);
-    lua_pushboolean(L, e == PRISM_OK);
-    return 1;
+    if (!g_ready) { return push_result(L, PRISM_ERROR_NOT_INITIALIZED); }
+    return push_result(L, p_speak(g_backend, text, interrupt ? true : false));
 }
 
 static int l_output(lua_State *L) {
     const char* text = luaL_checkstring(L, 1);
     int interrupt = 1;
     if (lua_gettop(L) >= 2) { interrupt = lua_toboolean(L, 2); }
-    if (!g_ready) { lua_pushboolean(L, 0); return 1; }
-    PrismError e = p_output(g_backend, text, interrupt ? true : false);
-    lua_pushboolean(L, e == PRISM_OK);
-    return 1;
+    if (!g_ready) { return push_result(L, PRISM_ERROR_NOT_INITIALIZED); }
+    return push_result(L, p_output(g_backend, text, interrupt ? true : false));
 }
 
-/* braille(text) -> bool : send text to the BRAILLE DISPLAY only, no speech.
+/* braille(text) -> ok, PrismError : send text to the BRAILLE DISPLAY only, no speech.
  *
  * Kept as its own call rather than routing speech through prism_backend_output (which is the
  * library's combined speak+braille path): output() is one call instead of two, but if its
@@ -105,10 +112,8 @@ static int l_output(lua_State *L) {
  * is strictly ADDITIVE — a braille failure can never cost the player their speech. */
 static int l_braille(lua_State *L) {
     const char* text = luaL_checkstring(L, 1);
-    if (!g_ready || !p_braille) { lua_pushboolean(L, 0); return 1; }
-    PrismError e = p_braille(g_backend, text);
-    lua_pushboolean(L, e == PRISM_OK);
-    return 1;
+    if (!g_ready || !p_braille) { return push_result(L, PRISM_ERROR_NOT_INITIALIZED); }
+    return push_result(L, p_braille(g_backend, text));
 }
 
 static void feat_field(lua_State *L, const char *name, uint64_t feats, uint64_t bit) {

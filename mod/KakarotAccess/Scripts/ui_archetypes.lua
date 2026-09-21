@@ -642,6 +642,10 @@ function A.markup_to_speech(s)
         return b and (" " .. b .. " ") or " "
     end)
     s = s:gsub("<[^>]->", " ")                    -- drop remaining tags
+    -- Lua's %s is ASCII-only. The zh/ja text pads with U+3000 (ideographic space) and
+    -- U+00A0 (no-break), so normalise both first: otherwise a padding-only widget trims
+    -- to a non-empty string and an adapter claims the tick with nothing to say.
+    s = s:gsub("\u{3000}", " "):gsub("\u{00A0}", " ")
     s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     return s ~= "" and s or nil
 end

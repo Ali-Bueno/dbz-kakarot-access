@@ -131,7 +131,7 @@ function W.update()
     local sig = current_guidance()
     if GUIDE_TRACE and sig ~= guide_trace_last then
         guide_trace_last = sig
-        print("[KakarotAccess] guide " .. tostring(sig and sig:sub(1, 60)) .. "\n")
+        print("[KakarotAccess] guide " .. tostring(sig and Core.clip(sig, 60)) .. "\n")
     end
     -- Nothing showing, or already spoken: keep watching. An empty read never clears
     -- the latch (teardowns blank first; stale text must not re-announce later).

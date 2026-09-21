@@ -364,7 +364,7 @@ local function trace_bubble(src, t)
     if seen_bubbles[t] or seen_n >= BUBBLE_LOG_MAX then return end
     seen_bubbles[t] = true
     seen_n = seen_n + 1
-    print(string.format("[KakarotAccess] bubble[%s]: %s\n", src, t:sub(1, 70)))
+    print(string.format("[KakarotAccess] bubble[%s]: %s\n", src, Core.clip(t, 70)))
 end
 
 -- BOTH arrays (reversed 2026-07-25, same day). The first cut read only EventSpeechWidgetArray and
@@ -419,7 +419,7 @@ local function trace_line(src, w, line)
     pcall(function() vis = tostring(w:GetVisibility()) end)
     pcall(function() op = string.format("%.2f", w:GetRenderOpacity()) end)
     print(string.format("[KakarotAccess] line src=%s(%s) vis=%s op=%s live=%s: %s\n",
-        src, wn, vis, op, tostring(Core.pane_live(w)), line:sub(1, 40)))
+        src, wn, vis, op, tostring(Core.pane_live(w)), Core.clip(line, 40)))
 end
 
 -- The surface probe: returns the current "Speaker: line", the widget it came from and the

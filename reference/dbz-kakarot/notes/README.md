@@ -55,6 +55,7 @@ notes are the evidence behind them.
 | [Radar picker](dbz-kakarot-radar-picker.md) | The R3 modal target menu, the XInput hook, and why raycast avoidance is dead here |
 | [Dragon Ball radar](dbz-kakarot-dragonball-radar.md) | Native type/active fields, component-free pickup markers, collection handling, and local test-build limits |
 | [UI cache: no notify feed](dbz-kakarot-event-driven-ui-cache.md) | The reversed rule: construction notifies fire on the loader thread and corrupt the Lua state |
+| [Chinese speech corruption](dbz-kakarot-chinese-speech.md) | PRISM's bundled simdutf mangles CJK on AVX-512 CPUs; the PrismConfig ABI break that makes a DLL bump require a bridge rebuild |
 
 ## Project history and open threads
 

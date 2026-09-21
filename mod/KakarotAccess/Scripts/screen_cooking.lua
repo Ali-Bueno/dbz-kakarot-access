@@ -172,7 +172,7 @@ local function dump_sample(sig, row)
     f:write(string.format("[%d] idx=%s row=%s title=%s sig=%s\n",
         os.time(), tostring(A.list_select_index(list)),
         tostring(row and row.name), tostring(shoplist_text("WL_CookWin_Cap_Title")),
-        (sig or ""):sub(1, 160)))
+        Core.clip(sig, 160)))
     f:close()
 end
 
