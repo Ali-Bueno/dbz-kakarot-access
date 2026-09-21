@@ -2,13 +2,16 @@
 
 ---
 
-## v0.1.6 - September 8, 2026
+## v0.1.6 - September 21, 2026
 
 **The radar learned everyone's name, and the game's cutscenes are described.** Until now the radar
 called every character "Goku", every enemy "alien" and every pickup a generic "item"; it now uses the
 game's own localized text for all of them. And the opening of the game - the title-screen montage,
 then everything from the first scene through the Raditz fight - now comes with spoken descriptions of
 what is on screen, in all 13 languages the mod speaks.
+
+It also fixes something that made the mod unusable in Chinese, Japanese and Korean on some
+computers, reported by a player who did the hard half of the diagnosis himself.
 
 This is also the first version with an outside contributor. **Thank you, buu420**, for the pull
 request that brought the DLC menu reader, the Community Board help, the Dragon Ball radar category
@@ -17,6 +20,33 @@ without launching the game. A big chunk of what follows is that work.
 
 The honest caveat, as usual: several of these changes were verified by reading and by offline tests
 rather than by a full playthrough. Where something still needs a real listening pass, it says so.
+
+### Chinese, Japanese and Korean now speak correctly
+
+A player running the game in Simplified Chinese heard nonsense - characters from unrelated
+alphabets mixed together - while English worked perfectly. The fault was not in the mod. The
+screen-reader library it ships, PRISM, bundled a text converter that corrupts multi-byte characters
+on AVX-512 processors (recent AMD Ryzen, some Intel), so Chinese, Japanese and Korean lost part of
+each character while Latin text was untouched. That is also why it only happened to some people.
+PRISM is updated to v0.18.2, which fixes it.
+
+Special thanks to the player who reported it: he tested each screen reader backend separately and
+captured exactly what the mod was sending before it was spoken, which is what proved the problem
+was downstream of the mod. That turned an unreproducible report into a one-day fix.
+
+Two more faults turned up while chasing it, both specific to non-Latin text:
+
+- Ambient conversation bubbles could cut a Chinese line in the middle of a character when writing
+  it to the log, which silenced the reader for that moment. Every place the mod shortens game text
+  for the log now cuts on a character boundary.
+- The mod judged how long a line takes to speak by its size in bytes rather than in characters, so
+  Russian, Thai and Arabic lines were held two to three times too long and could delay whatever
+  came next. Chinese, Japanese and Korean are deliberately unchanged there - a character in those
+  scripts really does take that long to say.
+
+Also in this area: four lines the mod speaks had no translation in eleven languages and came out in
+English. And if the screen reader ever refuses a line outright, the mod now records it instead of
+going quiet with no trace - that silence is what made this report so hard to place.
 
 ### Cutscenes, described
 
