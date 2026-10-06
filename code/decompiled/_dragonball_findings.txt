@@ -1,0 +1,291 @@
+DRAGON BALL WORLD STATE - native RE findings (2026-10-06)
+==========================================================
+Ghidra 12.0, project code/ghidra/KakarotAT, program AT-Win64-Shipping.exe.unpacked.exe,
+headless -readOnly -noanalysis. Script: code/ghidra/dragonball_probe.java (command-file driven).
+Raw decompiler output for every function cited: code/decompiled/_dragonball_raw.txt.
+Offsets cross-checked against CXXHeaderDump AT.hpp / ATExt.hpp / UMG.hpp / AT_enums.hpp.
+Confidence tags: [PROVEN] read directly in code and consistent with the header dump;
+[LIKELY] strong inference; [UNKNOWN] not established.
+
+
+0. CORRECTION TO THE 2026-09-08 NOTE (affects the shipped reader)  [PROVEN]
+---------------------------------------------------------------------------
+The minimap-icon vtables are 0x143ecb3f0 / 0x143ecb690 / 0x143ecb930, NOT
+0x143ecb408 / 0x143ecb6a8 / 0x143ecb948 (those are 0x18 bytes = 3 slots too high).
+Evidence: the only code references are the constructors storing the vtable pointer:
+    0x143ecb3f0 <- FUN_1417a1460 (LEA @1417a1476)      (UAT_UIMiniMapIcon)
+    0x143ecb690 <- FUN_1415d4330 (LEA @1415d4340)      (UAT_UIMiniMapNaviIcon, uses +0x100/+0x108)
+    0x143ecb930 <- FUN_1415d4600 (LEA @1415d4624)      (UAT_UIMiniMapRangeIndicatorIcon, uses +0xA8)
+    nothing references 0x143ecb408.
+Real slot map of UAT_UIMiniMapIcon (vtable 0x143ecb3f0), each confirmed by its call sites:
+    +0x240 Init(type, actor, p4, p5, p6)  0x1415f1070  (called by slot alloc 0x1415e80a0 with 6 args)
+             -> SetShown(1); ImgSw->vfn+0x4d8(type) [icon-switch type]; ImgSw.Target(+0x3A0)=actor
+    +0x248 GetType()                      0x1415e38c0  return *(u8*)(WL_Icon_ImgSw + 0x398)
+    +0x250 Release()                      0x1415df920  +0x88=0; +0x8A=0; TargetActor(+0x28)=0;
+                                                       ImgSw->vfn+0x4f0(); SetShown(0)
+    +0x258 SetShown(bool)                 0x1415f50d0  writes +0x89 = bool (see Q1)
+    +0x260 IsShown()                      0x1415e6950  return *(u8*)(this+0x89)
+    +0x268 GetMapPos(out)                 0x1415e4130  -> vfn+0x280(this,out,zero)
+    +0x270 GetColor(out)                  0x1415e2fd0  reads ImgSw+0x108 (UUserWidget.ColorAndOpacity, UMG.hpp 0x108)
+    +0x278 SetColor(in)                   0x1415f0910  FUN_1429ddd00(ImgSw, color)
+    +0x280 MapDelta(out, playerPos)       0x1415e3900  (world pos via +0x288) - playerPos -> map space
+    +0x288 GetWorldPos(out)               0x1415e4180  +0x8C ? fixed pos(+0x90) : TargetActor.RootComponent loc
+    +0x290 SetScale                       0x1415f1500
+    +0x298 ApplySlotLayout                0x1415e47f0  restores CanvasPanelSlot layout, writes +0x8A=1
+Consequences:
+  * +0x89 is the SHOWN (in radar range) flag, values 0/1. It is NOT EMapIcon.
+    native_offsets.lua miniMapIcon.iconType = 0x89 + dragonball_marker.lua:28-30
+    (`Mem.u8(icon,0x89) ~= 28 -> reject`) can never match: the reader nominates no ball, ever.
+  * The EMapIcon type of a minimap icon is the byte at WL_Icon_ImgSw + 0x398
+    (UAT_MapIconSwitchBase tail; first reflected member is Target @0x3A0). The game itself
+    uses that byte as the type in three places: removal 0x1415ee940 (via GetType),
+    area-map removal 0x14159f470 (`(char)icon[0x73] == type`), area-map open 0x14159c500.
+  * "Retirement does not clear +0x88/TargetActor" was wrong: the removal path calls
+    Release (0x1415df920), which clears both.
+  * +0x8A = "slot layout applied" (1 after first show, 0 on release). Nothing in
+    0x1415d0000-0x141600000 reads it. Not useful.
+  * +0x8B: zeroed on alloc; only reader 0x1415df870 (pending-kill check skipped when 0).
+    No non-zero writer found in the minimap range.
+
+
+Q1. MINIMAP OUT-OF-RANGE AND FLASH  [PROVEN]
+-------------------------------------------
+Radar tick FUN_1415dc730 (UAT_UIMiniMapRadar) iterates MapIconList (+0x6A8/+0x6B0) calling
+FUN_1415f6850(icon, playerPos, rot, flag) per icon:
+    if (+0x88 == 0 || WL_ParantMapTex(+0x40) == 0) return;
+    if (!FUN_1415df870(icon)) { icon->Release(); return; }         // target lost
+    icon->MapDelta(&d, playerPos); SetRenderTranslation(ImgSw, d); SetAngle(ImgSw, rot);
+    if (sqrt(d.x^2+d.y^2) <= radar.RadarCircleHelfSize(+0x3F8) / *(float*)(radar+0x838))
+         icon->SetShown(1);  else  icon->SetShown(0);
+SetShown 0x1415f50d0:
+    if (+0x89 != b) { +0x89 = b;
+       if (!b) { ImgSw->SetVisibility(1 = Collapsed); ImgSw->vfn+0x260() }   // detached/collapsed
+       else    { AddChild(WL_Parent(+0x38), ImgSw); ImgSw->SetVisibility(3 = HitTestInvisible);
+                 ApplySlotLayout() } }
+=> A far ball's icon stays allocated: +0x88=1, TargetActor=ball actor, ImgSw.Target=ball,
+   ImgSw+0x398=28; only +0x89=0 and ImgSw Collapsed. The slot is allocated at AddIcon time
+   (0x1415d5510 case 0x1c -> 0x1415e80a0), independent of distance.
+Validity FUN_1415df870: true if +0x8C (fixed pos); else if TargetActor!=0: true when +0x8B==0,
+   otherwise checks GUObjectArray flag bit 29 (PendingKill). false if TargetActor==0
+   (UPROPERTY nulled by GC) -> Release on next tick.
+FLASH: overlap groups built by FUN_1415e0000 (icons within +-15.0 map units of each other,
+   group struct floats 1.3/0.65/15/15), cycled by FUN_1415f6600, which calls FUN_1415f0600:
+       GetColor(&c); c.alpha = t; SetColor(c)   -> ImgSw.ColorAndOpacity alpha (UMG 0x108)
+   So the flash animates the icon switch's ColorAndOpacity ALPHA when several icons overlap.
+   It does not touch Visibility, RenderOpacity, +0x88/+0x89 or the slot.
+   (RadarCircleHelfSize 0x3F8, MapIconList 0x6A8, BlinkCheckRenge 0x3FC are reflected;
+   +0x838 zoom divisor is an unreflected tail field.)
+
+
+Q2. COLLECTION  [PROVEN]
+-----------------------
+Pickup: ADragonBallStaticActor interaction FUN_140beada0 (vtable slot 0x143a9a8d0)
+   -> FUN_14114b850(GetDragonBallManager(), actor, *(int*)(actor+0x398) /*ball index*/):
+     1. HUD OnGetDragonball 0x1411e4390 -> FieldManager 0x141545380:
+          FUN_1411e3000 (DB-get UI), MapManager remove 0x14159f290(type 0x1c, actor):
+            minimap 0x1415ee940: for each MapIconList icon with GetType()==28:
+                 +0x8C=0; if TargetActor==actor -> Release()  (+0x88=0, TargetActor=0, +0x89=0)
+            area map 0x14159f470: icon with (+0x398==28 && Target==actor) -> hidden + removed
+                 from WL_MapIconList
+            cache list +0x178: entries whose Owner(+0x18)==actor removed
+     2. m_dragonBallInfo[idx]: qword @+0 = 0x1000000, AreaName freed, pointNum=0, Actor(+0x20)=0
+     3. FUN_141150a70: save DragonballItems[idx] = {Num=idx, Area=-1, bSpawned=0, PointId=""}
+     4. FUN_142dd9f90(GWorld?, actor, 0, 1) = DestroyActor(actor, bNetForce=false,
+        bShouldModifyLevel=true)  [LIKELY identification; it is a destroy, not a hide]
+   Order: icon Release -> placement/save cleared -> actor destroyed.
+Despawn (progress makes the point invalid): FUN_1411383f0 -> FUN_14113b510(dbm, idx+1):
+   HUD OnDespawnedDragonball(RefActor, RefActor+0x398) (same map-manager removal),
+   FUN_142b0f800(RefActor, 0, 1) [AActor::Destroy, LIKELY], spawner.RefActor = 0;
+   then FUN_141150a70 clears the save entry.
+"Retired" vs "far": after collection the minimap slot has +0x88=0 and TargetActor=null;
+   a far uncollected ball has +0x88=1, TargetActor=ball, +0x89=0. +0x8A does not matter.
+
+
+Q3. AREA MAP SOURCE  [PROVEN]
+----------------------------
+MapManager AddIcon 0x141587930 (UAT_UIMapManager):
+    if (MinimapIns  +0x98) FUN_1415d5510(minimap, type, actor, scale)
+    if (AreamapIns  +0xA0) FUN_141587ea0(areamap, type, name, pos, scale, actor)
+    if (*(u8*)(this+0x140) && actor) append to MapIconInfoCacheList (+0x178, count +0x180):
+         entry(0x28) {u8 type @0x0, FString name @0x8, AActor* Owner @0x18 (reflected), float @0x20}
+Area map add (UAT_UIMapM): takes a free switch from WL_MapIconSwList (0xC00, free when
+    Target(+0x3A0)==0), sets type (vfn+0x4d8 -> +0x398), Target=actor, appends it to
+    WL_MapIconList (0xBF0/0xBF8, reflected TArray<UAT_MapIconSwitchBase*>), per-type counter
+    +0xE5C+type*4.
+AreamapIns is created once by FUN_141593990 (returns early if +0xA0 set; CreateWidget +
+    AddToViewport z=150) from MapManager init 0x141598d70; opening (0x14159c500) only sets
+    visibility, so it is reused rather than recreated [close path not traced: LIKELY] ->
+    WL_MapIconList persists while the area map is closed and holds every registered ball of
+    the area, at any distance.
+Open: FUN_14159c500 walks WL_MapIconList; entries whose Target is null/invalid are removed
+    (0x14159f470); others are positioned. It first replays the cache via FUN_14159bdb0
+    when +0x140 is set.
++0x140 / cache list: 0x141598d70 sets +0x140=0 unless FUN_140d2f940() (a DLC-related global
+    check, DAT_14592ff48) is true -> in the base game the cache list is UNUSED [LIKELY];
+    the live source is AreamapIns.WL_MapIconList.
+Removal on collection: see Q2 (switch hidden, dropped from WL_MapIconList).
+Lua path: MapMng = HUD.UIFieldManager(0x578).MapMng(0x520) [both reflected];
+    MapMng.AreamapIns(0xA0).WL_MapIconList(0xBF0)[k].Target (0x3A0, reflected);
+    type = raw u8 at switch+0x398.
+
+
+Q4. DRAGONBALLMANAGER PLACEMENT + WORLD MAP  [PROVEN except where noted]
+------------------------------------------------------------------------
+Authoritative per-ball state is in the SAVE, not in m_dragonBallInfo:
+    UAT_GameInstance.SaveManager(0x1EA0) -> UATSaveManager.SaveGame(0x100) -> UATSaveGame
+    .Item(0x1F0E0).DragonballItems(0x33C10) = FDragonballItem[7] (size 0xE0 = 7 x 0x20)
+       absolute: SaveGame + 0x52CF0 + i*0x20   (DLC5 story: DLC5DragonballItems, +0x52DD0)
+    FDragonballItem (ATExt.hpp): Num 0x0, Area 0x4 (EAreaIndex, -1 = none), bSpawned 0x8,
+       SpawnedPointId FString 0x10 (= the ADragonballSpawner's object name)
+    Mode select: FUN_140d2f970() (DAT_14592ff28) picks 0x52DD0; used identically everywhere.
+    NOTE: FDragonballItem is a fixed C array - reflection exposes element 0 only; read raw.
+Writers:
+    TestDragonBallSpawn/OnChangeProgress (same exec 0x1418a22a0 -> 0x141139500), per ball i<7:
+       if !IsStoneDragonBall && inventory count(ItemId[i]) < 1 && save[i].bSpawned==0:
+          area  = FUN_14114cc30 (least-populated eligible area, random tie; SKIPS the area the
+                  player is in, "Area%02d_P", except in DLC5)
+          point = FUN_14114ce90; FUN_1411509b0(dbm,i,1,pointId,area) -> save {Num=i,Area,
+                  bSpawned=1, PointId}; FUN_141151c70 -> spawn now if that spawner is
+                  registered; m_dragonBallInfo[i].ballNum(+4) = i
+    FUN_1411392c0 (mini-game reward): save[i] = {bSpawned=1, Area=-1, PointId=""}  <- NOT a
+       world ball; the world map ignores it (no point-table row).
+    FUN_141150a70 (pickup / invalid point): bSpawned=0, Area=-1, PointId="".
+m_dragonBallInfo (UDragonBallManager 0x348, 7 entries, stride 0x28):
+    set on actor spawn (FUN_141151a50): Actor(+0x20) = spawned ball actor
+    set by TestDragonBallSpawn: ballNum(+0x4)
+    cleared at pickup (FUN_14114b850): first qword=0x1000000, AreaName="", pointNum=0, Actor=0
+    No writer of bSelected/bPlacemented/Type/AreaName found in the spawn/pickup paths
+    [LIKELY unused there; not exhaustively searched].
+WORLD MAP per-area ball icon: FUN_1415cbd50 (UAT_UIMapWorld, called from FUN_1415d2770):
+    gate: (!FUN_140d2fa40() [no DLC story active] || DLC5) && dbm && !IsStoneDragonBall(dbm)
+    FUN_14113f820(dbm, &stages): for i<7 with save[i].bSpawned: look up SpawnedPointId in
+       GlobalData(GameInstance+0x1EF0).SpawnDragonballPointInfoTable(0x3988) and append
+       row.WorldMapLocation (FATDragonBallSpawnPointInfo 0x18, EWorldStageId)
+    for each stage: matching InfoIcon(0x4D0, FWorldMapsSymbol stride 0x20) symbol (remapped to
+       a sibling stage when that one has no symbol) -> MapIcon(+0x8).+0x3F4=1 and
+       MapIcon.ImageCtn(0x3D0)[2]->SetVisibility(Visible).
+    => the game's "ball out in the world, uncollected" predicate is
+       !IsStone && save[i].bSpawned==1 && SpawnedPointId resolves in the point table.
+Manager root: GetDragonBallManager is a static UFunction of UAT_BlueprintFunctionLibrary
+    (exec 0x141755c10 -> 0x140d273f0): GameMode(DAT_14592f0e8, AATGameMode).Components
+    (0x550, TMap<UClass*, FATGameModeActorComponentSettings>)[UDragonBallManager].Component(+0x8).
+    From Lua: the static call, or FindFirstOf("DragonBallManager").
+IsStoneDragonBall 0x141144fd0: compares now vs SaveGame.Dragonball.LastUsePlayTime
+    (0xCE888+0xA8 = 0xCE930) + DragonBallStoneTimeHour/Minute (0x2A8/0x2AC).
+
+
+Q5. SPAWN TIMING  [PROVEN for the mechanism; level layout UNKNOWN]
+-----------------------------------------------------------------
+Ball actors exist only while their spawner is registered:
+    ADragonballSpawner BeginPlay (FUN_141136ee0, vtable slot 0x1441d5e30): Super::BeginPlay,
+    FUN_141142a20: SpawnerMap(0x378).Add(spawner FName(+0x18), spawner); FUN_14113c4b0;
+    FUN_14114edd0: if !IsStone, for i<7 with save[i].bSpawned and save[i].SpawnedPointId ==
+       spawner's object name -> FUN_141151a50(spawner, i).
+    FUN_141151a50: if RefActor(0x368)==0: SpawnActor(DragonBallClass(dbm 0x290)) at the
+       spawner's root location; RefActor=actor; actor+0x398=i (+ model Itm001c%02d);
+       actor.ItemId(0x378)=ItemId[i]; m_dragonBallInfo[i].Actor=actor;
+       HUD OnSpawnedDragonball(actor,i) -> AddIcon type 28 (minimap + area map).
+    Placement at progress change also spawns immediately (FUN_141151c70) if the chosen
+       spawner is already registered - but new placements avoid the current area.
+So: a ball placed in another area has NO actor until that area loads; within the current
+area the actor exists once its spawner's level has begun play. Whether spawners sit in
+distance-streamed sublevels (actor appears only when near) cannot be decided statically.
+Risk: the HUD call is skipped if the HUD/FieldManager/MapMng is null at spawn time
+(0x141552c30 returns when MapMng==0); then no minimap/area-map icon exists, while
+m_dragonBallInfo[i].Actor and spawner.RefActor are still set. [observed in code; whether
+it happens at real load order is UNKNOWN]
+
+
+Q6. RAND_ENEMY  [UNKNOWN]
+------------------------
+Native callers of HUD OnSpawnedDragonball (0x1411e8920): FUN_141151a50 (spawner spawn) and
+FUN_141382f10 (a string-parsing debug/console handler) only. Every native spawn is a
+DragonBallClass actor at an ADragonballSpawner; the icon points at that ADragonBallStaticActor.
+No native writer of FDragonBallPlacementInfo.Type was found. Blueprint-callable entry points
+exist (UAT_UIFieldManager.SpawnDragonball exec 0x1417898e0 -> 0x141552c30 with any AActor,
+AAT_GameHUD.OnSpawnedDragonball exec 0x14175ff10), so a Blueprint could register an
+enemy-held ball; not examined.
+
+
+Q7. UNLOCK GATING  [PROVEN for native gates; story-unlock data UNKNOWN]
+----------------------------------------------------------------------
+Nothing is placed or spawned except through TestDragonBallSpawn/OnChangeProgress (save
+entries start bSpawned=0; spawner registration spawns only for bSpawned entries). Gates:
+    IsStoneDragonBall (cool-down after a wish) - also gates spawner spawn and world map;
+    ball owned (inventory count of ItemId[i] >= 1) or already placed -> skip;
+    candidate points (FUN_14113a6f0) from SpawnDragonballGroupInfoTable: IgnoreProgress
+       ranges (FUN_1412e1120 progress compare), ActiveQuestId (FUN_1413dcf00), Lv <= player
+       level; FUN_1411383f0 despawns placed balls whose group becomes ignored.
+The pre-unlock story window is presumably expressed through IgnoreProgress / ActiveQuestId
+DATA (not read here). A reader that requires save bSpawned==1 (world map parity) or a live
+m_dragonBallInfo/RefActor actor cannot reveal anything the game has not placed.
+
+
+RECOMMENDED PREDICATE
+---------------------
+Primary (live actor, any distance within loaded levels, no flicker):
+    dbm = GetDragonBallManager() / FindFirstOf("DragonBallManager")
+    for each entry e of dbm.m_dragonBallInfo (reflected TArray, 7 rows):
+        actor = e.Actor (reflected, +0x20)   -> available iff actor valid and not pending kill
+    Cross-check (optional, raw): save[e.ballNum].bSpawned == 1 at SaveGame+0x52CF0+i*0x20+8
+    (0x52DD0 in DLC5). Pickup clears e.Actor BEFORE DestroyActor, so collection is immediate.
+Alternative already in the minimap pool (fix the type read):
+    icon.+0x88 == 1 && TargetActor(+0x28) valid && *(u8*)(icon.WL_Icon_ImgSw + 0x398) == 28
+    (or ImgSw.Target(0x3A0) == TargetActor). Ignore +0x89 (in-range) and the switch's
+    visibility/ColorAndOpacity (flash).
+Area-level (balls not yet spawned, world-map parity):
+    !IsStoneDragonBall && save[i].bSpawned && point row(SpawnedPointId).WorldMapLocation.
+Unsafe / caveats:
+    * Area of a placed ball: use WorldMapLocation via the point table; save.Area alone is -1
+      for the mini-game reward case.
+    * Pending-kill window: Actor UPROPERTYs are nulled only at GC; between a level unload and
+      GC a destroyed ball still reads non-null and UE4SS IsValid passes. Check the PendingKill
+      flag (GUObjectArray item flags bit 29, as 0x1415df870 does) or bHidden if this matters.
+    * DragonballItems is a C array: never iterate it via reflection.
+    * ADragonBallStaticActor ball index at +0x398 and icon type at switch+0x398 are
+      unreflected tail fields (raw reads; class sizes 0x3A8 / 0x3D8 bound them).
+
+
+Q8. WORLD-MAP AREA ICON: ImageCtn[2] AND +0x3F4  (follow-up, 2026-10-06)
+------------------------------------------------------------------------
+Class UAT_UIMapWorldIcon (AT.hpp: AllNut 0x398, Img_Micon25 0x3A8, Ins_Icon_Item 0x3B0,
+Map_Icon_Switch 0x3B8, AnmCtn 0x3C0, ImageCtn 0x3D0, TextBoxCtn 0x3E0, size 0x410).
+Icon init FUN_1415b4940 (vtable slot @0x143ebded0) [PROVEN]:
+    if (AllNut(+0x398) != 0) return;          // runs ONCE per widget instance
+    AnmCtn = 5 anims, ImageCtn = 4 by WidgetTree name:
+        [0] "Dmy_Area"  [1] "Dmy_Area_Eff"  [2] "Img_Micon27"  [3] "Img_Micon33"
+    TextBoxCtn[0] = "Txt_Name"; +0x3F0 = 6; FUN_1415ca6f0(this,0);
+    +0x3F4 = 0;  ImageCtn[2]->SetVisibility(1 = Collapsed);  AllNut Collapsed; ...
+Dragon Ball marker FUN_1415cbd50 (called only from FUN_1415d2770, a vtable/delegate
+    slot of UAT_UIMapWorld) [PROVEN]:
+    returns early (touches nothing) if a DLC story is active (FUN_140d2fa40, except DLC5),
+    if the manager is null, or if IsStoneDragonBall;
+    otherwise, for each stage holding a placed ball: icon+0x3F4 = 1;
+    ImageCtn[2]->SetVisibility(0 = Visible). It never writes 0 / Collapsed.
+FUN_1415d2770 (per-symbol positioning + one-time reveal gated by symbol+0x10) does not
+    reset ImageCtn[2] or +0x3F4 either.
+(a) Writers [PROVEN within 0x141500000-0x141800000]: +0x3F4 - only FUN_1415b4940 (0) and
+    FUN_1415cbd50 (1); the other +0x3F4 writers there belong to other classes (e.g.
+    FUN_1415a6e90 acts on children whose +0x3D8/+0x3E0 are animation pointers).
+    ImageCtn[2] (`*(ImageCtn.data+0x10)`) - same two functions; the other world-map
+    ImageCtn user FUN_1415ca300 touches [3] only; FUN_1415c8aa0 is the Options menu.
+    NOTHING hides [2] or clears +0x3F4 on open/refresh. A stale Visible / 1 survives as
+    long as the icon instance survives: after the area's ball is picked up, after a wish
+    (stone - the function returns early), or in a DLC story. Whether the world-map widget
+    and its icons are recreated per opening is [UNKNOWN]: the only native write of
+    UAT_UIFieldManager.MapWorld (0x528) found is the constructor zeroing (FUN_14155bb80);
+    creation is probably Blueprint-side.
+(b) [LIKELY] exclusive: no native code other than cbd50 makes [2] Visible; [3]
+    (Img_Micon33) is the one another feature toggles (FUN_1415ca300, DLC6-gated).
+    Not checked: UMG animations in AnmCtn ("Enter", "Choose_In", "Choose_Out", two more)
+    could key Img_Micon27 visibility/opacity - pak asset not inspected.
+(c) +0x3F4 has the same lifecycle (set by cbd50, reset only by the one-time init), so it
+    is NOT less stale. It is cleaner in one respect: no UMG animation can touch it, and
+    the game's own area info window reads it (FUN_1415ca300: `if (icon+0x3F4) ->
+    FUN_14159fa60(MapInfoCtn[0])`). Raw u8, unreflected (in the gap after TextBoxCtn).
+    [PROVEN]
+Recommendation: do not treat either signal as authoritative alone. Compute the same
+    predicate the game uses, from the save: !IsStoneDragonBall && save[i].bSpawned &&
+    SpawnDragonballPointInfoTable[SpawnedPointId].WorldMapLocation == the icon's stage
+    (Q4). Use +0x3F4 / ImageCtn[2] only as a cross-check, or only when the icon was
+    created during the current opening.

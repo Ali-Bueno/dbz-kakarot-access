@@ -48,6 +48,8 @@ local FT = OFF.mapWorld
 -- object write, which corrupts silently and crashes later with no trace.
 local FT_HOST_CLASS = "Map_World_C"
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
+local ft_balls = nil       -- ft_balls[i] = true when point i carries the world map's Dragon Ball
+                           -- mark. Kept apart from the names, which are matched across rebuilds.
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
 -- Pending KEYBOARD command for the travel list (main.lua's arrow / Enter keybinds via
@@ -425,17 +427,23 @@ local function ft_build(host)
     -- spelled out in ft_host above. The pool is guaranteed populated by then — the registry
     -- side scans this class in `world_icons_on_screen`, and that gate has to pass before
     -- `state.world` is set and ft_guidance becomes reachable at all.
-    local byaddr = {}
+    -- The orange Dragon Ball mark is read from the same icon (Map_World_Icon_C derives from
+    -- UAT_UIMapWorldIcon, Map_World_Icon.hpp, so the native byte is in bounds). It is how a
+    -- sighted player learns which area to travel to; the R3 radar takes over once there.
+    local byaddr, ballat = {}, {}
     for _, ic in ipairs(Core.peek_all("Map_World_Icon_C")) do
         if Core.valid(ic) then
             local a = Mem.addr(ic)
             local nm = clean(Core.read_text(Core.member(ic, "Txt_Name")))
-            if a and nm and nm ~= "" then byaddr[a] = nm end
+            if a and nm and nm ~= "" then
+                byaddr[a] = nm
+                ballat[a] = Mem.u8(ic, OFF.mapWorldIcon.dragonBall) == 1
+            end
         end
     end
     local data = Mem.ptr(host, FT.infoIconData)
     local count = Mem.i32(host, FT.infoIconCount) or 0
-    local out = {}
+    local out, balls = {}, {}
     if data and data ~= 0 and count > 0 and count < 256 then
         for i = 0, count - 1 do
             -- read the entry's icon widget pointer (8 bytes LE) and match it by address.
@@ -443,9 +451,21 @@ local function ft_build(host)
             local b = Mem.at_bytes(data, i * FT.infoIconStride + FT.entryIcon, 8)
             if b and #b == 8 then iconptr = string.unpack("<I8", b) end
             out[i + 1] = (iconptr and byaddr[iconptr]) or (I18n.t("map_point") .. " " .. (i + 1))
+            balls[i + 1] = iconptr and ballat[iconptr] or false
         end
     end
-    return out
+    return out, balls
+end
+
+-- The spoken label of travel point i (1-based): its name, plus the Dragon Ball noun when the
+-- world map marks it. Only ever SPOKEN — ft_points keeps the bare names, because the
+-- selection is restored by name and a ball being collected must not break that match.
+local function ft_label(i)
+    local name = ft_points and ft_points[i]
+    if name and ft_balls and ft_balls[i] then
+        return name .. ", " .. I18n.t("cat_dragonball")
+    end
+    return name
 end
 
 -- World-map fast travel: d-pad up/down selects a point (native InfoIcon index); we write the
@@ -535,7 +555,7 @@ local function ft_describe()
     local parts = {}
     if ft_sel and ft_points and ft_points[ft_sel + 1] then
         parts[#parts + 1] = string.format(I18n.t("map_info_sel"),
-            ft_points[ft_sel + 1], ft_sel + 1, n)
+            ft_label(ft_sel + 1), ft_sel + 1, n)
     elseif n > 0 then
         parts[#parts + 1] = string.format(I18n.t("map_info_none"), n)
     else
@@ -581,7 +601,7 @@ local function ft_guidance(host)
         local now = os.clock()
         if now - ft_built_at >= FT_BUILD_S then
             ft_built_at = now
-            ft_points = ft_build(host)
+            ft_points, ft_balls = ft_build(host)
         end
         n = ft_points and #ft_points or 0
     end
@@ -609,7 +629,7 @@ local function ft_guidance(host)
         ft_sel = ((ft_sel or (delta > 0 and -1 or 0)) + delta) % n
         ft_write_sel(host, ft_sel)
         ft_last_name = ft_points[ft_sel + 1]
-        Speech.say(string.format(I18n.t("map_on_point"), ft_points[ft_sel + 1]), true)
+        Speech.say(string.format(I18n.t("map_on_point"), ft_label(ft_sel + 1)), true)
     end
     local function confirm()
         if not ft_sel then return end
@@ -757,14 +777,16 @@ function Map.update()
         -- only on success, so the build simply retries on the next 100 ms poll until the game has
         -- the points ready — and stops for good once it does.
         if not dests_said then
-            ft_points = ft_build(host)
+            ft_points, ft_balls = ft_build(host)
             if #ft_points > 0 then
                 dests_said = true
                 -- …and name the info key here, once, where the player is already being told
                 -- what the list holds. X used to *look* like an info key by accident (see
                 -- ft_describe) — saying so out loud is what turns that into a feature.
+                local labels = {}
+                for i = 1, #ft_points do labels[i] = ft_label(i) end
                 Speech.say(string.format(I18n.t("map_travel_points"), #ft_points,
-                    table.concat(ft_points, ", "))
+                    table.concat(labels, ", "))
                     .. ". " .. string.format(I18n.t("map_info_hint"), I18n.button("X")), false)
             end
         end

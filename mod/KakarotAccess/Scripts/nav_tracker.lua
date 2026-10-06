@@ -3677,7 +3677,9 @@ function Nav.list_targets(boxed)
         end
         local d = math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
         local kept = true
-        if grp ~= "quests" then
+        -- Dragon Balls take no cap either: the area map shows every ball in the area at any
+        -- distance, and a pickup marker the game registered is never a parked preload actor.
+        if grp ~= "quests" and grp ~= "dragonball" then
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
@@ -3733,9 +3735,9 @@ function Nav.list_targets(boxed)
     -- spoke the same "base enemiga" with nothing to tell them apart.
     local function add_icon(actor, t, src, noun_override)
         if not t then return end
-        -- EMapIcon alone does not prove a ball is available. Only the displayed
-        -- native marker path below may nominate one; component scans must not
-        -- restore an inactive/hidden ball that path deliberately excluded.
+        -- EMapIcon alone does not prove a ball is available. Only the native
+        -- marker path below may nominate one; component scans must not restore
+        -- a released/hidden ball that path deliberately excluded.
         if t == Nav._dragonball_marker.ICON_TYPE and src ~= "dragonball" then return end
         if is_mission_marker(actor) then
             add_target(actor, "quests", "nav_other", nil, src)
@@ -3801,8 +3803,9 @@ function Nav.list_targets(boxed)
                     if Core.valid(ta) then
                         -- The game registers Dragon Ball markers directly with the
                         -- minimap; their actor need not own an ATMapIconComponent.
-                        -- Only a currently displayed, active native marker earns
-                        -- the fallback. Other categories keep their existing path.
+                        -- Only an occupied native marker typed DRAGON_BALL earns the
+                        -- fallback, at any distance (dragonball_marker.lua). Other
+                        -- categories keep their existing path.
                         if Nav._dragonball_marker.actor(icon, mm) then
                             add_icon(ta, Nav._dragonball_marker.ICON_TYPE, "dragonball")
                         else

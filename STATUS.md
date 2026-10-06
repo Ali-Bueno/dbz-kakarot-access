@@ -14,14 +14,14 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-09-21 (v0.1.6 released, the first since v0.1.5; the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-06 (Dragon Ball radar rework after a player report; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
 - **DLC reader:** reads the selected native detail pane and releases parked panes. Positive user feedback; continue checking fast selection changes, back to the ring and F1 repeat.
 - **Community Board:** native movement/page help, leader labels, popup-safe summary history and F1 holding reminder. Controls are unchanged; tutorial/select/hold/place and F1/F2 need further user testing.
 - **Opening-through-Raditz descriptions:** 60 cues across 15 sources; six GDM scenes have introductory lines only. The 16 Raditz-arrival cues are ViddyScribe-assisted, frame-reviewed and compact. [Timing evidence and limits](reference/dbz-kakarot/notes/dbz-kakarot-cutscene-descriptions.md).
-- **Dragon Balls:** native displayed markers feed the picker/beacon with stale-pick rejection, retirement and menu-resume handling. Use R3 / V → Dragon Balls when a ball is ordinarily available; test F5, collection, next-ball chaining, pause/resume and area changes. Positive in-game verification is pending. [Evidence and limits](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
+- **Dragon Balls (REWORKED 2026-10-06, player report "still impossible to find"):** the v0.1.6 reader matched NOTHING — it read the minimap icon's in-circle flag (+0x89) as the type, and also required the icon to be drawn (near + not mid-flash). Now: slot in use (+0x88) + type at `WL_Icon_ImgSw+0x398` == 28, any distance, no radar cap, flash-proof. The world-map travel list also says "<point>, Dragon Ball" from `UAT_UIMapWorldIcon+0x3F4`. Source-only, never played. [Evidence and limits](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
 - **Offline coverage:** `tools/run-lua-tests.ps1` exercises the readers, native-clock adapter, cue engine/catalog, control help, Dragon Ball tracking and world-gate cleanup. Run this plus `tools/lint-lua.ps1` before packaging; neither proves native audibility or marker lifetime.
 
 ## Where the mod stands
@@ -42,6 +42,13 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-3. **Dragon Balls — FIRST, players report them unfindable (2026-10-06, CODED, never played).**
+   Needs a save past the Frieza Saga. Open the world map: marked points must say "…, Bola de
+   Dragón". Travel there, R3 → Bolas de Dragón must list the ball from any distance, and the
+   beacon must survive the minimap's flashing. Collect it, then reopen the world map and say
+   whether the mark is gone (unknown Q8 in the note). Checklist in
+   [the Dragon Ball note](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
 
 -2. ~~Chinese speech~~ **DONE + REPORTED WORKING, shipped in v0.1.6 (2026-09-21).** PRISM bumped v0.16.7 -> v0.18.2: the old
    build's bundled simdutf mangled CJK on AVX-512 CPUs. `prism_bridge.dll` was REBUILT (mandatory:
@@ -263,10 +270,9 @@ written and lint-clean but never seen working in game. The full derivation of ev
 Asked for by players; scoped against the code the same day, so the entry says what is already built
 and what is genuinely missing. Local follow-ups are dated below.
 
-- **Dragon Balls in the R3 radar — implemented locally 2026-09-08, live test pending.** Ghidra
-  proved direct type-28 marker registration without an actor map-icon component. The new
-  reader uses the rendered marker, not spawn/save tables. Collection visibility and before-unlock
-  parity still need a real pickup session; [native evidence and tests](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
+- **Dragon Balls in the R3 radar — reworked 2026-10-06, live test pending.** v0.1.6 shipped a
+  reader that could never match (wrong type byte, drawing state as availability; see the
+  dashboard line above). Fixed, plus the world-map mark; [native evidence and tests](reference/dbz-kakarot/notes/dbz-kakarot-dragonball-radar.md).
 - **Announce a boss / unusually strong enemy and its direction.** Most of this exists. `SpawnType`
   is reflected and `ENEMY_NOUN_BY_SPAWN` already maps `3` → `cat_enemy_boss`
   (`nav_tracker.lua:1182`); `ICON_GROUP` separately knows `EVIL_ENEMY_BOSS` (31/35) and

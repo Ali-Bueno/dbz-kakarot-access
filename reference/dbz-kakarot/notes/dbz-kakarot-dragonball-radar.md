@@ -1,93 +1,93 @@
-# Dragon Ball radar — September 8, 2026
+# Dragon Ball radar
 
-Status: implemented with offline regression tests and code review; positive
-in-game pickup verification is still pending. The existing R3 / V category uses
-the game's ordinary displayed markers, direction/distance and beacon. No unlocks,
-save changes, debug spawning, placement-table inspection or new world scans.
+Status (2026-10-06): reader corrected after players reported that Dragon Balls were still
+impossible to find. Offline suite green (the v0.1.6 reader fails 25 of its checks); positive
+in-game pickup verification is still pending. The R3 / V category uses the game's own minimap
+markers, direction/distance and beacon. No unlocks, save changes, debug spawning, placement-table
+inspection or new world scans.
 
-## Root cause
+Full native evidence: `code/decompiled/_dragonball_findings.txt` (raw decompiler output in
+`_dragonball_raw.txt`, reusable probe `code/ghidra/dragonball_probe.java`).
 
-The radar already classified EMapIcon::DRAGON_BALL (28), but its minimap walk
-classified TargetActor through ATMapIconComponent. The game registers Dragon Ball
-markers directly with the pickup actor, so a component-free actor was discarded.
-The old item-names note's working-status claim came from classification code,
-not a captured world pickup.
+## What a sighted player has
 
-## Native evidence
+- The **world map** marks every area that holds a ball (orange ball next to the area).
+- The **area map** shows every ball in the current area, at any distance.
+- The **minimap** shows a ball only inside its circle, and flashes icons that overlap.
 
-Ghidra 12.1.2 analyzed the unpacked normal-version executable read-only, without
-reanalysis. The original installed executable matched the copied original:
-SHA-256 8DDDFE8B35C6612B7755936675231D1C87F309245ABB6A878C6A80E97EDDA826.
-That is not the unpacked program's hash. Reflected declarations are from the
-UE4SS AT.hpp and AT_enums.hpp dumps.
+The radar must therefore list every ball in the current area at any distance, and must never
+read the minimap's drawing state as availability.
 
-| Native function | Evidence |
-|---|---|
-| 0x1411e8920 | HUD OnSpawnedDragonball delegates to the field manager. |
-| 0x141552c30 | Field manager passes type 0x1c and the actor to AddIcon. |
-| 0x141587930 | Map manager adds the marker to minimap and area map. |
-| 0x1415d5510 | Type 28 uses the ordinary minimap icon pool. |
-| 0x1415e80a0 | Pool at +0x6A8, count +0x6B0; reuses a slot when +0x88 is zero or TargetActor null, then sets TargetActor and +0x88=1. |
-| 0x1415f50d0 / 0x1415e6950 | Write/read the EMapIcon byte at +0x89. |
-| 0x141545380 / 0x14159f290 | Collection removes type 28 plus the actor through the map manager. |
-| 0x1415ee940 | Minimap removal matches type/TargetActor and invokes retirement. |
+## Why v0.1.6 never found a ball (both bugs, proven)
 
-UAT_UIMiniMapIcon is size 0xA8: reflected TargetActor +0x28, WL_Owner +0x30,
-WL_Icon_ImgSw +0x48. UAT_UIMiniMapRadar.MapIconList is the TArray at +0x6A8.
-Navigation/range icons have separate fixed arrays, not TArrays.
+1. **Wrong byte for the type.** The 2026-09-08 RE took the icon vtable as 0x143ecb408; the
+   constructors store **0x143ecb3f0** (nothing references 0x408), so every slot was read three
+   off. +0x89 is `SetShown` / `IsShown` — the "inside the minimap circle" flag, 0 or 1 — not the
+   EMapIcon. The reader rejected every icon whose +0x89 was not 28, i.e. all of them.
+2. **Drawing state used as availability.** It also required `WL_Icon_ImgSw` to be on screen and
+   rendered. Outside the circle the radar tick collapses that switch; overlapping icons flash
+   its `ColorAndOpacity` alpha. So even with the right type, only near balls would list, and a
+   tracked ball would have been "collected" on every dark phase of the flash.
 
-MapDBIns and AT_UIStartDragonBallMenu describe owned balls, not world locations.
-DragonBallManager.m_dragonBallInfo is a placement table and is not consulted.
+## Native facts (UAT_UIMiniMapIcon, vtable 0x143ecb3f0)
 
-## Important native limits
+| Slot | Function | Meaning |
+|---|---|---|
+| +0x240 Init | 0x1415f1070 | SetShown(1); switch type; switch.Target = actor |
+| +0x248 GetType | 0x1415e38c0 | `u8(WL_Icon_ImgSw + 0x398)` — **the EMapIcon** |
+| +0x250 Release | 0x1415df920 | +0x88 = 0, TargetActor = 0, SetShown(0) |
+| +0x258 SetShown | 0x1415f50d0 | +0x89 = in circle; collapses / re-adds the switch |
 
-Independent native review traced retirement through 0x1415e4130 to 0x1415e47f0.
-This path does not clear active, type or TargetActor; it writes +0x8A=1 with no
-proven reset path, so the reader does not use +0x8A. Rendered switcher visibility
-is load-bearing, not optional. Actual post-collection visibility and fade timing
-still need gameplay verification.
+- Slot allocation (0x1415e80a0) happens when the ball spawns, **whatever the distance**; the
+  slot keeps +0x88 = 1, TargetActor = ball and type 28 while the ball is out of range.
+- Pickup (0x14114b850): minimap **Release** + area-map removal → `m_dragonBallInfo[i]` zeroed
+  → save entry cleared → actor destroyed. So `+0x88 == 1` with a valid TargetActor is exactly
+  "spawned and not collected". +0x8A is "layout applied" and is read by nothing.
+- Ball actors exist only while their `ADragonballSpawner` has begun play, and new placements
+  skip the area the player is in — a ball is normally in ANOTHER area until the player goes
+  there. Spawning is gated by stone cooldown, ownership and progress data, so a reader that
+  follows the game's own markers cannot reveal a ball early.
 
-Vtables 0x143ecb408, 0x143ecb6a8 and 0x143ecb948 share the type getter at +0x248
-and retirement thunk at +0x250. The initial indirect-call argument reconstruction
-was unreliable; the sibling tables supplied the cross-check. 0x1415e03e0 rebuilds
-ordering, not occupancy. +0x8C is a fixed-position override (0x1415e4180), not
-collection. The pool constructor was not recovered; use native-base IsA, not
-an exact class-name match that could silently reject a subclass.
+## Reader contract (dragonball_marker.lua)
 
-## Reader contract
+Native-base `IsA` → `+0x88 == 1` → `u8(WL_Icon_ImgSw + 0x398) == 28` → owner is this minimap →
+TargetActor valid and not `bHidden`. Offsets live in `native_offsets.lua` (`miniMapIcon`). The
+switch's visibility, alpha and +0x89 are never read. `contains` returns true / false / nil, so an
+unreadable read is never taken as collection. The `dragonball` group has no radar distance cap
+(like quests). The type byte is read before the owner hop so the 100 ms tracking walk rejects
+non-ball icons cheaply.
 
-dragonball_marker.lua validates native-base inheritance before private reads,
-then type 28, pool-in-use, owner identity, rendered switcher, valid TargetActor
-and actor visibility. Native reads use Mem; offsets are in native_offsets.lua.
-Only the process-lifetime UClass is cached, never world actors or widgets.
+## Known limits
 
-Only this displayed-marker path may nominate a Dragon Ball; component scans
-cannot restore a hidden marker. Selection revalidates the current list instead
-of trusting a cached picker row. Approach and arrival-wait consumers recheck
-availability. contains returns true / false / nil, so unreadable native state
-is not treated as collection. A rejected resume keeps the existing bounded retry.
-Next-ball acceptance uses the same handle-free retry lane when validation fails
-after enumeration, preserving the sweep's visited keys instead of stranding it.
+- **Pending-kill window:** a ball destroyed by a level unload reads non-null until GC. The
+  transition gate covers the unload; the game's own check is GUObjectArray flag bit 29.
+- **Icon never registered:** if the HUD/map manager is null when a ball spawns, the game makes no
+  minimap or area-map icon (sighted players would not see it either). Not seen in practice.
+- **Streaming:** if a spawner sits in a distance-streamed sublevel, its ball has no actor (and no
+  marker) until that sublevel loads. Not decidable statically; the area map shares the limit.
+- **Enemy-held balls (RAND_ENEMY):** no native path registers one; a Blueprint could. Unknown.
 
-There are no new world scans, but active tracking walks the minimap list every
-100 ms. Representative late-game cost is not measured.
+## World map: which area to travel to (screen_map.lua)
 
-## Verification and live checklist
+The travel list says "<point>, Dragon Ball" for every point the world map marks. Source:
+`UAT_UIMapWorldIcon + 0x3F4` (`native_offsets.mapWorldIcon`), read on the icon `ft_build`
+already matches by address. FUN_1415cbd50 sets it together with showing `ImageCtn[2]`
+(`Img_Micon27`, the orange ball) for each area whose ball is placed and uncollected
+(`!IsStone && save[i].bSpawned && point row.WorldMapLocation`, findings Q4).
 
-The offline suite exercises real enumeration, selection, beacon ticks, collection
-chaining and menu resume with engine-boundary doubles. It covers component-free
-and derived icons, duplicate/order handling, inactive/hidden/reused markers,
-stale selection, unreadable state and temporary failures during resume and next-ball
-acceptance. Failing
-regressions were observed before the corresponding corrections.
+Limit (findings Q8, proven): nothing ever CLEARS that mark except the icon's one-time setup, so
+if the game reuses the icon widget across openings the mark survives a pickup, a wish (stone
+cooldown) or a DLC story. That is what the screen draws, so it is parity with a sighted player,
+but it can point at an area the R3 category then finds empty. Whether the widget is rebuilt per
+opening is unknown (Blueprint creation). If players report stale marks, compute the predicate
+from the save instead (raw `SaveGame+0x52CF0+i*0x20`, plus the point-table lookup).
 
-Still test with an ordinary save where a Dragon Ball is available:
+## Live checklist
 
-1. R3 / V → Dragon Balls; choose a ball and verify F5 direction/distance and beacon.
-2. Collect before and after the arrival cue; check retirement and next-ball chaining.
-3. Pause/resume while approaching and while standing on the ball; it must not skip.
-4. Reload/change areas and check current-area-only markers.
-5. Confirm before-unlock parity, rendered-marker retirement and acceptable tick cost.
-
-Offline tests cannot certify Unreal visibility or actor lifetime. Cross-region
-world-map summaries and new unlocking mechanics are outside this change.
+0. Open the world map: the travel list must say "Dragon Ball" after the marked points. Collect
+   that ball, reopen the map, and note whether the mark is gone (answers the Q8 unknown).
+1. In an area the world map marks: R3 / V → Dragon Balls lists the ball from far away; pick it
+   and follow the beacon all the way, through the minimap's flashing near other icons.
+2. Collect it: the radar must chain to the next ball or say the sweep is done, within a tick.
+3. Pause / resume while approaching and while standing on the ball; it must not skip.
+4. Change areas: only the current area's balls list.

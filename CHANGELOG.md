@@ -2,6 +2,24 @@
 
 ---
 
+## Unreleased
+
+### Dragon Balls can actually be found now
+
+- Players reported that Dragon Balls were still impossible to find, and they were right: the
+  Dragon Balls radar category added in v0.1.6 could never list a single ball. It read the wrong
+  byte of the minimap marker, and it also only accepted a ball while the minimap was drawing it,
+  which the game does only up close and with a flashing icon.
+- The R3 / V radar now lists every Dragon Ball in the current area, at any distance, exactly as
+  the area map shows them, and keeps tracking it while the minimap icon flashes.
+- The world map's travel list now says "Dragon Ball" after each place the game marks with one, so
+  you know where to travel before using the radar.
+- Not yet checked in a real playthrough, so please report how it goes. One thing to watch for: if
+  the world map keeps the Dragon Ball mark on a place after you have collected that ball, tell us
+  — that would come from the game's own map, and we can work around it.
+
+---
+
 ## v0.1.6 - September 21, 2026
 
 **The radar learned everyone's name, and the game's cutscenes are described.** Until now the radar

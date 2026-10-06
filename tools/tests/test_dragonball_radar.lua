@@ -107,12 +107,19 @@ local Nav = require("nav_tracker")
 local function marker(actor, kind)
     return object("AT_UIMiniMapIcon", {
         TargetActor = actor, WL_Owner = mm,
-        WL_Icon_ImgSw = object("AT_UIMapIconSwitchImproved", { visible = true, opacity = 1 }),
-        -- Independently recovered from native registration/type getter, not
-        -- imported from production constants: active +0x88, EMapIcon +0x89.
-        bytes = { [0x88] = 1, [0x89] = kind or 28 },
+        -- Written out here rather than imported from production constants (Ghidra
+        -- 2026-10-06, code/decompiled/_dragonball_findings.txt): slot-in-use +0x88 and
+        -- in-circle flag +0x89 on the icon, EMapIcon at +0x398 on its switch. The switch
+        -- is visible here; the far/flashing cases below collapse and fade it explicitly.
+        WL_Icon_ImgSw = object("AT_UIMapIconSwitchImproved", {
+            visible = true, opacity = 1, bytes = { [0x398] = kind or 28 },
+        }),
+        bytes = { [0x88] = 1, [0x89] = 1 },
     })
 end
+-- What the game does to a marker on pickup (Release 0x1415df920): slot freed, target cleared.
+local function release(m) m.bytes[0x88], m.TargetActor = 0, nil end
+local function restore(m, actor) m.bytes[0x88], m.TargetActor = 1, actor end
 local function group(key)
     local all = Nav.list_targets()
     Nav.sweep_partial()
@@ -138,15 +145,28 @@ mm.MapIconList = { icon }
 icon.bytes[0x88] = 0
 check(#group("dragonball") == 0, "an inactive pooled marker with an old actor is not listed")
 icon.bytes[0x88] = 1
-icon.bytes[0x89] = 5
+icon.WL_Icon_ImgSw.bytes[0x398] = 5
 check(#group("dragonball") == 0, "a reused marker of another type is not a Dragon Ball")
 icon.bytes[0x89] = 28
+check(#group("dragonball") == 0,
+    "the icon's +0x89 byte is the in-circle flag, never read as the type (v0.1.6's bug)")
+icon.WL_Icon_ImgSw.bytes[0x398] = 28
+-- Outside the minimap circle the game collapses the switch and clears +0x89; the slot,
+-- its type and its target stay. The area map still shows that ball, so the radar must.
+icon.bytes[0x89] = 0
 icon.WL_Icon_ImgSw.visible = false
-check(#group("dragonball") == 0, "a game-hidden marker does not reveal a locked or unavailable ball")
+check(#group("dragonball") == 1, "a ball outside the minimap circle is still listed")
 icon.WL_Icon_ImgSw.visible = true
 icon.WL_Icon_ImgSw.opacity = 0
-check(#group("dragonball") == 0, "a fully faded marker is not listed")
+check(#group("dragonball") == 1, "a marker at the dark end of its flash is still listed")
 icon.WL_Icon_ImgSw.opacity = 1
+icon.bytes[0x89] = 1
+local remote_ball = object("DragonBallStaticActor", { x = 250000, bHidden = false })
+mm.MapIconList = { icon, marker(remote_ball) }
+items = group("dragonball")
+check(#items == 2 and items[2].actor == remote_ball,
+    "a ball 2.5 km away is listed: Dragon Balls take no radar distance cap")
+mm.MapIconList = { icon }
 ball.bHidden = true
 check(#group("dragonball") == 0, "a hidden pickup does not survive through its old marker")
 ball.bHidden = false
@@ -203,12 +223,12 @@ check(#group("dragonball") == 1, "reactivation restores the ball without a resta
 ball.component = object("ATMapIconComponent", { MapIconType = 28, bShowMapIcon = true })
 function ball.component:GetOwner() return ball end
 pool.ATMapIconComponent = { shop.component, ball.component }
-icon.WL_Icon_ImgSw.visible = false
+icon.bytes[0x88] = 0
 check(#group("dragonball") == 0,
-    "an actor component cannot bypass the displayed Dragon Ball marker requirement")
-icon.WL_Icon_ImgSw.visible = true
+    "an actor component cannot bypass the Dragon Ball marker requirement")
+icon.bytes[0x88] = 1
 check(#group("dragonball") == 1,
-    "a displayed ball that also has a component is still listed exactly once")
+    "a marked ball that also has a component is still listed exactly once")
 ball.component, pool.ATMapIconComponent = nil, { shop.component }
 
 native_unreadable = true
@@ -231,6 +251,19 @@ Nav.set_manual_target(ball, tostring(ball.addr), "Dragon Ball", "dragonball", fa
 tick_once()
 tick_once() -- 30 m uses a beacon interval longer than one 100 ms tick.
 check(pings > 0, "a selected Dragon Ball uses the ordinary beacon tick")
+-- The minimap flashes overlapping icons and collapses them at the circle's edge. Neither
+-- is collection: a tracked ball must survive both for several ticks.
+local spoken_flash = #speech
+icon.bytes[0x89], icon.WL_Icon_ImgSw.visible, icon.WL_Icon_ImgSw.opacity = 0, false, 0
+for _ = 1, 5 do tick_once() end
+icon.bytes[0x89], icon.WL_Icon_ImgSw.visible, icon.WL_Icon_ImgSw.opacity = 1, true, 1
+local flash_dropped = false
+for i = spoken_flash + 1, #speech do
+    if speech[i] == "radar_chain_done" then flash_dropped = true end
+end
+Nav.where()
+check(not flash_dropped and speech[#speech]:find("30 meters", 1, true) ~= nil,
+    "a flashing or out-of-circle marker does not end tracking")
 local before_pings = pings
 icon.bytes[0x88] = 0
 tick_once()
@@ -261,14 +294,14 @@ player.x = ball.x
 tick_once()
 check(arrivals == 1 and speech[#speech] == "nav_arrived_pickup",
     "reaching the ball uses the existing arrival cue and waits for collection")
-icon.WL_Icon_ImgSw.visible = false
+release(icon)
 tick_once()
 check(speech[#speech] == "Tracking Dragon Ball, 30 meters",
     "retirement after arrival advances even when the collected actor stays alive")
 
 -- A pausing menu is not collection. Test the arrival-wait lane, where the
 -- existing world gate deliberately releases the actor and resumes by its key.
-icon.WL_Icon_ImgSw.visible = true
+restore(icon, ball)
 Nav.set_manual_target(ball, tostring(ball.addr), "Dragon Ball", "dragonball", false)
 tick_once()
 active_adapter = { nav_mute = true }

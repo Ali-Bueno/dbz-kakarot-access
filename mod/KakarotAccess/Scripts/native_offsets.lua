@@ -8,16 +8,29 @@
 
 return {
     -- UAT_UIMiniMapIcon, original installed executable SHA-256 8DDDFE8B...DA826.
-    -- Ghidra 2026-09-08: FUN_1415e80a0 reuses slots when +0x88 == 0 or
-    -- TargetActor == null, then sets +0x88 = 1. FUN_1415f50d0 writes the
-    -- EMapIcon byte at +0x89; FUN_1415e6950 returns that byte. SpawnDragonball
-    -- (FUN_141552c30) registers type 28 directly, bypassing ATMapIconComponent.
-    -- Retirement does not clear +0x88 in the traced path. WL_Icon_ImgSw visibility
-    -- is load-bearing, not optional: pool occupancy is not pickup availability.
+    -- Ghidra 2026-10-06 (code/decompiled/_dragonball_findings.txt), CORRECTING 2026-09-08:
+    -- the icon vtable is 0x143ecb3f0 (the earlier note was 3 slots off), so +0x89 is the
+    -- "inside the minimap circle" flag (SetShown 0x1415f50d0, 0/1), NOT the EMapIcon type.
+    -- The type is the byte at WL_Icon_ImgSw + 0x398 (GetType 0x1415e38c0; the removal
+    -- paths match on it too). FUN_1415e80a0 allocates a slot at spawn whatever the
+    -- distance and sets +0x88 = 1; Release (0x1415df920, run at pickup) clears +0x88 and
+    -- TargetActor. SpawnDragonball (FUN_141552c30) registers type 28 directly, bypassing
+    -- ATMapIconComponent. The switch's visibility/alpha mean "in range" and "flashing" —
+    -- never availability.
     miniMapIcon = {
-        active = 0x88,
-        iconType = 0x89,
+        active = 0x88,          -- u8 on the icon: 1 = slot in use
+        shown = 0x89,           -- u8 on the icon: 1 = inside the minimap circle (unused)
+        switchType = 0x398,     -- u8 on WL_Icon_ImgSw (UAT_MapIconSwitchBase tail): EMapIcon
         dragonBallType = 28,    -- EMapIcon::DRAGON_BALL, AT_enums.hpp
+    },
+
+    -- UAT_UIMapWorldIcon (BP Map_World_Icon_C), size 0x410. Ghidra 2026-10-06 (Q8 in
+    -- code/decompiled/_dragonball_findings.txt): FUN_1415cbd50 marks an area holding an
+    -- uncollected Dragon Ball by setting this byte to 1 together with showing ImageCtn[2]
+    -- (Img_Micon27, the orange ball). Only the widget's one-time setup (FUN_1415b4940) clears
+    -- it, so it is exactly what the world map DRAWS — stale wherever the drawing is stale.
+    mapWorldIcon = {
+        dragonBall = 0x3F4,     -- u8: 1 = the orange Dragon Ball mark is shown
     },
 
     -- Field / overworld Start menu: UAT_UIStartTop.

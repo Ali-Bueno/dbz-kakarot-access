@@ -1,6 +1,15 @@
 -- Dragon Balls are registered directly with the native minimap, without an
--- ATMapIconComponent on the pickup. Read those displayed markers, not spawn
+-- ATMapIconComponent on the pickup. Read those pooled markers, not spawn
 -- tables or save data. No scans, hooks, or actor/widget caches are added here.
+--
+-- AT ANY DISTANCE, NOT "WHILE DRAWN" (2026-10-06, Ghidra; evidence in
+-- code/decompiled/_dragonball_findings.txt). The game allocates a ball's minimap slot when
+-- the ball spawns, whatever the distance, and keeps it until pickup. The radar tick only
+-- COLLAPSES the icon switch while the ball is outside the minimap circle, and the "flash"
+-- is an alpha animation on the same switch when icons overlap. The first version of this
+-- reader required the switch to be on screen and rendered, so it could only see balls
+-- already inside the circle, and it read the in-range flag (+0x89) as the icon type, so it
+-- matched nothing at all. A far ball is exactly as listable as the area map makes it.
 local Core = require("ui_core")
 local Mem = require("mem")
 local Off = require("native_offsets").miniMapIcon
@@ -25,19 +34,26 @@ function Marker.actor(icon, minimap)
     local ok, is_icon = pcall(function() return icon:IsA(icon_class) end)
     if not ok then return nil, false end
     if is_icon ~= true then return nil, true end
-    local kind = Mem.u8(icon, Off.iconType)
-    if kind == nil then return nil, false end
-    if kind ~= Off.dragonBallType then return nil, true end
+    -- Pool occupancy. Pickup runs the icon's Release, which clears this byte and
+    -- TargetActor together before the actor is destroyed.
     local active = Mem.u8(icon, Off.active)
     if active == nil then return nil, false end
     if active ~= 1 then return nil, true end
+    -- The EMapIcon type lives on the icon SWITCH, not on the pooled icon: the game's own
+    -- type getter returns this byte, and its removal paths match on it. Its visibility and
+    -- colour are deliberately not read — they mean "inside the circle" and "flashing".
+    -- Read before the owner hop so the many non-ball icons are rejected cheaply: the
+    -- tracker walks the whole pool every 100 ms while a ball is selected.
+    local switch = Core.member(icon, "WL_Icon_ImgSw")
+    if not Core.valid(switch) then return nil, false end
+    local kind = Mem.u8(switch, Off.switchType)
+    if kind == nil then return nil, false end
+    if kind ~= Off.dragonBallType then return nil, true end
     local owner = Core.member(icon, "WL_Owner")
     if not Core.valid(owner) then return nil, false end
     local owner_addr, map_addr = Mem.raw_addr(owner), Mem.raw_addr(minimap)
     if not owner_addr or not map_addr then return nil, false end
     if owner_addr ~= map_addr then return nil, true end
-    local widget = Core.member(icon, "WL_Icon_ImgSw")
-    if not Core.on_screen(widget) or not Core.pane_rendered(widget) then return nil, true end
     local actor = Core.member(icon, "TargetActor")
     if not Core.valid(actor) then return nil, true end
     local hidden = Core.member(actor, "bHidden")
@@ -47,8 +63,8 @@ end
 
 -- Revalidate a pick against the CURRENT marker list, not a sweep snapshot that
 -- can outlive collection. nil means the map/read is unavailable; false is a
--- complete readable list with no matching displayed ball. The caller already
--- owns the free-roam/transition gate. Handles are never kept between calls.
+-- complete readable list with no matching ball. The caller already owns the
+-- free-roam/transition gate. Handles are never kept between calls.
 function Marker.contains(minimap, actor)
     if not Core.valid(minimap) or not Core.on_screen(minimap) then return nil end
     if not Core.valid(actor) then return false end
