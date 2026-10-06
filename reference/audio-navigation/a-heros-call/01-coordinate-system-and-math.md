@@ -74,7 +74,7 @@ public static V3 FromFlippedYCompassDegrees(float d) // y = -cos  (Y-down — wh
 public static V3 FromMathDegrees(float d)            // standard math: x=cos, y=sin, 0=East CCW
 ```
 
-### Direction unit vector → heading (degrees) — the inverse
+### Direction unit vector → heading (degrees) — `GetCompassAngle` is NOT the inverse you want
 
 ```csharp
 // VectorExtensions.cs
@@ -85,6 +85,18 @@ public static float GetCompassAngle(this V3 v)
     return (Math.Asin(v.X) < 0.0) ? (360f - deg) : deg;    // disambiguate hemisphere by sign of X
 }
 ```
+
+> **Correction:** this function treats `+Y = North` — i.e. it's **Y-up**, the odd one out. It is the
+> inverse of `VectorHelpers.FromCompassDegrees` (the Y-up flavour, `y = +cos`), **not** of the Y-down
+> `GetUnitVectorFromCompassDegrees`/`FromFlippedYCompassDegrees` the rest of the game (and this doc)
+> uses. Feed it a Y-down direction vector and you get a **mirrored** angle. Evidence:
+> `VectorExtensions.cs:7-14` vs `MyMath.cs:35-43`. In practice this is harmless: `GetCompassAngle`'s
+> **sole caller** is `VectorHelpers.MyTransform` (`VectorHelpers.cs:38`), which is itself used **only in
+> sound-relative transforms** (`FPLogic.cs:234` `MakeRelativeToPlayerFacingAndPosition`;
+> `MapSoundHandler.cs:216`) — **never** on the movement/heading path. The actual bearing readout (below)
+> computes `atan2` directly instead of calling this function.
+> If you need a real "vector → Y-down compass heading" inverse when porting, derive it yourself from
+> `atan2`, don't reuse `GetCompassAngle`.
 
 There is also `GetMathAngleInDegrees` (angle from +X, CCW) if you ever need standard math angles.
 
@@ -136,13 +148,47 @@ Worked example, facing **East** (`Facing = 90°`, `Front = (1,0)`):
 - `Right = PerpendicularLeft(1,0)  = (0, 1)` → South. ✓
 - `FrontLeft = normalize((1,0)+(0,-1)) = (.707,-.707)` → NorthEast. ✓
 
+> **Two derivations of the same basis (don't let it confuse you).** The literal `Perpendicular*`
+> properties above are what the **sound module** uses (`Sound/Ian/MapAndPlayer.cs:19,23` —
+> `Left => Front.PerpendicularRight`, `Right => Front.PerpendicularLeft`). The **navigation /
+> first-person side** computes the identical basis via **cross products** instead:
+> `Left => Cross(Front, Up).Xy`, `Right => Cross(Up, Front).Xy`
+> (`FirstPerson/Ian/FPClientState.cs:39,43`, with `Up = (0,0,1)`). With that up vector,
+> `Cross(Front, Up).Xy == (Front.Y, -Front.X) == PerpendicularRight` and
+> `Cross(Up, Front).Xy == (-Front.Y, Front.X) == PerpendicularLeft` — algebraically the same result.
+> They are two spellings of one convention, not two conventions; port either.
+
 > If your engine is Y-up, either negate the Y of every direction vector once at the adapter boundary,
 > or swap `Left`/`Right` definitions. Verify with the worked example above in your own frame before
 > trusting any radar output.
 
 ---
 
-## 5. `Line` — analytic line / segment geometry
+## 5. World grid: tile size, storage & padding (missing from earlier pass — added)
+
+- **Tile size = 1.0 world unit.** Tile `(i,j)` occupies `[i,i+1) × [j,j+1)`; `Center=(i+0.5, j+0.5)`,
+  `Bounds=RectangleF(X,Y,1,1)` (`FPTile.cs:14-21`). `playerTile = (floor(X), floor(Y))`
+  (`FPMapLogic.GetTile`, `FPMapLogic.cs:31`).
+- **Tile storage is column-major**, not row-major: `TileCollection<T>`'s indexer is
+  `this[x,y] => m_tiles[x*Height + y]` (`GameEngine/Ian/TileCollection.cs:21,28`). Only matters if you
+  ever touch the backing array directly instead of `Get(x,y)`/`Set(x,y,..)`.
+- **The map is padded, and every coordinate in the game lives in the padded frame.** `PaddedWidth =
+  Width+2`, `PaddedHeight = Height+2` (`FPMapType.cs:357-359`). At load, a 1-tile **border ring** is
+  force-set to a terrain looked up **by name** `"map boundary"` from the game's terrain data
+  (`FPMapType.SetupTiles`, `FPMapType.cs:130-132`; padding at `:357-359`). **Its blocking behaviour is
+  data-defined, not a hardcoded flag:** whether that ring is `Wall`/`Impassable` comes from the
+  `"map boundary"` terrain's own data (see the Doc 03 §latent-bug note — a ray only terminates cleanly at
+  the ring because that terrain happens to carry the `Wall` flag).
+  The logical/authored map is tiles `[1..Width]×[1..Height]`; the map-review grid iterates `1..Width`
+  and calls that "the edge of the map" (`FPMapGridBase.cs:60-108`). **All raycasters and bounds checks
+  (Doc 03) test against the Padded dimensions**, so a ray or the player naturally stops at that border
+  tile rather than at `Width`/`Height`. When porting, either mirror the padding (simplest — a ray always
+  terminates cleanly) or make sure your own bounds checks account for the +1 offset this implies for any
+  coordinate recovered from the source.
+
+---
+
+## 6. `Line` — analytic line / segment geometry
 
 `Sound/Ian/Line.cs`. The raycaster and the radar's "open vs closed" test use this. A line is stored
 in implicit form `A·x + B·y = C` plus its two defining points and a normalized `Slope` (a direction).
@@ -183,14 +229,18 @@ them on the hot path.
 
 ---
 
-## 6. Quick reference card
+## 7. Quick reference card
 
 ```
 World:    tile (i,j) = [i,i+1)x[j,j+1) ; center (i+0.5, j+0.5) ; playerTile = (floor X, floor Y)
+Storage:  column-major, m_tiles[x*Height + y]
+Padding:  PaddedWidth/Height = Width/Height + 2 ; 1-tile "map boundary" border ring (terrain looked up
+          by name; Wall/Impassable come from DATA, not hardcoded) ; ALL positions/indices in padded frame
 Axes:     +X East, +Y South (Y-DOWN)
 Heading:  compass degrees, clockwise, 0=N 90=E 180=S 270=W
 deg->vec: ( sin, -cos ).normalize()                         [GetUnitVectorFromCompassDegrees]
-vec->deg: acos(Y); if asin(X)<0 -> 360-that                 [GetCompassAngle]
+vec->deg: acos(Y); if asin(X)<0 -> 360-that   [GetCompassAngle — Y-up odd-one-out, off hot path, NOT
+                                                the inverse of the (Y-down) heading->vector fn above]
 bearing:  deg = RadToDeg(atan2(dX, -dY)) + 180               [beacon / "which way" readout]
 Left  = Front.PerpRight = (Front.Y, -Front.X)
 Right = Front.PerpLeft  = (-Front.Y, Front.X)

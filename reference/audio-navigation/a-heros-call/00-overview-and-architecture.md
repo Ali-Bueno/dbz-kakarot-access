@@ -21,6 +21,7 @@
 | `08-spatial-audio-fmod.md` | FMOD listener, stereo panning, distance attenuation, obstruction filtering |
 | `09-speech-output-layer.md` | SpeechContext, Tolk/SAPI/PRISM routing, TranslateSO |
 | `10-porting-guide.md` | Concrete mapping of every technique to SF6 / 7DTD / XV2 / RE7 |
+| `11-ancillary-systems.md` | OS-level accessibility (FilterKeys), NPC navigation/audio behavior, scripting API surface, and other systems adjacent to navigation |
 
 ---
 
@@ -44,6 +45,13 @@ The genius of the design — and the reason it ports so well — is that **the w
 simple (a tile grid with per-tile flags) and every cue is derived by raycasting that grid**. If you
 can produce, in your target game, (a) the player's position+heading and (b) a way to ask "what is at
 world point P / along ray R", you can reproduce the entire system.
+
+> **Two independent ray systems, not one.** The radar, audio occlusion, beacon line-of-sight and
+> object/script rays all use a grid **DDA** (`CollisionHelperCopy`/`CH`, Doc 03). The forward/side
+> **POI scans** — the primary spoken "what's ahead" readout — use a completely separate fixed
+> **0.1-tile point-march** (`POIHelpers.GetLineCollisionWithPointsOfInterest`, Doc 05). Both need
+> porting; don't assume one implementation covers both (`POIHelpers.cs:12-84` vs
+> `Sound/Ian/CollisionHelperCopy.cs:43`).
 
 ---
 
@@ -116,13 +124,13 @@ Pulled from the actual source. Use these as sane defaults when porting.
 
 | Constant | Value | Where | Meaning |
 |----------|-------|-------|---------|
-| Radar tick delay | `0.1 s` | `ReactiveRadar.delay` | Min time between radar cues (10 Hz max) |
-| Radar pitch reach | `3` tiles | `ReactiveRadar.PitchRadarReach` | Distance under which front wall pitch plays |
-| Radar open/close reach | `1000` | `ReactiveRadar.OpenCloseRadarReach` | Max ray length for open/close detection |
+| Radar tick delay | `0.1 s` | `delay` const, inlined by the compiler to the literal at `ReactiveRadar.cs:156` (Doc 02 §4.3) | Min real-time gap between radar cues (~10 Hz max, **all beams combined** — one global cooldown, Doc 02 §4.2) |
+| Radar pitch reach | `3` tiles | `PitchRadarReach` const, inlined to the `< 3` literal at `ReactiveRadar.cs:187` | Distance under which an approaching wall pitches |
+| Radar open/close reach | `1000` | `OpenCloseRadarReach` const, inlined to the `1000f` literal at `ReactiveRadar.cs:165` | Max length of the **single** radar ray; it feeds *both* pitch and open/close — there is no separate open/close ray (Doc 02 §4.3) |
 | Float epsilon | `1e-5` | `CoreExtensionMethods.AlmostEquals` | Vector/heading equality tolerance |
 | Obstruction mute threshold | `depth >= 1.0` | `ObstructionHelpers` | Wall+door thickness (tiles) that fully mutes a source |
 | Cardinal announce threshold | `67°` | `FPExploring.AnnounceDirection` | Play a cardinal cue when heading within 67° of it |
-| Mouse turn sensitivity | `÷8` | `FPExploring.HandleMouseTurning` | Raw mouse-X delta divided by 8 = degrees/frame |
+| Turn rate | mouse `÷8`, keys `±1°` | `FPExploring` turning (`:355-366`) | Degrees **per loop, frame-rate-dependent (NOT delta-scaled)**: mouse-X delta ÷ 8, held turn keys ±1°/loop. Contrast movement, which *is* time-scaled |
 | Snap targets | `0/90/180/270°` | `FPExploring.SnapLeft/Right` | Snap heading to nearest cardinal |
 | Forward scan rate | `0.1 s` | `FPExploring.RunForwardComparison` | Auto forward-scan recompare interval |
 | Step ray increment | `0.1` tiles | `POIHelpers` | Raycast granularity for POI scans |
@@ -131,6 +139,7 @@ Pulled from the actual source. Use these as sane defaults when porting.
 | Default scan distance | `GameConfig.ScanDistance` | `GameConfig` | Forward/side scan ray length |
 | Bump-sound throttle | `0.6 s` | `FPMapLogic.PlayBumpSound` | Min interval between wall-bump sounds |
 | Run footstep threshold | `velocity.Length > 2` | `FPMapLogic.PlayStepSound` | Above this speed, use "running" footstep |
+| Effective travel speed | ≈`3.5` tiles/s (**constant**) | `1.4` base × unconditional `2.5` (`RPGExploring.cs:43-51`) × terrain `MovementSpeedAddPercent` | **No walk/run gear**: `speedMod *= 2.5f` is applied *always*; the run key only adds an extra Front-vector bias. This is the speed feeding every radar timing intuition |
 | Advanced-beacon interval | `2.0 s` | `FPExploring` advanced beacon | Min time between beacon path beeps |
 | Advanced-beacon near switch | `< 5` tiles | `FPExploring` advanced beacon | Switch to simple beacon when this close |
 | Advanced-beacon path lookahead | `10` tiles | `FPExploring` advanced beacon | Max path tiles scanned for an unobstructed beep source |
@@ -141,9 +150,10 @@ Pulled from the actual source. Use these as sane defaults when porting.
 
 Build an **engine adapter** exposing exactly: `PlayerPosition (Vector2 in tile units)`,
 `HeadingDegrees (compass)`, and `Tile QueryTile(int x,int y)` / `RaycastFirstBlocking(origin, dir, maxDist)`.
-Behind that adapter, copy the `Ian` math (`V2`, compass conversions), the raycaster
-(`CollisionHelperCopy`), and the radar (`ReactiveRadar`) almost verbatim — they have **no engine
-dependencies** beyond the adapter and a "play this short sound with this stereo pan" primitive. For
-games that are not tile-based (SF6, RE7, XV2 are continuous 3D), you replace `QueryTile` with a
-physics raycast and quantize positions to a virtual grid only where the algorithm needs integers
-(the pitch-distance rounding). The full mapping is in Doc 10.
+Behind that adapter, copy the `Ian` math (`V2`, compass conversions), **both ray systems** — the DDA
+raycaster (`CollisionHelperCopy`/`CH`) and the POI scan's separate 0.1-tile point-march
+(`POIHelpers.GetLineCollisionWithPointsOfInterest`) — and the radar (`ReactiveRadar`) almost verbatim —
+they have **no engine dependencies** beyond the adapter and a "play this short sound with this stereo
+pan" primitive. For games that are not tile-based (SF6, RE7, XV2 are continuous 3D), you replace
+`QueryTile` with a physics raycast and quantize positions to a virtual grid only where the algorithm
+needs integers (the pitch-distance rounding). The full mapping is in Doc 10.

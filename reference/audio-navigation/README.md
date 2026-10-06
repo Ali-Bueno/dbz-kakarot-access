@@ -78,6 +78,44 @@ Everything reduces to **a world you can query + raycasting it + turning hits int
 
 ---
 
+## HARD RULE — radar cues are FLAT PAN, never 3D audio
+
+**Never spatialize radar/sonification cues as 3D world sounds.** This applies to every style: the
+reactive radar's chirps (style 1), the polar scan's per-ray hits (style 2), and the wall-sonification
+bed (style 3). These cues are **egocentric and categorical** — they mean "left / front / right", not
+"an object exists at point (x,y,z)" — so render them as classic **flat stereo pan** (discrete L/C/R for
+event cues; per-channel volume for the bed) on a 2D, non-spatialized audio path.
+
+Why 3D-positioning them breaks the radar (every one of these has bitten our ports):
+
+- **Distance attenuation double-encodes distance.** The cue already encodes proximity in its *pitch
+  bucket* (radar) or *volume law* (sonification). Letting the engine also attenuate it by distance
+  makes near-wall cues loud and far cues inaudible on top of that — two conflicting distance channels.
+- **HRTF front/back confusion.** A binaural "front" cue is routinely heard as "behind" (the classic
+  cone-of-confusion); a categorical front cue must never be ambiguous.
+- **Reverb / occlusion smear.** World audio paths pick up zone reverb and occlusion muffling; a radar
+  chirp heard through the wall reverb of a cathedral no longer sounds like the same cue.
+- **Legibility = identical every time.** A categorical cue must sound *exactly* the same on every
+  fire, differing only in pan (and the deliberate pitch bucket). Any engine-side processing that varies
+  with player position destroys instant recognition.
+
+This is exactly what A Hero's Call ships: radar events carry a manual FMOD `"Panning"` parameter
+(0=L, 1=C, 2=R) baked at creation, on a 2D path with **no** spatializer, **no** reverb, **no**
+occlusion (`ReactiveRadar.cs:105-110`, `FModSoundContext.cs:790-803`) — while **world-anchored**
+sounds (beacons, landmark loops, NPC footsteps, positional TTS, ambience) go through the full
+**Oculus/Resonance HRTF** path ([doc 08](a-heros-call/08-spatial-audio-fmod.md)). Keep both lanes,
+never swap them:
+
+| Sound | Rendering path |
+|---|---|
+| Radar chirps, open/closed cues, polar-scan hits, wall-sonification bed, UI/menu feedback | **Flat 2D**: discrete pan / per-channel volume; no spatializer, no distance attenuation, no reverb, no occlusion |
+| Beacons, landmark/object loops, NPC footsteps, positional TTS, ambient beds, world one-shots | **Engine 3D/HRTF**: full spatializer + attenuation + occlusion (this is where the spatial precision lives) |
+
+In Unity that means radar cues play on an `AudioSource` with `spatialBlend = 0` (and outside any
+reverb-zone/occlusion mixer group), never `spatialBlend = 1`; in FMOD/Wwise, a dedicated 2D bus/event.
+
+---
+
 ## Subsystem map — read this doc for that mod section
 
 Build a navigation mod **section by section**; for each section, the authoritative reference:
