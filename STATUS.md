@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-06 (Dragon Ball radar rework after a player report; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-13 (v0.1.7 released: the Dragon Ball radar rework after a player report; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -43,7 +43,7 @@ The earlier upstream backlog includes the following unrun checks:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
--3. **Dragon Balls — FIRST, players report them unfindable (2026-10-06, CODED, never played).**
+-3. **Dragon Balls — FIRST, players report them unfindable (2026-10-06, shipped in v0.1.7, never played).**
    Needs a save past the Frieza Saga. Open the world map: marked points must say "…, Bola de
    Dragón". Travel there, R3 → Bolas de Dragón must list the ball from any distance, and the
    beacon must survive the minimap's flashing. Collect it, then reopen the world map and say

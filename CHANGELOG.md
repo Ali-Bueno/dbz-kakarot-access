@@ -2,7 +2,10 @@
 
 ---
 
-## Unreleased
+## v0.1.7 - October 13, 2026
+
+**Dragon Balls can finally be found.** The radar now lists every Dragon Ball in the area you are
+in, at any distance, and the world map tells you which places hold one.
 
 ### Dragon Balls can actually be found now
 
@@ -16,7 +19,7 @@
   you know where to travel before using the radar.
 - Not yet checked in a real playthrough, so please report how it goes. One thing to watch for: if
   the world map keeps the Dragon Ball mark on a place after you have collected that ball, tell us
-  — that would come from the game's own map, and we can work around it.
+  - that would come from the game's own map, and we can work around it.
 
 ---
 
