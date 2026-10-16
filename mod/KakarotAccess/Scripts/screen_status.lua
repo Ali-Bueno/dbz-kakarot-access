@@ -102,10 +102,18 @@ local function hud_gauge(hud)
 end
 
 -- An HP/Ki block: the gauge is the "total", the TxtStatus rows the breakdown.
+-- The gauges carry an icon, not a label, so the mod names them.
+local GAUGE_LABEL = { WL_Start_Char_Hud_Hp = "status_hp", WL_Start_Char_Hud_Sp = "status_ki" }
+
+local function labelled_gauge(member, hud)
+    local g = hud and hud_gauge(hud)
+    return g and Core.phrase(I18n.t(GAUGE_LABEL[member]), g) or nil
+end
+
 local function hud_block(member)
     local hud = hud_of(member)
     if not hud then return nil end
-    local total = hud_gauge(hud)
+    local total = labelled_gauge(member, hud)
     local rows = rows_of(hud, "TxtStatus", "TxtStatusNum")
     if not total and #rows == 0 then return nil end
     return { total = total, rows = rows }
@@ -173,8 +181,8 @@ local function header()
         name,
         field(host, "WL_Txt_Lv"),                                              -- "Nvl. 9"
         Core.phrase(field(host, "WL_Txt_Title"), field(host, "WL_Txt_Num")),   -- "Next 1212"
-        hp and hud_gauge(hp) or nil,
-        sp and hud_gauge(sp) or nil,
+        labelled_gauge("WL_Start_Char_Hud_Hp", hp),
+        labelled_gauge("WL_Start_Char_Hud_Sp", sp),
         Core.phrase(field(host, "WL_Txt_Power"), power))                       -- "BP 3094"
 end
 

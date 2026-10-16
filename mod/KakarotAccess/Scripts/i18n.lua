@@ -283,6 +283,8 @@ local S = {
         -- Character status page (screen_status.lua): the gauges read "19591/19591" on
         -- screen, and F11/Shift+F11 walk the stat blocks.
         gauge_fmt = "%s de %s",
+        status_hp = "PS",
+        status_ki = "Ki",
         status_pos = "%d de %d",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Radar de misión activado",
@@ -564,6 +566,8 @@ local S = {
         keyhelp_auto_off = "Action announcements off",
         -- Character status page (screen_status.lua).
         gauge_fmt = "%s of %s",
+        status_hp = "HP",
+        status_ki = "Ki",
         status_pos = "%d of %d",
         -- Navigation radar (nav_tracker.lua).
         nav_on = "Quest radar on",
