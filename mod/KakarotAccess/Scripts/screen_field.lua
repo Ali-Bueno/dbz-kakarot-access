@@ -22,6 +22,9 @@ local Core = require("ui_core")
 local Mem = require("mem")
 local OFF = require("native_offsets")
 local I18n = require("i18n")
+local Registry = require("ui_registry")
+local Input = require("input")
+local PadPoll = require("pad_poll")
 
 local Field = {}
 
@@ -66,6 +69,14 @@ local EMBLEM_ARM_GRACE_S = 2.0
 local sid_commu_clock = nil    -- os.clock when a Community row (board/emblems) was last focused
 local sid_commu_row = nil      -- which one it was: SID_COMMUNITY_BOARD or SID_COMMUNITY_EMBLEM
 local ring_was_open = false    -- edge for the one-line close trace below
+-- Confirming a System/Community submenu row, and coming back from its screen, both show the bare
+-- ring row for a few hundred ms (measured 2026-10-16: "Main menu, System" spoken between
+-- "Options" and the Options screen). Hold that state silently this many polls before believing it.
+local RING_SETTLE = 6
+local ring_wait, holding = 0, false
+-- A Back press is the player stepping out on purpose: that ring state is real, never held.
+local BACK_FRESH_S = 1.0
+local back_at = -1e9
 local RING_DEBUG = false       -- one line per ring close with the sid (2026-07-16 diagnosis;
                                -- 2026-09-08 board/grid lanes verified: both arms ~1.7 s to speech)
 
@@ -204,6 +215,7 @@ function Field.is_active()
             end
         end
         ring_was_open = false
+        ring_wait, holding = 0, false
         sid_commu_clock, sid_commu_row = nil, nil
         cached_screen, cached_name, cached_sid = nil, nil, nil
         return false
@@ -226,6 +238,20 @@ function Field.is_active()
 
     if not name then cached_screen, cached_name, cached_sid = nil, nil, nil return false end
 
+    -- Only the step OUT of a submenu, or the return from a submenu's screen, is held; scrolling
+    -- the ring and opening it from the field never wait.
+    local coming_back = cached_screen ~= nil or Registry.active_adapter() ~= nil
+    if screen == I18n.t("main_menu") and cached_screen ~= screen and coming_back
+       and os.clock() - back_at > BACK_FRESH_S
+       and sel_sid ~= nil and (SUBMENU_BY_SID[sel_sid] or FIXED_SUB_BY_SID[sel_sid]) then
+        ring_wait = ring_wait + 1
+        if ring_wait < RING_SETTLE then
+            holding = true
+            return true
+        end
+    end
+    ring_wait, holding = 0, false
+
     -- Context change (ring <-> submenu) -> re-announce the screen name + item (menus.md).
     if screen ~= cached_screen then ann:reset() end
     cached_screen, cached_name, cached_sid = screen, name, sel_sid
@@ -239,8 +265,23 @@ end
 -- AFTER is_active already saw the ring close and consumed the sid for the watch arm.
 function Field.reset() ann:reset() cached_screen, cached_name, last_dbg = nil, nil, nil end
 
+-- Records Back presses made ON the ring for the hold above (pad_poll latches every edge, at any
+-- grid). A Back that leaves another screen returns through the same flash, so it is not recorded.
+local function back_step()
+    if Input.pressed(Input.BTN.B) and Registry.active_adapter() == Field then back_at = os.clock() end
+end
+
+function Field.start()
+    if Input.is_loaded() then PadPoll.register("field_back", back_step) end
+end
+
+function Field.stop()
+    PadPoll.unregister("field_back")
+end
+
 function Field.update()
     -- screen (Main menu / the section) spoken on entry; name = the selected row/section on move.
+    if holding or not cached_name then return end
     ann:focus(cached_screen, nil, cached_name, nil, nil)
 end
 

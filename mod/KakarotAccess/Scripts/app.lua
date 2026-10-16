@@ -160,7 +160,8 @@ Registry.register(require("screen_saveload"), "screen_saveload")
 Registry.register(require("screen_tutorials"), "screen_tutorials")                     -- System > Tutorials list
 local CommunityScreen = require("screen_community")
 Registry.register(CommunityScreen, "screen_community")                     -- Community / Soul Emblems
-Registry.register(require("screen_field"), "screen_field")
+local FieldScreen = require("screen_field")
+Registry.register(FieldScreen, "screen_field")
 -- Bottom-of-stack NOTICE readers (speak once + release; never hold the screen):
 -- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
 -- level-ups). Any real menu above outranks them.
@@ -196,6 +197,7 @@ function App.start()
     MapScreen.start()
     StatusScreen.start()
     CommunityScreen.start()
+    FieldScreen.start()
     QuestObjective.start()
     AudioDescription.start()
 end
@@ -210,6 +212,7 @@ function App.stop()
     MapScreen.stop()
     StatusScreen.stop()
     CommunityScreen.stop()
+    FieldScreen.stop()
     QuestObjective.stop()
 end
 
