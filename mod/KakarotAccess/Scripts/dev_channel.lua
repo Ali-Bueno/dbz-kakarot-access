@@ -30,7 +30,6 @@ local Channel = {}
 local CMD_PATH = "kakarot_cmd.txt"
 local OUT_PATH = "kakarot_out.txt"
 local POLL_MS  = 500
-local BUSY_TIMEOUT_S = 30   -- longer than any dump; a command still "running" past it is dead
 
 --------------------------------------------------------------------------------
 -- output
@@ -105,6 +104,10 @@ function C.stick(x, y, ms)
     local ok = Input.vpad_stick(tonumber(x) or 0, tonumber(y) or 0, tonumber(ms) or 200)
     last_press = os.clock()
     out(string.format("stick %s,%s for %s ms hooked=%s", tostring(x), tostring(y), tostring(ms), tostring(ok)))
+end
+
+function C.story()
+    for _, l in ipairs(require("screen_story").dev_state()) do out(l) end
 end
 
 function C.commu()
@@ -254,13 +257,41 @@ end
 -- install
 --------------------------------------------------------------------------------
 
-Channel._dispatch = dispatch
+-- The poll runs as a pad_poll stepper, i.e. ON THE GAME THREAD (2026-10-16). It used to be its own
+-- LoopAsync that read the file on the worker thread and queued each command with
+-- ExecuteInGameThread: worker-side Lua on the shared state plus a queue push per command, the two
+-- access classes pad_poll.lua documents as the session-ending race. Thirty minutes of scripted
+-- presses (one command a second) froze the whole mod silently, with the process still up.
+-- App.start calls attach() so the stepper lands in the current pad_poll after every reload.
+local next_poll = 0
+local function poll_step()
+    local now = os.clock()
+    if now < next_poll then return end
+    next_poll = now + POLL_MS / 1000
+    local f = io.open(CMD_PATH, "r")
+    if not f then return end
+    local line = f:read("*l")
+    f:close()
+    if not line or line == "" or line == _G.__KakarotDevLastCmd then return end
+    _G.__KakarotDevLastCmd = line
+    local seq, rest = line:match("^#(%S+)%s+(.*)$")
+    -- pcall around the WHOLE body, including the markers: if anything in here raises, the END
+    -- marker must still be written or the caller waits out its full timeout.
+    pcall(function()
+        if seq then out("<<<BEGIN " .. seq .. ">>>") end
+        dispatch(rest or line)
+    end)
+    if seq then pcall(out, "<<<END " .. seq .. ">>>") end
+end
+
+function Channel.attach()
+    if not _G.__KakarotDevChannel then return end
+    require("pad_poll").register("dev_channel", poll_step)
+end
 
 function Channel.install(d)
-    -- ONE loop, ever. main.lua is never re-required (Ctrl+Shift+R only drops package.loaded), so this
-    -- normally installs once — but the reload DOES nil package.loaded.dev_channel, so any later
-    -- require would build a second module table and, without this, a second 500 ms loop polling the
-    -- same file. A global flag is the only state that survives both.
+    -- ONE install, ever: main.lua runs this once at boot, and the global flag survives a reload
+    -- (which nils package.loaded.dev_channel). The poll itself is re-attached by App.start.
     deps = d or {}
     _G.__KakarotDevDeps = deps
     if _G.__KakarotDevChannel then
@@ -281,42 +312,7 @@ function Channel.install(d)
     if last_cmd and last_cmd ~= "" then
         out("ignoring stale command from a previous session: " .. last_cmd)
     end
-    -- A DEADLINE, not a latch (2026-09-08). A pcall-piercing error inside a command unwinds
-    -- straight through the action callback below, so the `busy = false` at its end never runs
-    -- and a plain boolean left the channel dead for the rest of the session — one bad probe line
-    -- cost a game restart. A command that outlives the deadline is treated as gone.
-    local busy_until = nil
-    LoopAsync(POLL_MS, function()
-        -- Backlog guard (ue4ss-api-reference.md:144-149): never queue the next step until the
-        -- previous one finished. `census` and `reload` are tens of milliseconds of game-thread work;
-        -- without this, a caller that writes a second command while the first is still running gets
-        -- them interleaved and the sequence markers stop bracketing anything.
-        if busy_until and os.clock() < busy_until then return false end
-        local f = io.open(CMD_PATH, "r")
-        if not f then return false end
-        local line = f:read("*l")
-        f:close()
-        if not line or line == "" or line == last_cmd then return false end
-        last_cmd = line
-        busy_until = os.clock() + BUSY_TIMEOUT_S
-        ExecuteInGameThread(function()
-            -- pcall around the WHOLE body, including the markers: if anything in here raises, the
-            -- END marker must still be written or the caller waits out its full timeout for an
-            -- answer that is never coming, and `busy` would latch the channel dead forever.
-            local seq, rest = line:match("^#(%S+)%s+(.*)$")
-            pcall(function()
-                if seq then out("<<<BEGIN " .. seq .. ">>>") end
-                -- The FRESH module after a reload, so new commands work without a restart.
-                local okm, fresh = pcall(require, "dev_channel")
-                local run = (okm and type(fresh) == "table" and fresh._dispatch) or dispatch
-                run(rest or line)
-            end)
-            if seq then pcall(out, "<<<END " .. seq .. ">>>") end
-            busy_until = nil
-        end)
-        return false
-    end)
-
+    _G.__KakarotDevLastCmd = last_cmd
     out("dev channel ready - write a command into " .. CMD_PATH .. ", read " .. OUT_PATH)
     return true
 end

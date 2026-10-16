@@ -29,9 +29,12 @@ Title.confirm_ticks = 3
 -- gate via reannounce(). SETTLE_S: the dialog gaps outlived confirm_ticks (~1.5 s), so
 -- past that with some margin; pure announce-delay on entering the title, nothing else.
 -- Tuned in-game: 4 s worked but felt sluggish, 2.5 s is the user's pick (2026-07-17).
--- The gate guards the BOOT dialog sequence only: once the title has settled, later entries
--- (back from Options / Load) speak at once. Re-armed after a gameplay world.
+-- The gate guards the BOOT dialog sequence only. It ends when the player moves the cursor or the
+-- title holds BOOT_DONE_S with no dialog over it; later entries (back from Options / Load) then
+-- speak at once. Ending it at the first settle let the later boot gaps repeat "Main menu,
+-- Continue" three times (2026-10-16). Re-armed after a gameplay world.
 local SETTLE_S = 2.5
+local BOOT_DONE_S = 5
 local boot_done = false
 
 local OPTION_COUNT = 6
@@ -86,9 +89,10 @@ function Title.update()
             if gate_name == nil then gate_name = name or false end
             if (name or false) == gate_name then return end
             settled = true   -- the cursor moved: the menu is live, speak at once
+            boot_done = true
         end
-        boot_done = true
     end
+    if not boot_done and os.clock() - reset_t >= BOOT_DONE_S then boot_done = true end
     -- The title screen has no on-screen name → a mod-added, localized label.
     ann:focus(I18n.t("main_menu"), nil, name, nil, nil)
 end

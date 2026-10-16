@@ -199,6 +199,8 @@ function App.start()
     CommunityScreen.start()
     FieldScreen.start()
     QuestObjective.start()
+    -- Dev builds only: the file command channel rides the shared pad loop (dev_channel.lua).
+    if require("build_flags").debug then pcall(function() require("dev_channel").attach() end) end
     AudioDescription.start()
 end
 

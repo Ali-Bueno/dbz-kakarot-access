@@ -312,7 +312,7 @@ if Build.debug then
     -- the keyboard. Every bind in this block needs the game window focused and a human at it, which
     -- is precisely what stops an external tool (tools/kakarot-mcp) from asking the mod anything
     -- about itself; a census or a nav dump then costs a round-trip through the player. Adds no
-    -- keybind and no work to any existing loop: it polls its own file every 500 ms.
+    -- keybind: App.start attaches a pad_poll stepper that reads the file every 500 ms.
     -- pcall'd like the other optional installs — a broken dev tool must never stop the mod loading.
     pcall(function()
         require("dev_channel").install({

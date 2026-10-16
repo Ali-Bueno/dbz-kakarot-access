@@ -44,9 +44,14 @@ local seen_key, seen_count = nil, 0
 -- interrupt=true. Undebounced, a flap re-speaks the screen every poll (the screen_party
 -- flip-flop). Settled, and logged when it fires.
 local ctx, ctx_want, ctx_count = nil, nil, 0
+local last_task = nil   -- pane mode last poll; X flipping it is a context change on the spot
 
+-- The progress pane is up only when the story pane is NOT: on opening the screen the game leaves
+-- BOTH Visible(0) until the first X, and in the progress view the story pane is Collapsed
+-- (measured 2026-10-16). Testing the task pane alone read the objective instead of the episode.
 local function task_mode()
     return Core.is_visible(Core.member(host, "All_Win_Task"))
+       and not Core.is_visible(Core.member(host, "All_Win_Story"))
 end
 
 -- The progress checklist (X mode). nil when that pane is not up or has no rows.
@@ -123,7 +128,7 @@ end
 -- registry confirmed the switch, and restarting them at commit only delayed the first readout.
 function Story.reset()
     ann:reset()
-    ctx, ctx_want, ctx_count = nil, nil, 0
+    ctx, ctx_want, ctx_count, last_task = nil, nil, 0, nil
 end
 
 function Story.reannounce() ann:reset() end
@@ -131,6 +136,13 @@ function Story.reannounce() ann:reset() end
 function Story.update()
     if seen_count < SETTLE_POLLS or not seen_key then return end
     local task = task_mode()
+    if last_task ~= nil and task ~= last_task then
+        -- The pane mode is read from widget visibility, which does not flap: re-announce the
+        -- whole view now instead of the new entry first and its context a few polls later.
+        ann:reset()
+        ctx = nil
+    end
+    last_task = task
 
     -- Tab and pane mode are CONTEXT, not items: either changing changes the whole readout.
     -- Announce them THROUGH the screen-entry branch rather than the announcer's `tab` parameter,
@@ -162,6 +174,25 @@ function Story.update()
                     Core.phrase(Core.first_text(host, "Txt_Recommend"),
                                 Core.first_text(host, "Txt_Num_Lv"))),
         detail_extra)
+end
+
+-- DEV (dev_channel `story`): which pane is up, by every visibility test the adapter could use.
+function Story.dev_state()
+    if not Core.valid(host) then return { "no host" } end
+    local out = {}
+    for _, m in ipairs({ "All_Win_Story", "All_Win_Task" }) do
+        local w = Core.member(host, m)
+        local vis, op
+        pcall(function() vis = w:GetVisibility() end)
+        pcall(function() op = w:GetRenderOpacity() end)
+        out[#out + 1] = string.format("%s valid=%s is_visible=%s on_screen=%s vis=%s opacity=%s", m,
+            tostring(Core.valid(w)), tostring(Core.is_visible(w)), tostring(Core.on_screen(w)),
+            tostring(vis), tostring(op))
+    end
+    for _, m in ipairs({ "Txt_Quest_title", "Txt_Quest_title01", "Txt_Cap01", "Txt_Cap03", "Txt_Cap04", "Txt_Story_Task00" }) do
+        out[#out + 1] = string.format("%s = %s", m, tostring(Core.first_text(host, m)))
+    end
+    return out
 end
 
 return Story
