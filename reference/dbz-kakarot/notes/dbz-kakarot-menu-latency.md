@@ -8,11 +8,11 @@ the end of this note). Time = virtual press to the first spoken line, from the s
 
 | Screen | Before | After | Where the time goes |
 |---|---|---|---|
-| Title menu after the boot dialogs | ~4 s (1.5 s confirm + 2.5 s settle on every entry) | ~0.3 s after the last dialog; instant back from Options/Load | Settle gate now guards the boot sequence only |
+| Title menu after the boot dialogs | ~4 s (1.5 s confirm + 2.5 s settle on every entry) | ~2.8 s after the last boot dialog; ~1 s back from Options/Load (game anim) | Settle gate now guards the boot sequence only |
 | Pause ring (Start) | <0.5 s | same | — |
 | Comunidad / Sistema submenus | ~0.5 s | same; no "Main menu, System" flash between a submenu row and its screen | ring shows the bare row for ~0.4-0.6 s around a submenu screen |
 | Options | ~0.9 s | same | game |
-| Story (Historia) | 1.5-2.4 s, read twice | ~0.3 s less, read once | ~0.8 s ring close + 0.7-1.9 s until the detail title exists (game) |
+| Story (Historia) | 1.5-2.4 s, read twice, objective instead of episode | ~0.3 s less, episode + level + summary, read once | ~0.8 s ring close + 0.7-1.9 s until the detail title exists (game) |
 | Items | 1.9-2.6 s, "Recovery, empty list", first item never read | same speed, reads the first item | game opening; the empty hint is the tab INDEX on entry |
 | Party / Characters | 0.9-2.0 s | same | game |
 | DLC | ~2.3 s | same | game |
@@ -23,6 +23,26 @@ The full-screen menus behind the ring are dominated by the game: ~0.8-1 s for th
 close, then the new screen's own opening. The mod's own overhead there is the commit confirm
 (100-200 ms) and per-adapter settles.
 
+## Later in the same session
+
+- **Story read the objective instead of the episode.** On opening, BOTH `All_Win_Story` and
+  `All_Win_Task` are `Visible(0)`; after the first X the hidden one is `Collapsed(1)` and the
+  shown one `HitTestInvisible(3)`. `task_mode()` now needs the task pane visible AND the story
+  pane not. The X toggle re-reads once (it used to say the new entry, then its context).
+  Dev probe: `kak_dev story`.
+- **Quiet in the ring -> screen gap.** With an ambient conversation nearby, quiet engaged in the
+  second between the ring closing and Options appearing, and Options took ~5 s. Closing the
+  ring now keeps quiet off for 3 s (`quiet_lift_until`, ring only, so cutscene prompts keep it).
+- **Title repeats.** Ending the boot gate at the first settle let the later boot gaps say "Main
+  menu, Continue" three times. The gate now ends on a real cursor move or a 5 s hold.
+- **An objective right after `kak_reload` is not a bug.** `quest_objective`'s diff gate is
+  module state, so every reload re-announces the current objective on the next HUD reading.
+- **The dev channel froze the mod.** After ~30 minutes of one scripted command a second, every
+  KakarotAccess loop stopped (no log, process responsive, the Inspector still answering; last
+  breadcrumb `ui.update screen_characters`). The channel read its file on the LoopAsync worker
+  and queued an `ExecuteInGameThread` per command, the race pad_poll.lua documents. It is now a
+  pad_poll stepper on the game thread, re-attached by `App.start`; the freeze did not recur.
+
 ## Fixes that were about speech, not detection
 
 - **Requeue replays stale lines.** `speech.lua` re-appends unfinished queued lines after every
@@ -30,7 +50,7 @@ close, then the new screen's own opening. The mod's own overhead there is the co
   the player is navigating: a late tooltip came back after the NEXT item, the keyhelp line and
   the board summary came back after every d-pad move, and the world map's whole travel list
   would replay after each d-pad step. Those are now `no_requeue`. And when the player opens a
-  menu from the field, the registry flushes queued field lines (the radar's "Tracking main
+  menu from the field (Start/Back), the registry drops queued requeues — not protection (the radar's "Tracking main
   quest" was spoken after "Main menu, Items").
 - **Announcer tab branch** spoke the tab label alone and swallowed the item; it now speaks
   "tab, item".

@@ -130,7 +130,7 @@ If something you need isn't listed, let me know (see the links at the bottom).
 | **D-pad ↑ / ↓** (world map) | Move between zones — **hold** to keep stepping |
 | **X** (world map) | Travel to the selected zone (X = A on Xbox) |
 | **Xbox X / PS Square** (either map) | Describe what's selected: destination + position in the list + what the cursor is over. On the area map, re-reads the point of interest under the cursor |
-| **Left stick** (Community board) | Move around (d-pad support planned, like the map) |
+| **D-pad** (Community board) | Jump to the next panel in that direction, also while holding an emblem to place it; the left stick still moves freely |
 
 The Community Board's automatic button help includes movement/page controls as well
 as actions. **F1** repeats the current tutorial instruction, or the current panel

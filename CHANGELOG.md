@@ -16,8 +16,8 @@
 
 ### Faster and cleaner menus
 
-- The title menu speaks as soon as the startup messages are over, and at once when you come
-  back from Options or Load. It used to wait about four seconds every time.
+- The title menu waits less after the startup messages, and speaks at once when you come back
+  from Options or Load. It used to wait about four seconds every time.
 - The world map should read its travel points sooner after opening, and a d-pad press made while
   it opens is no longer lost. Not yet checked in a real playthrough.
 - Opening a menu from the field no longer lets the radar finish its last sentence over it.
@@ -25,7 +25,9 @@
   the board summary after the new item. On the world map the whole travel list was repeated.
 - Items: the Recovery tab no longer says "empty list" on entry, and changing tabs reads the tab
   name together with the first item.
-- Story reads once instead of twice, a little sooner.
+- Story reads the episode you are on (name, recommended level, summary, rewards) instead of the
+  current objective, once instead of twice, and a little sooner. X still switches to the progress
+  list.
 - The pause menu no longer says "Main menu, System" in the middle of opening or leaving Options,
   Save or Load.
 - The character status page names the HP and Ki bars.
