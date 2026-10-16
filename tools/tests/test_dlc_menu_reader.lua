@@ -265,6 +265,8 @@ _G.FindAllOf = function(class_name)
     if class_name == "MenuManager" then return { menu_manager } end
     return {}
 end
+-- Root scans go through Core.findall (the timed scan) in the real module.
+Core.findall = function(class_name) return FindAllOf(class_name) or {} end
 
 package.loaded.ui_directory = nil
 package.preload.transition = function()

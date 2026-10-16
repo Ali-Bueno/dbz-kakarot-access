@@ -93,6 +93,13 @@ end
 
 -- The active choice window (message prompt + fixed Yes/No), if one is on screen.
 local function choice_window()
+    -- The quest Yes/No window also hangs off the mapped QuestSub (UAT_UIQuestSub.UIChoiceWin
+    -- @0x430, AT.hpp:35478): a pointer read, so quiet mode cannot delay it. Additive only.
+    local qs = Core.cached_live("Quest_Sub_C", tick)
+    if Core.valid(qs) then
+        local w = Core.member(qs, "UIChoiceWin")
+        if Core.valid(w) and Core.on_screen(w) then return w end
+    end
     for _, cls in ipairs(WIN_CLASSES) do
         local w = Core.cached_live(cls, tick)
         if Core.on_screen(w) then return w end

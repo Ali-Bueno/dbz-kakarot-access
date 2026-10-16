@@ -88,7 +88,8 @@ local root_next = {}   -- key -> earliest tick to retry a failed scan
 -- GameMode actor, not in the transient package.
 local function first_instance(cls)
     local all
-    if not pcall(function() all = FindAllOf(cls) end) or not all then return nil end
+    -- Core.findall: the same scan, but counted in the Ctrl+F5 stats (root scans were invisible).
+    if not pcall(function() all = Core.findall(cls) end) or not all then return nil end
     for _, o in pairs(all) do
         if Core.valid(o) then
             local ok, fn = pcall(function() return o:GetFullName() end)
@@ -116,7 +117,7 @@ local function find_root(key, cls, no_scan)
     if (root_next[key] or 0) > tick then return nil end
     -- The scan walks the whole object array, so it counts against the shared per-tick
     -- scan budget; a budget denial just retries next tick (no backoff).
-    if not Core.take_scan_slot() then return nil end
+    if not Core.take_scan_slot(key) then return nil end
     local o = first_instance(cls)
     if o then
         roots[key] = o
@@ -144,9 +145,9 @@ local function find_hud(no_scan)
     if no_scan then return nil end
     local tick = now()
     if (root_next["hud"] or 0) > tick then return nil end
-    if not Core.take_scan_slot() then return nil end
+    if not Core.take_scan_slot("hud") then return nil end
     local all
-    if pcall(function() all = FindAllOf("PlayerController") end) and all then
+    if pcall(function() all = Core.findall("PlayerController") end) and all then
         for _, pc in pairs(all) do
             if Core.valid(pc) then
                 local hud = prop(pc, "MyHUD")
@@ -178,7 +179,12 @@ function getters.gi(ns) return find_root("gi", "BP_ATGameInstance_C", ns) end
 -- The TITLE level script actor: owns the title menu's load/options flows through
 -- TitleLoadMenuComponent / TitleOptionMenuComponent (AT.hpp:14119). Only exists on the
 -- title map; in game it's absent and the mm chains serve those screens instead.
-function getters.tt(ns) return find_root("tt", "ATTitleLevelScriptActor", ns) end
+-- So never scan for it in a gameplay world: the save/load and options chains used to look for it
+-- every ~2 s for the whole session (43 of 125 scans in one measured cutscene, 2026-10-15).
+local function in_gameplay()
+    return Core.valid(roots["mm"]) or Core.valid(roots["hud"])
+end
+function getters.tt(ns) return find_root("tt", "ATTitleLevelScriptActor", ns or in_gameplay()) end
 getters.hud = find_hud
 function getters.fm(ns) return prop(find_hud(ns), "UIFieldManager") end
 function getters.bm(ns) return prop(find_hud(ns), "UIBattleManager") end
@@ -440,13 +446,30 @@ local MAP = {
 -- an "owner unreachable" result (distinct from {} = owner said the screen doesn't exist).
 local memo = {}   -- cls -> { t = tick, list = {...} | false }
 
+-- The base root each chain key hangs off: fm/bm/cm are hops off the HUD, wm off the GameInstance.
+local BASE_ROOT = { fm = "hud", bm = "hud", cm = "hud", wm = "gi" }
+-- Mapped classes whose last resolve found a live base root but a null owner (see resolve).
+local ownerless = {}
+
+-- In a gameplay world, a chain whose BASE root is live but whose owner hop is null is the game's
+-- own manager saying the screen does not exist; so is a title-actor chain, since that actor cannot
+-- exist there. Only chains whose root is genuinely unreachable keep the old fallback.
+local function owner_says_absent(chains)
+    if not in_gameplay() then return false end
+    for _, ch in ipairs(chains) do
+        if ch[1] == "tt" or Core.valid(roots[BASE_ROOT[ch[1]] or ch[1]]) then return true end
+    end
+    return false
+end
+
 -- nil  -> class not mapped, OR mapped but NO chain reached a valid final owner — the
 --         directory cannot answer, so the caller falls back to the scan path. This is
 --         what keeps exotic contexts alive: the TITLE menu opens load-game/options with
 --         no field GameMode, so UMenuManager doesn't exist there (2026-07-15, found in
 --         game) — asserting "absent" then silenced those screens for good.
 -- {}   -> a chain DID reach its owner and the widget field is null: the screen does not
---         exist right now (NO scan — the game's own registry is the answer)
+--         exist right now (NO scan — the game's own registry is the answer). Also, in a
+--         gameplay world, a live base root with a null owner, outside the hot window.
 -- list -> every currently valid candidate instance (callers pick the on-screen one)
 -- `no_scan` (crash audit RANK 16, 2026-07-31): resolve from CACHED roots only — see find_root.
 -- Passed by Core.peek_all, whose documented contract is that it never scans and which fast loops
@@ -503,6 +526,17 @@ function Directory.resolve(cls_name, no_scan)
         end
     end
     if not owner_reached then
+        -- Null owner in gameplay = absent, NO scan (2026-10-15 cinematic report). The safety valve
+        -- is the registry's hot window: right after a press or a screen commit — the moments a
+        -- screen from an unmapped context can open — the old scan fallback still runs, and
+        -- Core.cached_all logs any class it finds that way, so a missing chain names itself.
+        if owner_says_absent(chains) then
+            ownerless[cls_name] = true
+            if not Core.hot() then
+                memo[cls_name] = { t = tick, list = list }
+                return list
+            end
+        end
         -- Do NOT memoise a no_scan miss. The memo is per-tick and shared, so a fast-loop peek that
         -- failed only because it was not allowed to resolve the root would otherwise poison the
         -- registry's own resolve for the rest of that tick — turning a cheap peek into a cause of
@@ -511,8 +545,14 @@ function Directory.resolve(cls_name, no_scan)
         if not no_scan then memo[cls_name] = { t = tick, list = false } end
         return nil
     end
+    ownerless[cls_name] = nil
     memo[cls_name] = { t = tick, list = list }
     return list
+end
+
+-- Did this mapped class's last resolve find its base root live but its owner null?
+function Directory.ownerless(cls_name)
+    return ownerless[cls_name] == true
 end
 
 -- Guarded one-field look at a root, for adapters that need an ENTRY SIGNAL from a
@@ -536,10 +576,18 @@ function Directory.root_ok(root_key)
     return Core.valid(g())
 end
 
+-- Same question answered from the cached root only: never scans, so a per-tick caller in a
+-- world without that root (the title screen) costs nothing.
+function Directory.root_cached(root_key)
+    local g = getters[root_key]
+    if not g then return false end
+    return Core.valid(g(true))
+end
+
 -- Map switch: the PlayerController, HUD and MenuManager die with the level. Drop
 -- everything (the GameInstance root survives but one re-find after a load is cheap).
 Transition.on_begin("ui_directory", function()
-    roots, root_next, memo = {}, {}, {}
+    roots, root_next, memo, ownerless = {}, {}, {}, {}
 end)
 
 -- ---- diagnostics (Ctrl+F5 dump only — never per tick) -------------------------

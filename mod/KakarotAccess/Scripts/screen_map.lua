@@ -184,6 +184,9 @@ end
 -- holds in COMBAT/cutscenes — together they false-positived the world map during a battle
 -- (user 2026-07-09), which spammed the travel points AND injected the stick mid-fight.
 local function world_icons_on_screen()
+    -- The icons live inside the map host, which the directory resolves by pointer: without
+    -- this gate their absent pool re-scanned every ~4 s through every cutscene and battle.
+    if not Core.first_on_screen("Map_World_C", tick) then return false end
     for _, ic in ipairs(Core.cached_all("Map_World_Icon_C", tick)) do
         if Core.valid(ic) and Core.on_screen(ic) then return true end
     end
@@ -311,7 +314,7 @@ function Map.is_active()
     map_debug()
     curs_debug()
     -- One-shot structure capture: dump whichever map host is on-screen (TEMP, see dump_struct).
-    if not struct_done then
+    if STRUCT_DUMP and not struct_done then
         local h = Core.first_on_screen("Map_World_C", tick) or Core.first_on_screen("Map_M_C", tick)
         if h then dump_struct(h) end
     end

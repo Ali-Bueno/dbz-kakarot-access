@@ -11,6 +11,7 @@ local Transition = require("transition")
 local KeyhelpWatch = require("keyhelp_watch")
 local GuideWatch = require("guide_watch")
 local Input = require("input")
+local Cinema = require("cinema")
 
 local Registry = {}
 
@@ -50,8 +51,8 @@ local hot_until = 0
 -- still scanning through a cinematic were all MENU screens that cannot appear there
 -- without a press (community trio, dragon-ball menu, map icons, title, choice
 -- windows) — one ~73ms hitch every ~2.5s. A camera cutscene shows no active adapter,
--- no minimap and no battle HUD: treat that whole state as quiet. Guards: any fresh
--- press lifts it for the hot window (skip confirms), ui_core exempts the
+-- no minimap and no battle HUD: treat that whole state as quiet. Guards: a fresh
+-- press lifts it (skip confirms; see quiet_lift_until for the exception), ui_core exempts the
 -- auto-appearing narrative classes (subtitles/talk/telop/notice), and it engages
 -- ONLY in a gameplay world — `Dir.root_ok("mm")`, the gameplay GameMode's own
 -- MenuManager root, unreachable at boot/title — so title/boot detection keeps its
@@ -78,16 +79,9 @@ local prev_battle = false
 local ABSENT_TICKS = 5      -- ~500 ms of continuous absence
 local battle_absent = 0
 
--- Scan-free on purpose (Core.peek_all): this runs per tick while no adapter is
--- active, and its cached_all form was itself scanning the absent HUD class every
--- backoff through the cinematic (n=24 in the 21:11 dump) — a probe must never cost
--- what it exists to prevent. In a real battle the directory ({"bm"}) serves the HUD.
-local function battle_hud_live()
-    for _, w in ipairs(Core.peek_all("Battle_Hud_P_Main_C")) do
-        if Core.valid(w) and Core.on_screen(w) then return true end
-    end
-    return false
-end
+-- Scan-free on purpose (Core.battle_hud_peek): its cached_all form was itself scanning the
+-- absent HUD class every backoff through the cinematic (n=24 in the 21:11 dump).
+local battle_hud_live = Core.battle_hud_peek
 
 -- Menu-open boost from the PAD. The registry's commit boost cannot see ring→submenu:
 -- the ring/pause stays visible (and active) under the submenu, so no screen change ever
@@ -102,6 +96,29 @@ local TRACE_COMMITS = false -- 2026-07-16 emblems diagnosis: log screen commits 
                             -- shadowing adapter when a screen reads late/never.
 
 local BOOST_BTNS = Input.BTN.A | Input.BTN.B | Input.BTN.X | Input.BTN.Y | Input.BTN.START
+
+-- Quiet's own lift window (2026-10-15 cinematic report, see dbz-kakarot-movie-stutter.md). It
+-- follows hot_until except for FACE buttons pressed while quiet already holds: those advance a
+-- line or throw an attack, they do not open menus, and each one used to release every deferred
+-- scan at once. Start, Back, shoulders, d-pad and thumbs still lift it, as does any press made
+-- outside quiet, so a menu opened from free roam or a pause reads exactly as before.
+local FACE_BTNS = Input.BTN.A | Input.BTN.B | Input.BTN.X | Input.BTN.Y
+local quiet_lift_until = 0
+-- A dialogue choice is the one screen a face press can reveal inside a scene. Its rows are read
+-- from the cached pool, so once that pool is alive no scan is needed; until then (a fresh
+-- session, a map load) face presses keep lifting quiet as before. Classes: screen_choice.lua.
+local CHOICE_ROWS = { "Choice_Cmd_C", "AT_UIChoiceCmd" }
+local function choices_cached()
+    for _, cls in ipairs(CHOICE_ROWS) do
+        if Core.pool_alive(cls) then return true end
+    end
+    return false
+end
+-- The battle HUD stays "on screen" through battle cinematics, so it vetoes quiet only while the
+-- player is actually pressing (any fresh press in the last ~3 s). A fight keeps the old cadence;
+-- a scene the player just watches goes quiet.
+local FIGHT_TICKS = 30
+local last_press = -FIGHT_TICKS - 1
 local BOOST_COOLDOWN = 3    -- registry ticks between pad-triggered boost windows. Not 1:
                             -- an uncooled boost per press turned list navigation into a
                             -- permanent scan storm (57k scans / 1s spikes, 2026-07-15).
@@ -118,7 +135,14 @@ local function pad_boost()
     if not snap then return end
     local fresh = snap.buttons & ~prev_btn
     prev_btn = snap.buttons
-    if fresh ~= 0 then hot_until = tick_n + HOT_TICKS end
+    if fresh ~= 0 then
+        hot_until = tick_n + HOT_TICKS
+        last_press = tick_n
+        -- scan_quiet() is still last tick's verdict here: "was quiet holding when pressed".
+        if not Core.scan_quiet() or (fresh & ~FACE_BTNS) ~= 0 or not choices_cached() then
+            quiet_lift_until = tick_n + HOT_TICKS
+        end
+    end
     -- No boost while a quiet overlay owns the screen (subtitles): mashing A through
     -- dialogue is "advance the line", not "open a menu" — each press used to open a
     -- boost window and re-scan every missing pool once per window, a steady scan
@@ -236,11 +260,19 @@ local function step()
         -- Map load in progress: the game thread is at its busiest — relax the 20ms
         -- pad dispatcher too (pad_poll reads this global at its own cadence).
         _G.__KakarotPadRelax = true
+        -- The loading screen's text pool must be findable; movie mode would defer it.
+        Core.set_cinema(false)
         return
     end
 
     tick_n = tick_n + 1
+    -- Before the sweep, so this tick's probes already see movie mode (ui_core). A real menu
+    -- or a visible minimap means no movie owns the screen, whatever its player reports.
+    local cinema = Cinema.update() and (active == nil or active.scan_quiet == true)
+        and not Core.minimap_peek()
+    Core.set_cinema(cinema)
     pad_boost()
+    Core.set_hot(tick_n <= hot_until)
     local cur
     if active and pending == nil and tick_n % SWEEP_EVERY ~= 0 then
         -- Sticky fast path: the active screen is still up → keep it, poll nobody else.
@@ -332,6 +364,7 @@ local function step()
         if not flip_quiet then
             Core.boost_missing()
             hot_until = tick_n + HOT_TICKS   -- a follow-up screen may appear right after
+            quiet_lift_until = hot_until
         end
     else
         pending, pending_n = nil, 0
@@ -358,12 +391,21 @@ local function step()
         -- (The `_G.__KakarotBattleLeftAt` stamp that used to be published here is gone:
         -- screen_gameover was its only consumer and no longer needs an arming signal at all now
         -- that Gameover_C is directory-mapped.)
-        if not battle then hot_until = tick_n + HOT_TICKS * 3 end
+        if not battle then
+            hot_until = tick_n + HOT_TICKS * 3
+            quiet_lift_until = hot_until
+        end
     end
-    local quiet = (active ~= nil and active.scan_quiet == true) or false
+    local quiet = cinema or (active ~= nil and active.scan_quiet == true)
     if not quiet and active == nil then
-        quiet = Dir.root_ok("mm") and not battle and tick_n > hot_until
+        local fighting = battle and tick_n - last_press <= FIGHT_TICKS
+        quiet = Dir.root_ok("mm") and not fighting and tick_n > quiet_lift_until
             and not Core.free_roam(tick_n)
+    end
+    -- Each flip is logged so a stutter report shows whether quiet held through the scene.
+    if quiet ~= Core.scan_quiet() then
+        print(string.format("[KakarotAccess] quiet -> %s (battle=%s)\n",
+            quiet and "on" or "off", tostring(battle)))
     end
     Core.set_quiet(quiet)
     _G.__KakarotPadRelax = quiet
@@ -410,6 +452,8 @@ function Registry.stop()
     active, pending, pending_n = nil, nil, 0
     safe_call("KeyhelpWatch.screen_changed", KeyhelpWatch.screen_changed, nil)
     Core.set_quiet(false)              -- never leave the scan/pad throttles latched on
+    Core.set_cinema(false)
+    Core.set_hot(true)                 -- ownerless classes keep their scan fallback
     _G.__KakarotPadRelax = false
 end
 

@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-13 (v0.1.7 released: the Dragon Ball radar rework after a player report; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -43,7 +43,15 @@ The earlier upstream backlog includes the following unrun checks:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
--3. **Dragon Balls — FIRST, players report them unfindable (2026-10-06, shipped in v0.1.7, never played).**
+-4. **Movie and cutscene audio — FIRST, players report the audio slowing down and stuttering
+   (2026-10-15, released in v0.1.8 on 2026-10-16, never played by us).** Merged with a player-side measurement (Matthew): title-root
+   scans every ~2 s in gameplay, null-owner scan fallbacks, quiet vetoed by the battle HUD in
+   battle cinematics and lifted by every press, plus our description clock. Fixed with a
+   scan-free movie mode, no `tt` scans in gameplay, null owner = absent (hot-window valve), quiet
+   in un-pressed battle scenes, and face presses no longer lifting quiet. The 10-step checklist
+   and log lines are in [movie stutter](reference/dbz-kakarot/notes/dbz-kakarot-movie-stutter.md).
+
+-3. **Dragon Balls — players report them unfindable (2026-10-06, shipped in v0.1.7, never played).**
    Needs a save past the Frieza Saga. Open the world map: marked points must say "…, Bola de
    Dragón". Travel there, R3 → Bolas de Dragón must list the ball from any distance, and the
    beacon must survive the minimap's flashing. Collect it, then reopen the world map and say

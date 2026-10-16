@@ -1100,6 +1100,36 @@ local quiet_mode = false
 function Core.set_quiet(q) quiet_mode = q and true or false end
 function Core.scan_quiet() return quiet_mode end
 
+-- The registry's hot window (a fresh press or a screen commit in the last ~1 s). ui_directory
+-- lets an ownerless mapped class fall back to a scan only inside it. True until the registry
+-- runs, so nothing is gated before it has said otherwise.
+local hot_window = true
+function Core.set_hot(h) hot_window = h and true or false end
+function Core.hot() return hot_window end
+
+-- A scan found a live instance of a mapped class the directory called ownerless (the hot-window
+-- fallback): its MAP chain misses this context. Logged once per class, so the gap names itself.
+local ownerless_logged = {}
+local function note_ownerless(cls_name)
+    if ownerless_logged[cls_name] then return end
+    local dm = dir_mod()
+    if dm and dm.ownerless and dm.ownerless(cls_name) then
+        ownerless_logged[cls_name] = true
+        print(string.format("[KakarotAccess] directory: %s found by scan with a null owner\n",
+            cls_name))
+    end
+end
+
+-- Movie mode (ui_registry sets it from cinema.lua while a pre-rendered movie plays): stricter
+-- than quiet. Every scan stalls the movie's audio, so boost, watch and the narrative exemptions
+-- all wait too; only an absent subtitle pool may still be found. See dbz-kakarot-movie-stutter.md.
+local cinema_mode = false
+local CINEMA_EXEMPT = { ["Xcmn_Subtitles_C"] = true }
+-- The GameInstance root feeds the transition gate, so its one-off re-find is never deferred.
+local CINEMA_ROOTS = { ["gi"] = true }
+function Core.set_cinema(on) cinema_mode = on and true or false end
+function Core.cinema() return cinema_mode end
+
 -- Auto-appearing NARRATIVE surfaces stay outside quiet mode: they open with no user
 -- press (a cutscene's first subtitle, an NPC talk window, an area telop, a notice),
 -- so quiet deferral would silence exactly what a cinematic must keep reading. Their
@@ -1135,7 +1165,10 @@ local QUIET_EXEMPT = {
 
 -- The directory's root lookups (FindFirstOf) are full-array walks too, so they draw from
 -- the same per-tick budget as FindAllOf — one shared cap on scan work per tick.
-function Core.take_scan_slot() return scan_allowed() end
+function Core.take_scan_slot(root_key)
+    if cinema_mode and not CINEMA_ROOTS[root_key] then return false end
+    return scan_allowed()
+end
 
 -- ---- screen directory (ui_directory.lua): the game's own screen registry -----
 -- Mapped classes resolve to their live instance through 2-3 guarded pointer reads on the
@@ -1418,12 +1451,14 @@ function Core.cached_live(cls_name, tick)
     -- Deferred = retry next tick, like a budget miss.
     if quiet_mode and not QUIET_EXEMPT[cls_name] and not boosted
         and tick >= boost_until then return nil end
+    if cinema_mode and not CINEMA_EXEMPT[cls_name] then return nil end
     if not scan_allowed() then return nil end   -- budget spent: defer, retry next tick
                                                 -- (boost credit NOT consumed yet)
     if boosted then boosted_gen[cls_name] = boost_gen end
     c = Core.first_live(cls_name)
     live_cache[cls_name] = c
     if c then
+        note_ownerless(cls_name)
         if PROBE_ENABLED then remember_path(cls_name, c) end
     else
         live_backoff[cls_name] = tick + absent_backoff(cls_name) + jitter(cls_name)
@@ -1459,6 +1494,12 @@ local function any_valid(list)
         if Core.valid(list[i]) then return true end
     end
     return false
+end
+
+-- Does this class's cached pool (or cached live ref) hold a valid instance right now? Never scans.
+function Core.pool_alive(cls_name)
+    local c = all_cache[cls_name]
+    return (c ~= nil and any_valid(c)) or Core.valid(live_cache[cls_name])
 end
 
 -- A pool is DEAD when its cached list holds entries but none is valid anymore — the
@@ -1573,6 +1614,7 @@ function Core.cached_all(cls_name, tick)
         local exempt_due = QUIET_EXEMPT[cls_name] and not (c and any_valid(c))
         local allowed = boost_due or watch_due or not quiet_mode
             or exempt_due or tick < boost_until
+        if cinema_mode then allowed = (CINEMA_EXEMPT[cls_name] and exempt_due) or false end
         if allowed and scan_allowed() then
             if boost_due then boosted_gen[cls_name] = boost_gen end
             if watching then watch_next[cls_name] = tick + WATCH_EVERY end
@@ -1592,6 +1634,7 @@ function Core.cached_all(cls_name, tick)
             -- simultaneous expiries from clustering. No per-tick forcing anywhere.
             local alive = any_valid(c)
             pool_dead[cls_name] = not alive and #c > 0 or nil
+            if alive then note_ownerless(cls_name) end
             -- remember_from_list walks the whole list calling GetFullName (it can be a
             -- hundreds-strong pool like CFUIMultiLineTextBox) — only pay it if the probe
             -- that consumes the recorded paths is actually on.
@@ -1711,8 +1754,26 @@ end)
 -- widgets never collapse on close (the cook-NPC flow keeps the cooking pane visible
 -- with its last dish) gate on this: minimap up = that menu is genuinely CLOSED.
 function Core.free_roam(tick)
+    -- During a movie the minimap's fallback scan is exactly the stall to avoid.
+    if cinema_mode then return Core.minimap_peek() end
     local mm = Core.cached_live("AT_UIMiniMapRadar", tick)
     return Core.valid(mm) and Core.on_screen(mm)
+end
+
+-- Scan-free minimap check: the directory pointer or the cached pool, never a lookup.
+function Core.minimap_peek()
+    for _, w in ipairs(Core.peek_all("AT_UIMiniMapRadar")) do
+        if Core.valid(w) and Core.on_screen(w) then return true end
+    end
+    return false
+end
+
+-- Scan-free battle-HUD check, same contract; the directory ({"bm"}) serves it in a battle.
+function Core.battle_hud_peek()
+    for _, w in ipairs(Core.peek_all("Battle_Hud_P_Main_C")) do
+        if Core.valid(w) and Core.on_screen(w) then return true end
+    end
+    return false
 end
 
 -- A pooled pane that is GENUINELY live, not parked (the cooking-latch rule,

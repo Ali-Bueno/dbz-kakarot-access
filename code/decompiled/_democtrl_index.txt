@@ -1,0 +1,56 @@
+=== GetDemoManageComponent ===
+  name-string occurrences: 3
+  table @ 0x143f83a08  exec -> 0x141753420
+     impl -> 0x14203aad0
+  table @ 0x143f86c60  exec -> 0x141755be0
+     impl -> 0x140da89f0
+  wrote _democtrl_GetDemoManageComponent.c (4 funcs)
+=== GetPreRenderDemoCtrl ===
+  name-string occurrences: 3
+  table @ 0x1441ce5e0  exec -> 0x141841620
+     impl -> 0x141040df0
+  table @ 0x1441c8d48  exec -> 0x14183e3f0
+     impl -> 0x14203aad0
+  wrote _democtrl_GetPreRenderDemoCtrl.c (4 funcs)
+=== GetCinemaDemoCtrl ===
+  name-string occurrences: 3
+  table @ 0x1441ce5b0  exec -> 0x141841560
+     impl -> 0x14103fee0
+  table @ 0x1441c8d18  exec -> 0x14183e360
+     impl -> 0x14203aad0
+  wrote _democtrl_GetCinemaDemoCtrl.c (4 funcs)
+=== GetGeneralDemoCtrl ===
+  name-string occurrences: 3
+  table @ 0x1441ce5c0  exec -> 0x1418415c0
+     impl -> 0x141040180
+  table @ 0x1441c8d28  exec -> 0x14183e390
+     impl -> 0x14203aad0
+  wrote _democtrl_GetGeneralDemoCtrl.c (4 funcs)
+=== GetSequencerDemoCtrl ===
+  name-string occurrences: 0
+  (no exec thunk found)
+=== RequestDemo ===
+  name-string occurrences: 3
+  table @ 0x1441ce5f0  exec -> 0x1418419a0
+     impl -> 0x14204e7f0
+  table @ 0x1441c8d58  exec -> 0x14183e420
+     impl -> 0x14203aad0
+  wrote _democtrl_RequestDemo.c (4 funcs)
+=== DemoSkip ===
+  name-string occurrences: 5
+  table @ 0x1441ce5a0  exec -> 0x141841540
+  table @ 0x1441c8d08  exec -> 0x14183e330
+     impl -> 0x14203aad0
+  wrote _democtrl_DemoSkip.c (3 funcs)
+=== RegisterSequenceActor ===
+  name-string occurrences: 3
+  table @ 0x14423c810  exec -> 0x141871be0
+     impl -> 0x14204e7f0
+  table @ 0x14423abf8  exec -> 0x1418704c0
+     impl -> 0x14203aad0
+  wrote _democtrl_RegisterSequenceActor.c (4 funcs)
+=== UnregisterSequenceActor ===
+  name-string occurrences: 3
+  table @ 0x14423c820  exec -> 0x141872ad0
+     impl -> 0x14204e7f0
+  wrote _democtrl_UnregisterSequenceActor.c (2 funcs)

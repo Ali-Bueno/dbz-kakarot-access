@@ -43,6 +43,7 @@ notes are the evidence behind them.
 | Note | What it settles |
 |---|---|
 | [Crash ledger](dbz-kakarot-crash-bug.md) | **Every crash this mod has had, its signature and its fix.** Read before touching any UObject access |
+| [Movie audio stutter](dbz-kakarot-movie-stutter.md) | Why video and cutscene audio slowed down (title-root scans, null-owner fallbacks, quiet vetoed in battle scenes, the description clock), Matthew's measurement, the scan-free movie probe, and the live checklist |
 | [Performance architecture](dbz-kakarot-perf-architecture.md) | The screen directory, scan budgets, the watch lane, quiet mode — and the experiments that froze the game |
 | [UE4SS perf audit review (2026-07-28)](dbz-kakarot-ue4ss-perf-audit-2026-07-28.md) | The external audit, verified claim by claim: what was applied, and **why four of its cache proposals are rejected** |
 | [Community board](dbz-kakarot-community-board.md) | Board + emblem grid: mode machine, cursor offsets, the latency saga |

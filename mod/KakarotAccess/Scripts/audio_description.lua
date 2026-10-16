@@ -13,6 +13,7 @@ local Settings = require("settings")
 local Transition = require("transition")
 local Poll = require("pad_poll")
 local Cues = require("audio_description_cues")
+local Cinema = require("cinema")
 local Engine = require("audio_description_engine")
 
 local Description = {}
@@ -58,30 +59,60 @@ local function object_name(o)
     return nil
 end
 
+-- name, seconds, key of a playing movie that has cues; nil for one that has none.
+local function player_clock(player)
+    local source, seconds
+    local ok_source = pcall(function() source = player:GetSource() end)
+    local ok_time = pcall(function() seconds = player:GetTime() end)
+    local name = ok_source and object_name(source) or nil
+    local key = Engine.normalize_source(name)
+    if key and Cues[key] and ok_time and type(seconds) == "number" then
+        return name, seconds, key
+    end
+    if key and not Cues[key] then log_no_cues(key) end
+    return nil
+end
+
+-- Same returns as sequence_clock, plus a fifth: a movie is playing, with cues or without.
 local function movie_clock()
+    -- The demo manager answers by pointer; the class scan is only the fallback for worlds it
+    -- cannot reach (the title screen), because every scan stalls the movie's audio.
+    local player, known = Cinema.movie()
+    if player then
+        local name, seconds, key = player_clock(player)
+        return name, seconds, true, key, true
+    end
+    if known then return nil end
     local actors = Core.cached_all("PreRenderDemoActor")
+    local any = false
     for i = 1, #actors do
         local actor = actors[i]
         if Core.valid(actor) then
             -- Exact property on APreRenderDemoActor @ 0x358 (AT.hpp).
-            local player = Core.member(actor, "ManaPlayer")
-            if Core.valid(player) then
-                local ok_play, playing = pcall(function() return player:IsPlaying() end)
+            local p = Core.member(actor, "ManaPlayer")
+            if Core.valid(p) then
+                local ok_play, playing = pcall(function() return p:IsPlaying() end)
                 if ok_play and playing == true then
-                    local source, seconds
-                    local ok_source = pcall(function() source = player:GetSource() end)
-                    local ok_time = pcall(function() seconds = player:GetTime() end)
-                    local name = ok_source and object_name(source) or nil
-                    local key = Engine.normalize_source(name)
-                    if key and Cues[key] and ok_time and type(seconds) == "number" then
-                        return name, seconds, true, key
-                    end
-                    if key and not Cues[key] then log_no_cues(key) end
+                    any = true
+                    local name, seconds, key = player_clock(p)
+                    if name then return name, seconds, true, key, true end
                 end
             end
         end
     end
-    return nil
+    return nil, nil, nil, nil, any
+end
+
+-- Sequence actors keep their names, so each handle in the cached pool is named once instead
+-- of once per poll (GetFullName on every actor, ten times a second, in every menu and battle).
+local seq_names = setmetatable({}, { __mode = "k" })
+local function sequence_name(actor)
+    local n = seq_names[actor]
+    if n == nil then
+        n = object_name(actor) or false
+        seq_names[actor] = n
+    end
+    return n or nil
 end
 
 local function sequence_clock()
@@ -89,7 +120,7 @@ local function sequence_clock()
     for i = 1, #actors do
         local actor = actors[i]
         if Core.valid(actor) then
-            local name = object_name(actor)
+            local name = sequence_name(actor)
             -- Any actor inside a demo level normalizes through the LEVEL package in
             -- its full name, so this is a cheap in-scope filter, not a master test.
             local key = name and Engine.normalize_source(name)
@@ -133,7 +164,8 @@ function Description.reset()
 end
 
 function Description.step()
-    if Transition.active() then
+    -- Turned off means no probes at all, so the option also removes every scan this costs.
+    if Transition.active() or not Settings.descriptions_enabled() then
         engine:reset()
         return
     end
@@ -149,9 +181,14 @@ function Description.step()
 
     -- Prefer Mana: a CDM master sequence can run alongside the prerecorded
     -- movie it presents. Choosing its Mana player prevents two clocks from
-    -- describing the same shot.
-    local source, seconds, playing, key = movie_clock()
-    if not source then source, seconds, playing, key = sequence_clock() end
+    -- describing the same shot — and a movie without cues still owns the scene,
+    -- so the sequence probe (and its scans) stays out of the way under it.
+    local source, seconds, playing, key, movie = movie_clock()
+    -- No demo plays under the live battle HUD either: without this gate an absent sequence
+    -- pool cost a full scan every ~4 s of every fight.
+    if not source and not movie and not Core.battle_hud_peek() then
+        source, seconds, playing, key = sequence_clock()
+    end
 
     -- No active clock can mean pause or a transient read gap, not a new scene.
     -- Preserve only the engine's plain cue/time history so resuming at the same
@@ -164,7 +201,7 @@ function Description.step()
         print(string.format("[KakarotAccess] audio description source: %s\n", key))
     end
 
-    engine:update(source, seconds, playing, Settings.descriptions_enabled())
+    engine:update(source, seconds, playing, true)
 end
 
 function Description.start()

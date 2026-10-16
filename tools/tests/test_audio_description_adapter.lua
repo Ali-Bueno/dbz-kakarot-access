@@ -10,9 +10,11 @@ local registered
 local enabled = true
 local in_transition = false
 local roaming = false
+local in_battle = false
 local dialogue = false
 local spoken = {}
 local probes = 0
+local movie_probes = 0
 
 local function stub(name, members)
     package.preload[name] = function() return members end
@@ -21,11 +23,15 @@ end
 stub("ui_core", {
     cached_all = function(class_name)
         probes = probes + 1
-        if class_name == "PreRenderDemoActor" then return movie_actors end
+        if class_name == "PreRenderDemoActor" then
+            movie_probes = movie_probes + 1
+            return movie_actors
+        end
         if class_name == "LevelSequenceActor" then return sequence_actors end
         error("unexpected class scan: " .. tostring(class_name))
     end,
     free_roam = function() return roaming end,
+    battle_hud_peek = function() return in_battle end,
     valid = function(o) return type(o) == "table" and o.valid ~= false end,
     member = function(o, name) return o[name] end,
 })
@@ -52,6 +58,12 @@ stub("settings", {
 })
 stub("transition", {
     active = function() return in_transition end,
+})
+-- The demo manager's pointer path (cinema.lua). `cinema_known = false` is the title-screen
+-- case, where the adapter must fall back to the class scan.
+local cinema_player, cinema_known = nil, false
+stub("cinema", {
+    movie = function() return cinema_player, cinema_known end,
 })
 stub("pad_poll", {
     register_every = function(name, period, fn)
@@ -192,12 +204,62 @@ do
         GetSource = function() return source end,
     } } }
     sequence_actors = {}
+    local before = probes
     registered.fn()
-    clock = 0.20
+    clock = 5.0
     registered.fn()
+    check(probes == before and #spoken == 0,
+        "turned off, the adapter probes nothing (no scans) and says nothing")
     enabled = true
     registered.fn()
-    check(#spoken == 0, "honors the live audio-description setting without a backlog")
+    check(#spoken == 0, "re-enabled mid-scene, a cue that passed while off is not replayed")
+end
+
+do
+    -- In a gameplay world the demo manager answers by pointer: no class scan at all,
+    -- whether a movie is playing or not.
+    Description.reset()
+    spoken = {}
+    local clock = 0
+    local source = named("ManaMovie /Game/Art/DEMO/C01/000/S010/mov/C01_000_S010_mov")
+    cinema_known = true
+    cinema_player = {
+        IsPlaying = function() return true end,
+        GetTime = function() return clock end,
+        GetSource = function() return source end,
+    }
+    movie_actors, sequence_actors = {}, {}
+    local before = probes
+    registered.fn()
+    clock = 0.11
+    registered.fn()
+    check(probes == before and #spoken == 1 and spoken[1][1] == "A bamboo forest.",
+        "reads the movie through the demo manager without scanning")
+    cinema_player = nil
+    local movie_before = movie_probes
+    registered.fn()
+    check(movie_probes == movie_before,
+        "no movie and a reachable demo manager: the movie class is never scanned")
+    cinema_known = false
+end
+
+do
+    -- A playing movie with no cues still owns the scene: the sequence probe, and the
+    -- absent-class scan it would cost under a movie, stays out of the way.
+    Description.reset()
+    spoken = {}
+    local source = named("ManaMovie /Game/Art/DEMO/C09/000/S010/mov/C09_000_S010_mov")
+    cinema_known = true
+    cinema_player = {
+        IsPlaying = function() return true end,
+        GetTime = function() return 1.0 end,
+        GetSource = function() return source end,
+    }
+    local before = probes
+    registered.fn()
+    check(probes == before and #spoken == 0,
+        "an uncatalogued movie does not fall through to the sequence scan")
+    cinema_player, cinema_known = nil, false
 end
 
 do
@@ -280,6 +342,17 @@ do
     roaming = false
     registered.fn()
     check(#spoken == before_roam + 1, "returning to free roam still resets scene history")
+end
+
+do
+    Description.reset()
+    spoken = {}
+    in_battle = true
+    movie_actors, sequence_actors = {}, {}
+    local before = probes - movie_probes
+    registered.fn()
+    in_battle = false
+    check(probes - movie_probes == before, "the live battle HUD keeps the sequence probe out of fights")
 end
 
 Description.stop()

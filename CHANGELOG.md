@@ -2,6 +2,35 @@
 
 ---
 
+## v0.1.8 - October 16, 2026
+
+**Videos and cutscenes should play smoothly again.** Players reported that the sound of the
+game's videos was slowing down and stuttering, and that the mod was to blame. They were right.
+Thanks to Matthew, who measured exactly what the mod was doing during a cutscene.
+
+### Smoother videos and cutscenes
+
+- The mod sometimes searches the whole game for a screen. Each search briefly freezes the game,
+  and during a video or cutscene you hear that as the audio slowing down or cutting out. Several
+  of these searches ran when they could never find anything:
+  - The mod looked for the title screen every two seconds for your whole play session.
+  - It looked for menus that the game itself said were closed.
+  - The cutscene descriptions added in v0.1.6 kept looking for the video and cutscene players,
+    even with the descriptions turned off. The mod now asks the game directly which video is
+    playing, which costs nothing.
+- Cutscenes during fights now count as cutscenes, so the mod stays quiet through them as long as
+  you are not pressing anything.
+- Pressing A, B, X or Y to advance the text during a cutscene no longer wakes the searches up.
+- While a video plays, the mod no longer searches for anything except subtitles. As soon as a menu
+  opens over it, such as the "skip the movie?" question, it goes back to normal so that the menu
+  reads as before.
+- Turning cutscene descriptions off now really removes all of their cost.
+- Fights no longer have a small hitch every few seconds caused by the descriptions.
+- The world map reader no longer searches for its icons during cutscenes and fights.
+- Not yet checked in a real playthrough, so please report how videos sound now.
+
+---
+
 ## v0.1.7 - October 13, 2026
 
 **Dragon Balls can finally be found.** The radar now lists every Dragon Ball in the area you are
