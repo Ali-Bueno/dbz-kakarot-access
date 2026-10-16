@@ -47,7 +47,8 @@ The earlier upstream backlog includes the following unrun checks:
    the faster icon detection and the early-press replay are unplayed. Open it with Triangle from
    the area map, press down at once: the first point must be read within about a second.
    Everything else from that session was verified live (board d-pad, title, ring, Story, Items,
-   Status) — see [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md).
+   Status, emblem grid) — see [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md).
+   Ask the player to confirm by ear: the board d-pad, the title after boot, Story and Items.
 
 -4. **Movie and cutscene audio — FIRST, players report the audio slowing down and stuttering
    (2026-10-15, released in v0.1.8 on 2026-10-16, never played by us).** Merged with a player-side measurement (Matthew): title-root
@@ -251,7 +252,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Soul Emblems grid / Community | done | `screen_community.lua`, menu-flow class `Start_Commu_Emb_C`. `Mrs` = Muten Roshi, `Mst` = Mr. Satan (they were swapped). Entry signal via `mm.m_xSoulEmblemMenu` @0x158 / `cm.MenuSoulEmListIns` @0x80. Grid verified 2026-07-15; the 07-16 entry signal is unverified. |
 | Community board cursor (story tutorial) | done | Offsets in `native_offsets.commuBoard`. Verified 2026-07-04 — unblocked the story. |
 | Community board d-pad | done | D-pad jumps the cursor (`WL_PanelCursor` translation) to the next panel that way, browsing or holding an emblem. Verified 2026-10-16. |
-| Story menu ("Historia") | done | `screen_story.lua`, `Start_Quest_C` < `UAT_UIStartQuest`. Reads the DETAIL PANE, never the list. Mode from `All_Win_Story` @0x3A0 / `All_Win_Task` @0x3A8. Locked entries read the game's own "¿?". Verified 2026-07-28; the Task-mode tweak needs a re-verify. |
+| Story menu ("Historia") | done | `screen_story.lua`, `Start_Quest_C` < `UAT_UIStartQuest`. Reads the DETAIL PANE, never the list. Mode from `All_Win_Story` @0x3A0 / `All_Win_Task` @0x3A8. Locked entries read the game's own "¿?". Task mode = task pane visible AND story pane not (both are Visible on opening). Verified 2026-10-16. |
 | Z Encyclopedia | done | `screen_compz.lua`, `CompZ_Page_*_C` < `UAT_UICompZPage*`. The book renders to a TEXTURE and is NEVER in the viewport (`IsInViewport` / `on_screen` both fail) — use `Core.is_visible`. Cursor `Canvas_Cursor` @0x3A0. `CompZ_Memo_C`'s body node is `Txt_Detail`, not `Txt_Memo`. Verified 2026-07-28. |
 | Substory clear rewards | wip | `screen_questreward.lua`, `Quest_Sub_Reward_C` < `UAT_UIQuestSubReward`, `Txt_Title` @0x540. Never ran once: `Core.pane_live` rejects HitTestInvisible overlays; fixed with `Core.pane_rendered`. Unverified. |
 | Crash hardening — full-codebase audit | done (unverified) | 71 Lua files + 4 bridges swept (48 candidates → 11 real). Fixed `Core.array_of`'s missing existence gate (`ui_core.lua:419`), a 32-bit overflow in `audio_bridge`'s RIFF bounds check, an unbounded write in `mem_bridge` (now `expect_class`). See the crash ledger. Needs restart. |
