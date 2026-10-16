@@ -104,7 +104,7 @@ function W.update()
                 if now - t >= REPEAT_COOLDOWN_S then recent[p] = nil end
             end
             recent[phrase] = now
-            Speech.say(phrase, false)
+            Speech.say(phrase, false, true)   -- stale once the player moves: never requeued
         end
     end
 end

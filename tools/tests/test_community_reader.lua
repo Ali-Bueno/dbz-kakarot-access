@@ -366,6 +366,20 @@ frame.__mem[OFF.commuBoard.heldEmblem] = 5678
 tick()
 check(holding_count() == held_before + 1, "a new pickup after release announces the held state")
 
+-- D-pad neighbour choice (2026-10-16): the nearest socket inside the direction's cone,
+-- measured from the socket under the cursor; nil at the edge of the board.
+local pick = Commu._pick_socket
+local g = { cx = 0, cy = 0, list = {
+    { x = 0, y = 0 }, { x = 100, y = 0 }, { x = 0, y = 100 }, { x = -100, y = 10 },
+    { x = 60, y = -200 }, { x = 300, y = 20 }, { x = 90, y = 160 } } }
+check(pick(g, 1, 1, 0) == 2, "right takes the nearest socket to the right")
+check(pick(g, 1, 0, 1) == 3, "down takes the socket straight below")
+check(pick(g, 1, -1, 0) == 4, "left takes the socket to the left")
+check(pick(g, 1, 0, -1) == 5, "up accepts an off-axis socket inside the cone")
+check(pick(g, 6, 1, 0) == nil, "nothing further right is the edge")
+check(pick(g, 2, 0, 1) == 7, "down from a side socket stays in its column")
+check(pick(g, nil, 1, 0) == 2, "with no socket under the cursor, it measures from the cursor")
+
 os.clock = clock_before
 if fails > 0 then
     print(("%d check(s) FAILED"):format(fails))

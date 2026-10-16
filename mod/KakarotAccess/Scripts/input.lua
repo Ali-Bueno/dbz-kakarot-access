@@ -137,4 +137,21 @@ function Input.inject_off()
     if loaded and ib.inject_off then ib.inject_off() end
 end
 
+-- DEV ONLY (dev_channel `press`): a virtual pad 0 that reports connected for `ms`, and a
+-- button mask held for `ms`. Both are leases in the bridge, so they always release.
+function Input.vpad_plug(ms)
+    if loaded and ib.vpad_plug then return ib.vpad_plug(ms or 0) == true end
+    return false
+end
+
+function Input.vpad_stick(lx, ly, ms)
+    if loaded and ib.vpad_stick then return ib.vpad_stick(lx, ly, ms or 200) == true end
+    return false
+end
+
+function Input.vpad_press(mask, ms)
+    if loaded and ib.vpad_press then return ib.vpad_press(mask, ms or 120) == true end
+    return false
+end
+
 return Input

@@ -158,7 +158,8 @@ Registry.register(require("screen_dlc"), "screen_dlc")                          
 -- Save / Load data-slot menu (one adapter for both — same native AT_UIStartSaveLoad).
 Registry.register(require("screen_saveload"), "screen_saveload")
 Registry.register(require("screen_tutorials"), "screen_tutorials")                     -- System > Tutorials list
-Registry.register(require("screen_community"), "screen_community")                     -- Community / Soul Emblems
+local CommunityScreen = require("screen_community")
+Registry.register(CommunityScreen, "screen_community")                     -- Community / Soul Emblems
 Registry.register(require("screen_field"), "screen_field")
 -- Bottom-of-stack NOTICE readers (speak once + release; never hold the screen):
 -- post-battle result overlay (rank + EXP) and the gameplay toasts (item log,
@@ -194,6 +195,7 @@ function App.start()
     Battle.start()
     MapScreen.start()
     StatusScreen.start()
+    CommunityScreen.start()
     QuestObjective.start()
     AudioDescription.start()
 end
@@ -207,6 +209,7 @@ function App.stop()
     Battle.stop()
     MapScreen.stop()
     StatusScreen.stop()
+    CommunityScreen.stop()
     QuestObjective.stop()
 end
 

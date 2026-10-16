@@ -27,6 +27,8 @@ local Registry = require("ui_registry")
 local PadPoll = require("pad_poll")
 
 local Map = {}
+-- Commit on sight: the gate already requires real travel icons, so nothing flashes here.
+Map.confirm_ticks = 1
 
 local ann = Core.make_announcer()
 local tick = 0
@@ -80,6 +82,18 @@ local WAKE_PULSE = 0.5       -- stick deflection of the nudge (small but above d
 local area_open = false      -- Map_M_C was on-screen last poll
 local wake_until = nil       -- tick the wake window expires at (nil = disarmed)
 local wake_pulsing = false   -- an inject pulse is live (must inject_off when done)
+-- The icon class is on the scan path, and its backoff after an empty scan is ~4-5 s: a scan
+-- that ran a moment before the lazy icons existed used to hold the whole map silent that long
+-- (user 2026-10-16). While the wake window is open, re-scan every WAKE_SCAN_EVERY polls instead.
+local WAKE_SCAN_EVERY = 2
+-- A d-pad direction pressed while the world map was still opening (before the adapter could
+-- commit) and when. Replayed once the list exists; reset() must not drop it, since the commit
+-- itself runs reset().
+local EARLY_PRESS_S = 4
+local ft_early, ft_early_at = nil, 0
+-- Wall-clock bound on the same window for the pad loop, which cannot see the registry's ticks
+-- (is_active stops being polled once another adapter owns the screen).
+local wake_at = 0
 
 local function wake_disarm()
     if wake_pulsing then Input.inject_off() end
@@ -335,7 +349,7 @@ function Map.is_active()
         -- The area map JUST closed: back to gameplay (minimap returns, window cancelled
         -- below) or forward to the world map (minimap stays hidden) — arm the icon wake.
         area_open = false
-        wake_until = tick + WAKE_TICKS
+        wake_until, wake_at = tick + WAKE_TICKS, os.clock()
     end
     -- FREE-ROAM CROSS-CHECK (WORLD map only): the minimap radar is hidden under the full-screen
     -- WORLD map but stays up in free-roam AND during the AREA map (handled above). The pooled
@@ -344,6 +358,7 @@ function Map.is_active()
     -- the load-save case. So here (area map already ruled out) minimap up => world map closed.
     if Core.first_on_screen("AT_UIMiniMapRadar", tick) then
         wake_disarm()   -- gameplay confirmed: never nudge the stick here
+        ft_early = nil
         state = nil
         return false
     end
@@ -355,6 +370,9 @@ function Map.is_active()
             wake_disarm()
         elseif Core.first_on_screen("Map_World_C", tick) then
             wake_pulsing = Input.inject(WAKE_PULSE, 0) or wake_pulsing
+            if (wake_until - tick) % WAKE_SCAN_EVERY == 0 then
+                Core.refresh_all("Map_World_Icon_C")   -- budget-gated inside Core
+            end
         end
     end
     -- WORLD map: gated on REAL rendered travel-point icons, not the always-on host (which
@@ -639,6 +657,11 @@ local function ft_guidance(host)
         ft_write_sel(host, ft_sel)
         pcall(function() host:InputConfirm() end)
     end
+    -- A direction pressed while the map was still opening (see ft_step) counts as pending.
+    if ft_early and not ft_pending and os.clock() - ft_early_at <= EARLY_PRESS_S then
+        ft_pending = ft_early
+    end
+    ft_early = nil
     -- A direction pressed before the list existed fires now, once.
     if ft_pending then
         local d = ft_pending
@@ -790,7 +813,7 @@ function Map.update()
                 for i = 1, #ft_points do labels[i] = ft_label(i) end
                 Speech.say(string.format(I18n.t("map_travel_points"), #ft_points,
                     table.concat(labels, ", "))
-                    .. ". " .. string.format(I18n.t("map_info_hint"), I18n.button("X")), false)
+                    .. ". " .. string.format(I18n.t("map_info_hint"), I18n.button("X")), false, true)   -- a d-pad step must not replay the whole list
             end
         end
     elseif s.host then
@@ -814,8 +837,20 @@ local function ft_step()
     -- The travel list's d-pad and its hold-to-repeat are the reason the fast grid exists at all.
     -- (The two early returns this replaces both did exactly `ft_idle(); return`.)
     local mine = not Transition.active() and s ~= nil and Registry.active_adapter() == Map
-    PadPoll.demand_fast("map_travel", mine)
-    if not mine then ft_idle() return end
+    local opening = wake_until ~= nil and os.clock() - wake_at < EARLY_PRESS_S
+        and not Transition.active()
+    PadPoll.demand_fast("map_travel", mine or opening)
+    if not mine then
+        -- The world map is opening but not committed yet: remember a direction instead of
+        -- losing it (the replay happens in ft_guidance once the list exists).
+        if opening then
+            local B = Input.BTN
+            if Input.pressed(B.DPAD_DOWN) then ft_early, ft_early_at = 1, os.clock()
+            elseif Input.pressed(B.DPAD_UP) then ft_early, ft_early_at = -1, os.clock() end
+        end
+        ft_idle()
+        return
+    end
     if not s.world then
         -- AREA map: no travel list to drive here, but the info key answers on this screen too —
         -- X re-reads the POI under the cursor, which area_poi() otherwise speaks only when the

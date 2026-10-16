@@ -40,6 +40,7 @@
 #include <tlhelp32.h>
 #include <string.h>
 #include <stdint.h>
+#pragma comment(lib, "user32.lib")   /* EnumWindows/PostMessageW for the dev virtual pad */
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -94,6 +95,23 @@ static int              g_hooked = 0;
 static volatile LONG    g_injTTL = 0;
 static volatile LONG    g_injLX = 0;             /* injected left-stick X (-32767..32767) */
 static volatile LONG    g_injLY = 0;
+
+/* DEV-ONLY virtual pad (dev channel `press`, so the game can be driven with nobody at the
+ * keyboard). Two leases: while g_vpadPlugUntil is live, pad 0 reports CONNECTED even with no
+ * real pad attached (neutral state); while g_vpadBtnUntil is live, g_vpadBtns are OR-ed into
+ * the state BEFORE it is cached, so the mod's own pad readers see the press as well as the
+ * game. Both are deadlines, so nothing can stay pressed or plugged. Never called in release. */
+static volatile LONG64  g_vpadPlugUntil = 0;
+static volatile LONG64  g_vpadBtnUntil = 0;
+static volatile LONG    g_vpadBtns = 0;
+static volatile LONG    g_vpadPkt = 0;
+static volatile LONG64  g_vpadStickUntil = 0;
+static volatile LONG    g_vpadLX = 0, g_vpadLY = 0;
+
+static int lease_live(volatile LONG64 *until) {
+    LONG64 u = InterlockedCompareExchange64(until, 0, 0);
+    return u != 0 && (LONG64)GetTickCount64() < u;
+}
 
 /* ---- PAD blocking: a LEASE, like the keyboard's (see g_kbUntil) -----------------------
  * block(true) used to be a plain latch, so a Lua error unwinding — or a mod reload —
@@ -227,6 +245,15 @@ static void note_buttons(WORD b) {
 static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
     if (!g_realGetState) return (DWORD)-1 /*ERROR_DEVICE_NOT_CONNECTED path*/;
     DWORD r = g_realGetState(idx, pState);
+    if (idx == 0 && pState && lease_live(&g_vpadPlugUntil)) {
+        if (r != 0) { memset(pState, 0, sizeof(*pState)); r = 0; }
+        if (lease_live(&g_vpadBtnUntil)) pState->Gamepad.wButtons |= (WORD)g_vpadBtns;
+        if (lease_live(&g_vpadStickUntil)) {
+            pState->Gamepad.sThumbLX = (SHORT)g_vpadLX;
+            pState->Gamepad.sThumbLY = (SHORT)g_vpadLY;
+        }
+        pState->dwPacketNumber += (DWORD)InterlockedIncrement(&g_vpadPkt);
+    }
     /* Pad GONE -> clear the snapshot latch (fixed 2026-07-29, crash sweep).
      *
      * g_haveLast used to be a ONE-WAY latch: set on the first successful read and never cleared,
@@ -494,6 +521,50 @@ static int l_inject(lua_State *L) {
     return 1;
 }
 
+/* UE4 only re-polls an unplugged pad slot after a device change, so announce one. */
+static BOOL CALLBACK post_devchange(HWND h, LPARAM lp) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid == (DWORD)lp) PostMessageW(h, WM_DEVICECHANGE, 0x0007 /*DBT_DEVNODES_CHANGED*/, 0);
+    return TRUE;
+}
+
+/* vpad_plug(ms) : DEV ONLY. Report pad 0 as connected for `ms` ms (0 unplugs). */
+static int l_vpad_plug(lua_State *L) {
+    lua_Integer ms = luaL_optinteger(L, 1, 0);
+    LONG64 until = (ms > 0) ? (LONG64)GetTickCount64() + (LONG64)ms : 0;
+    int was = lease_live(&g_vpadPlugUntil);
+    InterlockedExchange64((volatile LONG64 *)&g_vpadPlugUntil, until);
+    if (until != 0 && !was) EnumWindows(post_devchange, (LPARAM)GetCurrentProcessId());
+    lua_pushboolean(L, g_hooked);
+    return 1;
+}
+
+/* vpad_press(buttons, ms) : DEV ONLY. Hold the XInput button mask for `ms` ms. */
+static int l_vpad_press(lua_State *L) {
+    lua_Integer b = luaL_checkinteger(L, 1);
+    lua_Integer ms = luaL_optinteger(L, 2, 120);
+    InterlockedExchange(&g_vpadBtns, (LONG)(b & 0xFFFF));
+    InterlockedExchange64((volatile LONG64 *)&g_vpadBtnUntil,
+                          (LONG64)GetTickCount64() + (LONG64)(ms > 0 ? ms : 0));
+    lua_pushboolean(L, g_hooked);
+    return 1;
+}
+
+/* vpad_stick(lx, ly, ms) : DEV ONLY. Hold the left stick at (lx,ly) in -1..1 for `ms` ms. */
+static int l_vpad_stick(lua_State *L) {
+    double lx = luaL_checknumber(L, 1), ly = luaL_checknumber(L, 2);
+    lua_Integer ms = luaL_optinteger(L, 3, 200);
+    if (lx < -1.0) lx = -1.0; else if (lx > 1.0) lx = 1.0;
+    if (ly < -1.0) ly = -1.0; else if (ly > 1.0) ly = 1.0;
+    InterlockedExchange(&g_vpadLX, (LONG)(lx * 32767.0));
+    InterlockedExchange(&g_vpadLY, (LONG)(ly * 32767.0));
+    InterlockedExchange64((volatile LONG64 *)&g_vpadStickUntil,
+                          (LONG64)GetTickCount64() + (LONG64)(ms > 0 ? ms : 0));
+    lua_pushboolean(L, g_hooked);
+    return 1;
+}
+
 /* inject_off() : release the injected stick immediately. */
 static int l_inject_off(lua_State *L) {
     (void)L;
@@ -534,6 +605,9 @@ static const luaL_Reg input_funcs[] = {
     {"inject_off",   l_inject_off},
     {"is_hooked",    l_is_hooked},
     {"kb_block",     l_kb_block},
+    {"vpad_plug",    l_vpad_plug},
+    {"vpad_press",   l_vpad_press},
+    {"vpad_stick",   l_vpad_stick},
     {"kb_is_hooked", l_kb_is_hooked},
     {NULL, NULL}
 };

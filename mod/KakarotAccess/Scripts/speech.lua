@@ -157,8 +157,9 @@ end
 
 local function timed_say(text, interrupt)
     recent_n = recent_n + 1
-    recent[(recent_n - 1) % RECENT_MAX + 1] = text
     local t0 = os.clock()
+    recent[(recent_n - 1) % RECENT_MAX + 1] =
+        string.format("[%.2f%s] %s", t0, interrupt and "!" or "", text)
     local ok, err = prism.say(text, interrupt)
     -- Braille rides the same sink, so it is timed with it: it is a second backend call on the
     -- GAME THREAD, and this counter is exactly the instrument that would catch it costing more

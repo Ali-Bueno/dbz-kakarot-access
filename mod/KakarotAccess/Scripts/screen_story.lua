@@ -119,9 +119,10 @@ function Story.is_active()
     return key ~= nil
 end
 
+-- seen_key/seen_count are NOT cleared here: is_active already counted the settle polls while the
+-- registry confirmed the switch, and restarting them at commit only delayed the first readout.
 function Story.reset()
     ann:reset()
-    seen_key, seen_count = nil, 0
     ctx, ctx_want, ctx_count = nil, nil, 0
 end
 
@@ -138,7 +139,10 @@ function Story.update()
         Core.first_text(host, "Txt_Cap01"),
         task and Core.phrase(Core.first_text(host, "Txt_Cap03", "Txt_Cap04"),
                              Core.first_text(host, "Txt_Progress")) or nil)
-    if now_ctx ~= ctx_want then
+    if ctx == nil then
+        -- The entry readout already speaks now_ctx: adopt it, or settling it re-announces.
+        ctx, ctx_want, ctx_count = now_ctx, now_ctx, SETTLE_POLLS
+    elseif now_ctx ~= ctx_want then
         ctx_want, ctx_count = now_ctx, 1
     elseif ctx_count < SETTLE_POLLS then
         ctx_count = ctx_count + 1

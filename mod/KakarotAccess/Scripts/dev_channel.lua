@@ -53,7 +53,7 @@ end
 -- keybind (it reassigns main.lua's own `App` upvalue, which nothing else can do), and `app` is a
 -- GETTER, not the table: a reload replaces App wholesale, so a captured reference would go stale on
 -- the first reload and every later nav dump would run against the stopped copy.
-local deps = {}
+local deps = _G.__KakarotDevDeps or {}   -- survives a reload (see Channel.install)
 
 -- Everything else is required LAZILY, inside the command. Ctrl+Shift+R drops every non-protected
 -- module from package.loaded, so a module-level `local Registry = require(...)` would pin the
@@ -73,7 +73,47 @@ function C.help()
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
         "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
+        "press <BTN[+BTN]> [ms] virtual pad press, e.g. press A / press DPAD_DOWN 150",
+        "stick <x> <y> [ms]    virtual left stick, -1..1 each axis (y up = +)",
+        "commu                 community board geometry (reticle, sockets)",
+        "unplug                drop the virtual pad",
     }) do out("  " .. l) end
+end
+
+-- Virtual pad: lets the assistant drive menus with nobody at the controller. The plug lease is
+-- renewed by every press, so an idle session unplugs by itself.
+local VPAD_PLUG_MS = 10 * 60 * 1000
+local last_press = nil
+function C.press(btns, ms)
+    local Input = require("input")
+    local mask = 0
+    for nm in tostring(btns or ""):gmatch("[^+]+") do
+        local b = Input.BTN[nm:upper()]
+        if not b then return out("unknown button: " .. nm) end
+        mask = mask | b
+    end
+    if mask == 0 then return out("usage: press <BTN[+BTN]> [ms]") end
+    Input.vpad_plug(VPAD_PLUG_MS)
+    local ok = Input.vpad_press(mask, tonumber(ms) or 120)
+    last_press = os.clock()
+    out(string.format("press 0x%04X hooked=%s", mask, tostring(ok)))
+end
+
+function C.stick(x, y, ms)
+    local Input = require("input")
+    Input.vpad_plug(VPAD_PLUG_MS)
+    local ok = Input.vpad_stick(tonumber(x) or 0, tonumber(y) or 0, tonumber(ms) or 200)
+    last_press = os.clock()
+    out(string.format("stick %s,%s for %s ms hooked=%s", tostring(x), tostring(y), tostring(ms), tostring(ok)))
+end
+
+function C.commu()
+    for _, l in ipairs(require("screen_community").dev_board()) do out(l) end
+end
+
+function C.unplug()
+    require("input").vpad_plug(0)
+    out("unplugged")
 end
 
 function C.ping()
@@ -99,7 +139,8 @@ function C.screen()
 
     local sok, Speech = pcall(require, "speech")
     if sok and Speech and Speech.recent then
-        out("last spoken (newest first):")
+        out(string.format("last spoken (newest first; [clock, ! = interrupt]) now=%.2f last press=%s:",
+            os.clock(), last_press and string.format("%.2f", last_press) or "-"))
         local lines = Speech.recent(8)
         if not lines or #lines == 0 then
             out("   (nothing yet)")
@@ -213,12 +254,15 @@ end
 -- install
 --------------------------------------------------------------------------------
 
+Channel._dispatch = dispatch
+
 function Channel.install(d)
     -- ONE loop, ever. main.lua is never re-required (Ctrl+Shift+R only drops package.loaded), so this
     -- normally installs once — but the reload DOES nil package.loaded.dev_channel, so any later
     -- require would build a second module table and, without this, a second 500 ms loop polling the
     -- same file. A global flag is the only state that survives both.
     deps = d or {}
+    _G.__KakarotDevDeps = deps
     if _G.__KakarotDevChannel then
         out("dev channel already installed")
         return false
@@ -262,7 +306,10 @@ function Channel.install(d)
             local seq, rest = line:match("^#(%S+)%s+(.*)$")
             pcall(function()
                 if seq then out("<<<BEGIN " .. seq .. ">>>") end
-                dispatch(rest or line)
+                -- The FRESH module after a reload, so new commands work without a restart.
+                local okm, fresh = pcall(require, "dev_channel")
+                local run = (okm and type(fresh) == "table" and fresh._dispatch) or dispatch
+                run(rest or line)
             end)
             if seq then pcall(out, "<<<END " .. seq .. ">>>") end
             busy_until = nil

@@ -12,6 +12,7 @@ local KeyhelpWatch = require("keyhelp_watch")
 local GuideWatch = require("guide_watch")
 local Input = require("input")
 local Cinema = require("cinema")
+local Speech = require("speech")
 
 local Registry = {}
 
@@ -313,6 +314,12 @@ local function step()
         -- Context change confirmed: reset both so nothing leaks across the switch and the
         -- newly focused screen announces its current control fresh.
         local prev = active
+        -- The player just opened a screen from the field: field lines still queued for a requeue
+        -- (a radar retarget, a distance) must not be replayed over it (2026-10-16: "Main menu,
+        -- Items" was followed by "Tracking main quest, 3082 metres").
+        if prev == nil and cur ~= nil and not cur.scan_quiet and tick_n - last_press <= HOT_TICKS then
+            Speech.flush_pending()
+        end
         -- Both resets are isolated (safe_reset) so the commit below ALWAYS lands: a raise here
         -- used to leave the dispatcher wedged on the same candidate forever. See safe_reset.
         safe_reset(active)
@@ -335,7 +342,7 @@ local function step()
         -- The NAME, not the index the old trace printed: adapter indices shift whenever another
         -- adapter is registered, so a number is unreadable across versions.
         local nm = (cur and (adapter_name[cur] or "?")) or "none"
-        print(string.format("[KakarotAccess] screen -> %s\n", nm))
+        print(string.format("[KakarotAccess] screen -> %s t=%.2f\n", nm, os.clock()))
         if TRACE_COMMITS then
             local idx = 0
             if cur then

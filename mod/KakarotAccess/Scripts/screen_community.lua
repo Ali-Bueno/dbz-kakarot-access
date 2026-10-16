@@ -33,6 +33,8 @@ local OFF = require("native_offsets")
 local Transition = require("transition")
 local Dir = require("ui_directory")
 local Registry = require("ui_registry")
+local Input = require("input")
+local PadPoll = require("pad_poll")
 
 local BOARD = OFF.commuBoard
 local GRID = OFF.commuGrid
@@ -73,6 +75,7 @@ local last_title = nil      -- board title, gates the per-board cache invalidati
 -- NOT closure: a higher-priority popup can prevent our is_active from running.
 local summary_title = nil   -- board title whose entry summary was already spoken
 local last_held = false      -- emblem-in-hand edge detector; F1 re-arms it
+local last_item = nil        -- last board readout, held while the cursor is not live
 local panel_cache = nil     -- { key, list = {panel...} } per board
 -- Placing-mode hover debounce state (helper defined below near board_update; declared
 -- HERE so clear_state — defined above that helper — resets the real upvalues, not
@@ -330,6 +333,35 @@ local function board_hovered(frame, pc)
     return nil
 end
 
+-- Every socket's current hit centre (the same geometry board_hovered tests) plus the
+-- fixed reticle: { cx, cy, list = { [i] = { x, y, r } } }, or nil.
+local function board_geometry(frame, pc)
+    local cw = Core.member(frame, "WL_PanelCursor")
+    if not Core.valid(cw) then return nil end
+    local cx, cy = Mem.float(cw, BOARD.cursorX), Mem.float(cw, BOARD.cursorY)
+    if not cx or not cy then return nil end
+    local count = math.min(Mem.i32(frame, BOARD.activeCount) or 0, #pc.list)
+    local ax = Mem.float(frame, BOARD.hitAdjX) or 0
+    local ay = Mem.float(frame, BOARD.hitAdjY) or 0
+    local ar = Mem.float(frame, BOARD.hitRange) or 0
+    local g = { cx = cx, cy = cy, list = {} }
+    for i = 1, count do
+        local p = pc.list[i]
+        local px, py = Mem.float(p, BOARD.panelPosX), Mem.float(p, BOARD.panelPosY)
+        local bx, by = Mem.float(p, BOARD.panelBoardX), Mem.float(p, BOARD.panelBoardY)
+        if px and py and bx and by then
+            local ox, oy, r = ax, ay, ar
+            if i == 1 then
+                ox = Mem.float(frame, BOARD.leaderAdjX) or 0
+                oy = Mem.float(frame, BOARD.leaderAdjY) or 0
+                r = Mem.float(frame, BOARD.leaderRange) or 0
+            end
+            g.list[i] = { x = px + bx + ox, y = py + by + oy, r = r }
+        end
+    end
+    return g
+end
+
 -- What the hovered socket sounds like: emblem name + level + leader, or empty.
 local function socket_label(p, idx, count)
     local embr = Core.member(p, "WL_Emblem")
@@ -520,7 +552,7 @@ end
 local last_sub
 
 local function clear_state()
-    last_idx, label_cache, label_idx = nil, nil, nil
+    last_idx, label_cache, label_idx, last_item = nil, nil, nil, nil
     last_title, panel_cache = nil, nil
     last_sub = nil
     hov_stable, hov_cand, hov_cand_n = 0, 0, 0
@@ -1292,7 +1324,8 @@ local function board_update()
     -- adjusts it re-reads every call.
     local held = (Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0
     local hovered = nil
-    if Mem.i32(board, BOARD.mode) == 7 then
+    local live = Mem.i32(board, BOARD.mode) == 7
+    if live then
         if not held then
             hovered = Mem.i32(board, BOARD.hoveredCache)
         end
@@ -1301,6 +1334,9 @@ local function board_update()
         end
         -- Placing rides a jittery free cursor → debounce (browse's cache is stable).
         if held then
+            -- Picking up leaves the cursor where it was: seed the debounce there, or the
+            -- pick-up itself reads as a move onto "free" and back.
+            if not last_held then hov_stable, hov_cand_n = hovered or 0, 0 end
             local s = debounce_hover((hovered and hovered >= 1) and hovered or 0)
             hovered = s >= 1 and s or nil
         end
@@ -1313,9 +1349,12 @@ local function board_update()
         item = cached_label(hovered, function()
             return socket_label(pc.list[hovered], hovered, n)
         end)
-    elseif last_idx then
+    elseif last_idx and live then
         item = I18n.t("board_free")   -- had a socket before, cursor now over open space
+    elseif last_idx then
+        item = last_item              -- cursor not live (link demo, popup): keep the readout
     end
+    last_item = item
     if hovered then last_idx = hovered end
 
     ann:focus(I18n.header(1), title, item, nil, nil)
@@ -1326,7 +1365,7 @@ local function board_update()
     -- explain the placement gesture once. (`held` computed above, before the hover.)
     if held ~= last_held then
         last_held = held
-        if held then Speech.say(I18n.t("board_holding"), false) end
+        if held then Speech.say(I18n.t("board_holding"), false, true) end
     end
 
     if title and title ~= last_title then
@@ -1339,7 +1378,10 @@ local function board_update()
     -- in one breath, "todo junto"): overall level/rank + placed emblems + the action
     -- hint only; the community-skills LIST is on demand via the game's "Y: Detalles"
     -- (skills_text() stays for a future dedicated key).
-    if title and title ~= summary_title then
+    -- Not while the board is still opening: its socket list and count are not final yet
+    -- (2026-10-16: the entry summary said "24 panels" and listed no placed emblems).
+    if title and title ~= summary_title and #pc.list > 0
+       and not BOARD_OPENING_MODES[Mem.i32(board, BOARD.mode) or -1] then
         summary_title = title
         local bits = {}
         local s = board_summary()
@@ -1349,7 +1391,7 @@ local function board_update()
             bits[#bits + 1] = I18n.t("placed") .. " " .. table.concat(placed, ", ")
         end
         bits[#bits + 1] = string.format(I18n.t("board_hint"), n)
-        Speech.say(table.concat(bits, ". "), false)
+        Speech.say(table.concat(bits, ". "), false, true)   -- a d-pad move must not replay it
     end
 end
 
@@ -1374,6 +1416,117 @@ function Commu.update()
     elseif mode == "board" then
         board_update()
     end
+end
+
+-- ---- board d-pad: jump the cursor to the next socket in a direction ----------------
+-- The board's cursor is WL_PanelCursor's render translation, and the game's own hit test
+-- reads it directly (measured 2026-10-16: the stick moves the reticle, the sockets stay put).
+-- So a d-pad press moves that translation onto the chosen socket's hit centre; the game's
+-- hover tracker and board_update() then announce it exactly as if the stick had got there.
+local DIRS = {
+    { Input.BTN.DPAD_UP, 0, -1 }, { Input.BTN.DPAD_DOWN, 0, 1 },
+    { Input.BTN.DPAD_LEFT, -1, 0 }, { Input.BTN.DPAD_RIGHT, 1, 0 },
+}
+-- A socket qualifies when its sideways offset is at most CONE times its forward offset
+-- (about 68 degrees either side), and sideways distance costs SIDE_COST times forward.
+local CONE, SIDE_COST = 2.5, 2
+local pad_running, pad_prev = false, 0
+
+local function pick_socket(g, from, ux, uy)
+    local ox, oy = g.cx, g.cy
+    if from and g.list[from] then ox, oy = g.list[from].x, g.list[from].y end
+    local best, best_score
+    for i, s in pairs(g.list) do
+        if i ~= from then
+            local dx, dy = s.x - ox, s.y - oy
+            local along = dx * ux + dy * uy
+            local side = math.abs(dx * uy - dy * ux)
+            if along > 0 and side <= along * CONE then
+                local score = along + SIDE_COST * side
+                if not best_score or score < best_score then best, best_score = i, score end
+            end
+        end
+    end
+    return best
+end
+
+Commu._pick_socket = pick_socket   -- offline tests
+
+local function move_cursor(frame, x, y)
+    local cw = Core.member(frame, "WL_PanelCursor")
+    if not Core.valid(cw) then return false end
+    pcall(function() cw:SetRenderTranslation({ X = x, Y = y }) end)
+    local nx, ny = Mem.float(cw, BOARD.cursorX), Mem.float(cw, BOARD.cursorY)
+    if nx and ny and math.abs(nx - x) < 0.5 and math.abs(ny - y) < 0.5 then return true end
+    -- The call did not land: write the member the hit test reads.
+    return Mem.write_float(cw, BOARD.cursorX, x, "Widget") and Mem.write_float(cw, BOARD.cursorY, y, "Widget")
+end
+
+local function board_pad_step()
+    local live = not Transition.active() and mode == "board" and Registry.active_adapter() == Commu
+        and Core.valid(board) and Mem.i32(board, BOARD.mode) == 7
+    PadPoll.demand_fast("commu_board", live)
+    if not live then pad_prev = 0 return end
+    local snap = Input.read()
+    if not snap then pad_prev = 0 return end
+    local dir
+    for _, d in ipairs(DIRS) do
+        if Input.pressed(d[1]) or ((snap.buttons & d[1]) ~= 0 and (pad_prev & d[1]) == 0) then
+            dir = d
+            break
+        end
+    end
+    pad_prev = snap.buttons
+    if not dir then return end
+    local frame = Core.member(board, "WL_BrdFrame")
+    if not Core.valid(frame) then return end
+    local pc = board_panels(frame, board_title() or "?")
+    local g = board_geometry(frame, pc)
+    if not g then return end
+    local to = pick_socket(g, board_hovered(frame, pc), dir[2], dir[3])
+    if not to then
+        Speech.say(I18n.t("board_edge"), true)
+        return
+    end
+    if move_cursor(frame, g.list[to].x, g.list[to].y) then
+        -- A deliberate jump, not stick jitter: let the placing debounce take it at once.
+        hov_stable, hov_cand_n = to, 0
+    end
+end
+
+function Commu.start()
+    if pad_running then return end
+    if not Input.is_loaded() then
+        print("[KakarotAccess] screen_community: input bridge not loaded, board d-pad disabled\n")
+        return
+    end
+    pad_running = true
+    PadPoll.register("commu_board", board_pad_step)
+end
+
+function Commu.stop()
+    pad_running = false
+    PadPoll.unregister("commu_board")
+end
+
+-- DEV (dev_channel `commu`): the live board geometry, one line per socket.
+function Commu.dev_board()
+    if not Core.valid(board) then return { "no board" } end
+    local frame = Core.member(board, "WL_BrdFrame")
+    if not Core.valid(frame) then return { "no frame" } end
+    local pc = board_panels(frame, board_title() or "?")
+    local g = board_geometry(frame, pc)
+    if not g then return { "no geometry" } end
+    local out = { string.format("mode=%s cache=%s held=%s reticle=%.1f,%.1f adj=%.1f,%.1f lead=%.1f,%.1f",
+        tostring(Mem.i32(board, BOARD.mode)), tostring(Mem.i32(board, BOARD.hoveredCache)),
+        tostring((Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0), g.cx, g.cy,
+        Mem.float(frame, BOARD.hitAdjX) or 0, Mem.float(frame, BOARD.hitAdjY) or 0,
+        Mem.float(frame, BOARD.leaderAdjX) or 0, Mem.float(frame, BOARD.leaderAdjY) or 0) }
+    for i, s in pairs(g.list) do
+        out[#out + 1] = string.format("  %2d at %.1f,%.1f r=%.1f d=%.1f,%.1f", i, s.x, s.y, s.r,
+            s.x - g.cx, s.y - g.cy)
+    end
+    return out
 end
 
 return Commu

@@ -2071,7 +2071,9 @@ function Announcer:focus(screen, tab, name, value, tooltip_fn)
 
     if tab ~= self.tab then
         self.tab, self.name, self.value = tab, name, value
-        if tab then Speech.say(tab, true) end
+        -- The tab AND what is focused in it: a new tab is a new item too, and the label alone
+        -- left the first entry of every tab unread until the cursor moved.
+        if tab then Speech.say(Core.phrase(tab, name, value), true) end
         self.pending = false
     elseif name ~= self.name then
         self.name, self.value = name, value
@@ -2088,7 +2090,8 @@ function Announcer:focus(screen, tab, name, value, tooltip_fn)
             self.pending = false
         else
             local tt = tip()
-            if tt then Speech.say(tt, false); self.pending = false end
+            -- no_requeue: a late tooltip belongs to THIS item, never to the next one
+            if tt then Speech.say(tt, false, true); self.pending = false end
         end
     end
 end

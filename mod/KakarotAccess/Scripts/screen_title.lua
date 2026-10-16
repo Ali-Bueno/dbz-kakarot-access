@@ -12,11 +12,10 @@ local I18n = require("i18n")
 
 local Title = {}
 
--- The title is the fallback screen and stays on-screen behind boot dialogs, the intro
--- cinematic, and the New Game → load transition, so require a longer stable window before
--- announcing it — otherwise it blurts "Main menu, Continue" in those gaps. (Gaps longer
--- than this still leak; a movie/fade-aware suppression is the proper fix, pending a dump.)
-Title.confirm_ticks = 15
+-- A short confirm: the boot-dialog gaps are handled by the settle gate below, and the intro
+-- movie by the strict pane_live gate. Was 15 (1.5 s) on every entry, including the return
+-- from Options or Load (user 2026-10-16: "the main menu takes a while to start reading").
+Title.confirm_ticks = 3
 
 -- Settle gate (user report 2026-07-17: "Main menu, Continue" repeated through the whole
 -- boot-check dialog sequence). The boot dialogs outrank the title, so each one flips the
@@ -30,7 +29,10 @@ Title.confirm_ticks = 15
 -- gate via reannounce(). SETTLE_S: the dialog gaps outlived confirm_ticks (~1.5 s), so
 -- past that with some margin; pure announce-delay on entering the title, nothing else.
 -- Tuned in-game: 4 s worked but felt sluggish, 2.5 s is the user's pick (2026-07-17).
+-- The gate guards the BOOT dialog sequence only: once the title has settled, later entries
+-- (back from Options / Load) speak at once. Re-armed after a gameplay world.
 local SETTLE_S = 2.5
+local boot_done = false
 
 local OPTION_COUNT = 6
 
@@ -48,7 +50,7 @@ function Title.is_active()
     -- whose root is unreachable correctly falls back to scanning, so during gameplay this
     -- adapter paid a full FindAllOf every backoff for the whole session: the measured dump
     -- caught 137 scans / 9.6 s, every one of them empty and none of them possible.
-    if Core.gameplay_world() then return false end
+    if Core.gameplay_world() then boot_done = false return false end
     gt = Core.cached_live("Gametitle_C", tick)   -- cheap: cached ref, no per-tick scan
     if not Core.on_screen(gt) then return false end
     -- Only when the title is truly INTERACTIVE (ESlateVisibility.Visible == 0). During the
@@ -61,7 +63,7 @@ end
 
 function Title.reset()
     ann:reset()
-    reset_t, settled, gate_name = os.clock(), false, nil
+    reset_t, settled, gate_name = os.clock(), boot_done, nil
 end
 
 -- F1 re-read: repeat the current option WITHOUT re-arming the settle gate (a plain
@@ -85,6 +87,7 @@ function Title.update()
             if (name or false) == gate_name then return end
             settled = true   -- the cursor moved: the menu is live, speak at once
         end
+        boot_done = true
     end
     -- The title screen has no on-screen name → a mod-added, localized label.
     ann:focus(I18n.t("main_menu"), nil, name, nil, nil)

@@ -56,6 +56,11 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         return empty_off ~= nil and Mem.is_loaded() and Mem.i32(host, empty_off) == 0
     end
     local empty_shown = false   -- gates the empty announcement to once per empty-category entry
+    -- Polls the empty hint must hold before it is believed on a detail-pane screen: on entry the
+    -- pane fills a poll or two after the flag reads, and "empty" was announced over a full tab
+    -- whose first item then went unread (2026-10-16, Items > Recovery).
+    local EMPTY_SETTLE = 3
+    local empty_n = 0
 
     -- Diagnostic (palette-style): appends this screen's gate state to
     -- dumps/dump_items.txt on every change, so a mute list screen (the Items menu,
@@ -201,7 +206,7 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         return true
     end
 
-    function S.reset() ann:reset() boxes = nil name_box = nil empty_shown = false end
+    function S.reset() ann:reset() boxes = nil name_box = nil empty_shown = false empty_n = 0 end
 
     function S.update()
         local tab = tab_member and Core.read_text(Core.member(list, tab_member)) or nil
@@ -219,11 +224,13 @@ function M.new(class, list_member, name_fn, tab_member, detail_nodes, name_node,
         -- this is still the freshest signal there is — but a category with a readable name in the
         -- detail pane is not empty, whatever the byte says.
         if category_empty() and not (name_node and live_name()) then
+            empty_n = empty_n + 1
+            if name_node and empty_n < EMPTY_SETTLE then return end
             if not empty_shown then ann:reset() empty_shown = true end
             ann:focus(name_fn(), nil, Core.phrase(tab, I18n.t("list_empty")), nil, nil)
             return
         end
-        empty_shown = false
+        empty_shown, empty_n = false, 0
         -- On a name_node screen (Items) the DETAIL PANE is the selection; the pooled list row
         -- carries a stale placeholder ("Ninguno") when empty, so DON'T fall back to it — an empty
         -- category is announced via nil_streak above instead. Plain screens use the indexed row.
