@@ -200,3 +200,26 @@ close trace reads `sid=0` at the close tick (the documented depth-flag reset) â€
 on the 2 s recency, which is why it works. Residual, pre-existing and bounded: after leaving,
 the ghost-board arm plus the last renewal keep the grid lane scanning for up to ~3 s.
 Tracers (`RING_DEBUG`, `ENTRY_DEBUG`) back OFF.
+
+## 2026-10-16 d-pad panel navigation (verified live)
+
+Player request: the board must be usable with the d-pad, not only the analog cursor.
+
+- **The cursor is the reticle.** Measured with `commu` (dev channel): 300 ms of full right
+  stick moved `WL_PanelCursor` +0x90 from 209.7 to 437.3 while every socket centre stayed put.
+  The earlier "fixed reticle, the board pans" reading was wrong; the frame adjusts are constant
+  offsets (here 0,-20 and leader 0,-75). The reticle is not at (700,760) on this board either.
+- **Snap = move the translation.** `board_pad_step` (pad_poll stepper `commu_board`, mode 7
+  only) picks the nearest socket in the pressed direction from the socket under the cursor
+  (cone `side <= 2.5 * along`, score `along + 2 * side`) and calls
+  `WL_PanelCursor:SetRenderTranslation` on its hit centre, falling back to a raw float write.
+  The game's hover cache and its Decide hit test both follow at once: browsing announces the
+  socket ~50-100 ms after the press, and placing an emblem with the d-pad + A was confirmed
+  (Piccolo moved 3 -> 7 and back).
+- Held emblem: the placing debounce is seeded with the snapped socket, and seeded with the
+  current socket on pick-up (that pick-up used to read "free" then the emblem again).
+- No socket that way -> `board_edge` ("No more panels that way").
+- The Soul Emblems grid needed nothing: the game's own d-pad moves it and the reader follows.
+- Fixed alongside: the entry summary waited for the board to finish opening (it said "24
+  panels" and listed no placed emblems), and it, the keyhelp line and the holding reminder are
+  no longer re-queued after every d-pad move.

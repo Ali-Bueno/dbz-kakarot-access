@@ -46,7 +46,8 @@ notes are the evidence behind them.
 | [Movie audio stutter](dbz-kakarot-movie-stutter.md) | Why video and cutscene audio slowed down (title-root scans, null-owner fallbacks, quiet vetoed in battle scenes, the description clock), Matthew's measurement, the scan-free movie probe, and the live checklist |
 | [Performance architecture](dbz-kakarot-perf-architecture.md) | The screen directory, scan budgets, the watch lane, quiet mode — and the experiments that froze the game |
 | [UE4SS perf audit review (2026-07-28)](dbz-kakarot-ue4ss-perf-audit-2026-07-28.md) | The external audit, verified claim by claim: what was applied, and **why four of its cache proposals are rejected** |
-| [Community board](dbz-kakarot-community-board.md) | Board + emblem grid: mode machine, cursor offsets, the latency saga |
+| [Community board](dbz-kakarot-community-board.md) | Board + emblem grid: mode machine, cursor offsets, the latency saga, d-pad panel navigation |
+| [Menu latency](dbz-kakarot-menu-latency.md) | Measured entry time per menu, the speech requeue traps, and the dev-channel virtual pad for unattended testing |
 | [Cutscene descriptions](dbz-kakarot-cutscene-descriptions.md) | Opening-through-Raditz coverage limits and reviewed ViddyScribe plugin test |
 | [Status level](dbz-kakarot-status-level.md) | Enemy level/HP offsets, pinned by live vtable getter-chain decoding on a no-RTTI exe |
 | [Skill tree lock](dbz-kakarot-skilltree-ghidra-next.md) | Per-node state byte via Ghidra — and the origin of the dumps-vs-decompiler rule |

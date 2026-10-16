@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-16 evening (unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -42,6 +42,12 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-5. **World map d-pad (2026-10-16, code only).** The Namek saves cannot open the world map, so
+   the faster icon detection and the early-press replay are unplayed. Open it with Triangle from
+   the area map, press down at once: the first point must be read within about a second.
+   Everything else from that session was verified live (board d-pad, title, ring, Story, Items,
+   Status) — see [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md).
 
 -4. **Movie and cutscene audio — FIRST, players report the audio slowing down and stuttering
    (2026-10-15, released in v0.1.8 on 2026-10-16, never played by us).** Merged with a player-side measurement (Matthew): title-root
@@ -153,7 +159,7 @@ The earlier upstream backlog includes the following unrun checks:
 6. **Ctrl+F5 after ~10 minutes** — owed since 2026-08-03, and the only way to know whether the ghost
    work paid. Compare against `ui step ms: avg 35.48 / max 925`, `findall scans: n=1982 /
    119463 ms`, `ghost classes: 42 / 84783 ms`.
-7. **Soul Emblems**: the grid must read, and the board alone must still read.
+7. ~~Soul Emblems~~ **VERIFIED 2026-10-16**: grid and board both read, the grid's d-pad moves are read.
 8. **Dev loop**: create `UE4SS-settings.dev.ini` (consoles on) and have `package.ps1` ship the
    release ini instead, so development stops running against the release profile.
 
@@ -196,8 +202,9 @@ tool list; the parts that matter to this ledger:
   the last lines actually spoken (new `Registry.active_name()` and `Speech.recent()`). An adapter
   that never appears has a gate problem in `is_active`; one that appears saying nothing is holding
   the tick with nothing to say. Both are documented recurring failures.
-- **What it does NOT do:** navigate. A human still has to open the screen; from there the assistant
-  can ask many questions without asking for anything.
+- **It can navigate now (2026-10-16):** `kak_dev press A` / `stick x y ms` drive a virtual pad 0
+  (dev build only, leased, works with no controller attached), so a whole boot-to-menu test runs
+  unattended. Details in [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md).
 
 ## Section status
 
@@ -229,7 +236,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Items inventory + Party + Characters | done | Party/Characters done. An empty category leaves the whole item UI STALE. `itemMenu.hasItems = 0x620` is NOT a has-items flag, it is the tab INDEX. `screen_list.lua`. Verified 2026-07-11. |
 | Item submenu (use-item char select) | done | `screen_itemuse.lua` — A on a usable item → pick who uses it. Reads `WL_Start_Party_Bars` (`Txt_Name01`, `Txt_Lv01`→`Txt_Lv02` preview). Verified 2026-07-11. |
 | Save / Load data slots | done | `screen_saveload.lua`, `AT_UIStartSaveLoad`. Virtualized `UISaveLoadBar_List`, so pool position ≠ ordinal. `saveLoad.selectedIndex` @0x410 (+1), cursor `windowPos` @0x418. Verified 2026-07-11. |
-| Character status page (stats sheet) | wip | `screen_status.lua`, `UAT_UIStartStatus`. `WL_Start_Char_List01` is a fixed C array — UE4SS COLLAPSES it, NEVER index it. D-pad / F11 navigation. Unverified, needs restart. |
+| Character status page (stats sheet) | done | `screen_status.lua`, `UAT_UIStartStatus`. `WL_Start_Char_List01` is a fixed C array — UE4SS COLLAPSES it, NEVER index it. D-pad walks 7 blocks; HP/Ki gauges labelled by the mod. Verified 2026-10-16. |
 | Skill palette / Super Attack equip | done | `screen_skillcustom.lua`. Active slot = `SelectActiveBorder` visible AND `BaseBlinkImage` hidden. `SkillListMenu:GetSelectValue()` is DEAD here (frozen 0) — never use it. Verified 2026-07-13. |
 | Skill tree / learn super attacks | done | `screen_skilltree.lua`, `Start_Skilltree_C` < `UAT_UISkillTreeMenu`. Lock read from the native per-node state byte. Orbs `WL_Skilltree_Zorb00` (1–6 = cost, 7–12 = owned). KNOWN LIMIT: a lv2/3 node reached without passing its lv1 node announces no lock. Verified 2026-07-14; the 2026-07-29 substrate patch is unverified and needs a restart. |
 | Contextual actions (keyhelp) | done | `keyhelp_watch.lua` / `keyhelp.lua` — prompts read on entering any menu and again only when the set changes; 30 s same-phrase cooldown. The poll may use ONLY `Core.cached_all`, never a raw `FindAllOf` (stalls the game thread). Ctrl+F2 needs a restart. Verified 2026-07-17. |
@@ -243,6 +250,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Cinematic character-intro cards | wip | `screen_infoname.lua`. The pooled `Info_Name_C` class is a DEAD END — never use it; the real display is `fm.InfoName` → `InfoCoreCtn` @0x3A0. GONE_S=30 dedup, `Speech.say` `no_requeue`. Verified 2026-07-17. |
 | Soul Emblems grid / Community | done | `screen_community.lua`, menu-flow class `Start_Commu_Emb_C`. `Mrs` = Muten Roshi, `Mst` = Mr. Satan (they were swapped). Entry signal via `mm.m_xSoulEmblemMenu` @0x158 / `cm.MenuSoulEmListIns` @0x80. Grid verified 2026-07-15; the 07-16 entry signal is unverified. |
 | Community board cursor (story tutorial) | done | Offsets in `native_offsets.commuBoard`. Verified 2026-07-04 — unblocked the story. |
+| Community board d-pad | done | D-pad jumps the cursor (`WL_PanelCursor` translation) to the next panel that way, browsing or holding an emblem. Verified 2026-10-16. |
 | Story menu ("Historia") | done | `screen_story.lua`, `Start_Quest_C` < `UAT_UIStartQuest`. Reads the DETAIL PANE, never the list. Mode from `All_Win_Story` @0x3A0 / `All_Win_Task` @0x3A8. Locked entries read the game's own "¿?". Verified 2026-07-28; the Task-mode tweak needs a re-verify. |
 | Z Encyclopedia | done | `screen_compz.lua`, `CompZ_Page_*_C` < `UAT_UICompZPage*`. The book renders to a TEXTURE and is NEVER in the viewport (`IsInViewport` / `on_screen` both fail) — use `Core.is_visible`. Cursor `Canvas_Cursor` @0x3A0. `CompZ_Memo_C`'s body node is `Txt_Detail`, not `Txt_Memo`. Verified 2026-07-28. |
 | Substory clear rewards | wip | `screen_questreward.lua`, `Quest_Sub_Reward_C` < `UAT_UIQuestSubReward`, `Txt_Title` @0x540. Never ran once: `Core.pane_live` rejects HitTestInvisible overlays; fixed with `Core.pane_rendered`. Unverified. |
@@ -315,12 +323,6 @@ Open work only. How each item was derived is in the archive and the git log.
   `DEBUG` off. `screen_results.lua`.
 - **Cooking**: full flow re-test (dish list → cook → exit) and the detail-pane markup strip.
   `screen_cooking.lua`, `screen_shoplist.lua`.
-- **Soul Emblems grid**: cursor MOVEMENT still unverified. One session with `GRID_DEBUG=true`, read
-  `dumps/dump_community.txt`, then turn it off. `screen_community.lua`.
-- **D-pad SNAP for the Community board free cursor** (both browsing and placing an emblem). All the
-  geometry is mapped; what is missing is a WRITE primitive (a `mem_bridge` poke of the cursor
-  translation, or steering the game's own input) plus registration on `pad_poll.lua` — never a new
-  20 ms loop. Unify with the socket-board request.
 - **"View Controls"** (from the battle pause) reads jumbled, and the pause does not re-announce on
   return.
 - **Niceties**: skill-palette plates 4/7 are structural and the cursor never lands there; in assign

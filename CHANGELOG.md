@@ -2,6 +2,34 @@
 
 ---
 
+## Unreleased
+
+**The Community Board works with the d-pad, and several menus read sooner.**
+
+### Community Board
+
+- The d-pad now jumps the cursor to the next panel in that direction, both when looking around
+  and when you are holding an emblem to place it. If there is no panel that way, the mod says so.
+- Picking up an emblem no longer says "free" for a moment before naming it.
+- The board's opening summary waits until the board has finished loading, so it gives the right
+  number of panels and lists the emblems you placed.
+
+### Faster and cleaner menus
+
+- The title menu speaks as soon as the startup messages are over, and at once when you come
+  back from Options or Load. It used to wait about four seconds every time.
+- The world map should read its travel points sooner after opening, and a d-pad press made while
+  it opens is no longer lost. Not yet checked in a real playthrough.
+- Opening a menu from the field no longer lets the radar finish its last sentence over it.
+- Moving through a menu no longer repeats the previous item's description, the button help or
+  the board summary after the new item. On the world map the whole travel list was repeated.
+- Items: the Recovery tab no longer says "empty list" on entry, and changing tabs reads the tab
+  name together with the first item.
+- Story reads once instead of twice, a little sooner.
+- The pause menu no longer says "Main menu, System" in the middle of opening or leaving Options,
+  Save or Load.
+- The character status page names the HP and Ki bars.
+
 ## v0.1.8 - October 16, 2026
 
 **Videos and cutscenes should play smoothly again.** Players reported that the sound of the

@@ -288,10 +288,10 @@ end
 
 -- CURSOR SOLVED (Ghidra 2026-07-04 + opus RE 2026-07-16, code/decompiled/
 -- manual_1414f2ab0.c): the game's own hit-test reads WL_PanelCursor's
--- RenderTransform.Translation (raw +0x90/+0x94) — which is a FIXED RETICLE
--- (~700,760): the stick pans the BOARD underneath it, and that pan lives in the
--- frame adjusts (+0x428/0x42C, leader +0x430/0x434) that both the game and this
--- replica re-read on every call. Each socket's hit position = PointerCenterOffset +
+-- RenderTransform.Translation (raw +0x90/+0x94). The stick MOVES that translation over
+-- fixed sockets (measured 2026-10-16; the old "fixed reticle, the board pans" reading was
+-- wrong), and the frame adjusts (+0x428/0x42C, leader +0x430/0x434) are constant offsets
+-- that both the game and this replica re-read on every call. Each socket's hit position = PointerCenterOffset +
 -- hidden board position (panel+0x550) + adjust, square-range per socket (leader
 -- socket 1 has its own adjust/range), scanning LAST -> FIRST, first hit wins.
 -- board_hovered() replicates it 1:1 (offsets in native_offsets.commuBoard).
@@ -334,7 +334,7 @@ local function board_hovered(frame, pc)
 end
 
 -- Every socket's current hit centre (the same geometry board_hovered tests) plus the
--- fixed reticle: { cx, cy, list = { [i] = { x, y, r } } }, or nil.
+-- cursor: { cx, cy, list = { [i] = { x, y, r } } }, or nil.
 local function board_geometry(frame, pc)
     local cw = Core.member(frame, "WL_PanelCursor")
     if not Core.valid(cw) then return nil end
@@ -1319,9 +1319,8 @@ local function board_update()
     -- writes the cache — host+0x5D8 is FROZEN at its pre-pickup value, so it must be
     -- ignored and only the hit-test replica consulted (opus RE 2026-07-16; the game
     -- itself only hit-tests on the Decide press in placing — there is no per-tick
-    -- native cache to read). The board PANS under a FIXED reticle (700,760): the
-    -- replica works in both browse and placing because the pan lives in the frame
-    -- adjusts it re-reads every call.
+    -- native cache to read). The replica works in both browse and placing because it
+    -- re-reads the cursor translation every call.
     local held = (Mem.ptr(frame, BOARD.heldEmblem) or 0) ~= 0
     local hovered = nil
     local live = Mem.i32(board, BOARD.mode) == 7
