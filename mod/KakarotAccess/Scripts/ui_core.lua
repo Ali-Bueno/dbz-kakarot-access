@@ -2073,7 +2073,7 @@ function Announcer:focus(screen, tab, name, value, tooltip_fn)
         self.tab, self.name, self.value = tab, name, value
         -- The tab AND what is focused in it: a new tab is a new item too, and the label alone
         -- left the first entry of every tab unread until the cursor moved.
-        if tab then Speech.say(Core.phrase(tab, name, value), true) end
+        if tab then Speech.say(Core.phrase(tab, name ~= tab and name or nil, value), true) end
         self.pending = false
     elseif name ~= self.name then
         self.name, self.value = name, value

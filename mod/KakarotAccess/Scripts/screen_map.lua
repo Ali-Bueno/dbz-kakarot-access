@@ -85,7 +85,7 @@ local wake_pulsing = false   -- an inject pulse is live (must inject_off when do
 -- The icon class is on the scan path, and its backoff after an empty scan is ~4-5 s: a scan
 -- that ran a moment before the lazy icons existed used to hold the whole map silent that long
 -- (user 2026-10-16). While the wake window is open, re-scan every WAKE_SCAN_EVERY polls instead.
-local WAKE_SCAN_EVERY = 2
+local WAKE_SCAN_EVERY = 3
 -- A d-pad direction pressed while the world map was still opening (before the adapter could
 -- commit) and when. Replayed once the list exists; reset() must not drop it, since the commit
 -- itself runs reset().

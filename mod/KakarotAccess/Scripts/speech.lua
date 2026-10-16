@@ -216,6 +216,12 @@ function Speech.flush_pending()
     protect_until = 0
 end
 
+-- Forget queued lines still eligible for a requeue, and nothing else: a protected notice keeps
+-- its window. For the player opening a menu from the field (ui_registry).
+function Speech.drop_requeues()
+    pending = {}
+end
+
 -- Speak text. interrupt=true (default) cuts off current speech (use on context changes).
 -- no_requeue=true (queued lines only): if an interrupt cuts this line, it is NOT
 -- re-appended. For ephemeral overlays (the cinematic intro cards) a repeat is worse

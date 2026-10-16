@@ -89,7 +89,9 @@ function Title.update()
             if gate_name == nil then gate_name = name or false end
             if (name or false) == gate_name then return end
             settled = true   -- the cursor moved: the menu is live, speak at once
-            boot_done = true
+            -- Only a move between two real options proves the player is driving it; a name
+            -- appearing where none was readable is just the menu finishing its paint.
+            if gate_name and name then boot_done = true end
         end
     end
     if not boot_done and os.clock() - reset_t >= BOOT_DONE_S then boot_done = true end

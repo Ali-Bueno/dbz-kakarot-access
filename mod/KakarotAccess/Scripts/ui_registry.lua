@@ -120,6 +120,9 @@ end
 -- a scene the player just watches goes quiet.
 local FIGHT_TICKS = 30
 local last_press = -FIGHT_TICKS - 1
+-- Start / Back: the presses that open a menu from the field (the ring, the map).
+local MENU_BTNS = Input.BTN.START | Input.BTN.BACK
+local last_menu_press = -HOT_TICKS - 1
 local BOOST_COOLDOWN = 3    -- registry ticks between pad-triggered boost windows. Not 1:
                             -- an uncooled boost per press turned list navigation into a
                             -- permanent scan storm (57k scans / 1s spikes, 2026-07-15).
@@ -139,6 +142,7 @@ local function pad_boost()
     if fresh ~= 0 then
         hot_until = tick_n + HOT_TICKS
         last_press = tick_n
+        if (fresh & MENU_BTNS) ~= 0 then last_menu_press = tick_n end
         -- scan_quiet() is still last tick's verdict here: "was quiet holding when pressed".
         if not Core.scan_quiet() or (fresh & ~FACE_BTNS) ~= 0 or not choices_cached() then
             quiet_lift_until = tick_n + HOT_TICKS
@@ -317,8 +321,8 @@ local function step()
         -- The player just opened a screen from the field: field lines still queued for a requeue
         -- (a radar retarget, a distance) must not be replayed over it (2026-10-16: "Main menu,
         -- Items" was followed by "Tracking main quest, 3082 metres").
-        if prev == nil and cur ~= nil and not cur.scan_quiet and tick_n - last_press <= HOT_TICKS then
-            Speech.flush_pending()
+        if prev == nil and cur ~= nil and not cur.scan_quiet and tick_n - last_menu_press <= HOT_TICKS then
+            Speech.drop_requeues()
         end
         -- Both resets are isolated (safe_reset) so the commit below ALWAYS lands: a raise here
         -- used to leave the dispatcher wedged on the same candidate forever. See safe_reset.
@@ -372,6 +376,13 @@ local function step()
             Core.boost_missing()
             hot_until = tick_n + HOT_TICKS   -- a follow-up screen may appear right after
             quiet_lift_until = hot_until
+            -- The pause ring just closed: the screen it opens (Options, Story, Items) arrives 1-2 s
+            -- later, and quiet engaging in that gap (an ambient conversation nearby) held Options
+            -- for ~5 s (2026-10-16). Keep quiet off a little longer; no extra sweeps. Ring only, so
+            -- closing a prompt inside a cutscene keeps the cutscene's quiet.
+            if cur == nil and adapter_name[prev] == "screen_field" then
+                quiet_lift_until = tick_n + HOT_TICKS * 3
+            end
         end
     else
         pending, pending_n = nil, 0

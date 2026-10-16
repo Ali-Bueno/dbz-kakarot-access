@@ -263,7 +263,12 @@ end
 
 -- cached_sid deliberately NOT cleared here: reset() runs at the registry commit,
 -- AFTER is_active already saw the ring close and consumed the sid for the watch arm.
-function Field.reset() ann:reset() cached_screen, cached_name, last_dbg = nil, nil, nil end
+function Field.reset()
+    ann:reset() cached_screen, cached_name, last_dbg = nil, nil, nil
+    -- `active` is still the outgoing adapter here: clear the hold only when the ring is being
+    -- replaced, or a count left from the way in shortens the hold on the way back.
+    if Registry.active_adapter() == Field then ring_wait, holding = 0, false end
+end
 
 -- Records Back presses made ON the ring for the hold above (pad_poll latches every edge, at any
 -- grid). A Back that leaves another screen returns through the same flash, so it is not recorded.
