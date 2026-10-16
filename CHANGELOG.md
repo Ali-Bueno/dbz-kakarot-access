@@ -11,6 +11,8 @@
 - The d-pad now jumps the cursor to the next panel in that direction, both when looking around
   and when you are holding an emblem to place it. If there is no panel that way, the mod says so.
 - Picking up an emblem no longer says "free" for a moment before naming it.
+- The board and Soul Emblems no longer open in silence after you have spent more than half a
+  minute in the pause menu.
 - The board's opening summary waits until the board has finished loading, so it gives the right
   number of panels and lists the emblems you placed.
 

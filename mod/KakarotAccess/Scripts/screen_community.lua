@@ -614,7 +614,7 @@ local last_roam_t = -1e9
 
 -- FRESH arm (ring close / ghost board): starts the wait window renewals extend.
 local last_refusal = nil
-local function arm_watch(classes)
+local function arm_watch(classes, from_ring)
     -- A fresh arm requires: NOT quiet (cutscene state), a RECENT USER PRESS
     -- (Registry.hot — every legit entry signal is press-driven and detected within
     -- the ~1s hot window), and RECENT GAMEPLAY (see ROAM_RECENT_S above).
@@ -622,7 +622,10 @@ local function arm_watch(classes)
     -- `watch` line at all, and nothing said which of these three gates was closed.
     local why = (Core.scan_quiet() and "quiet")
         or (not Registry.hot() and "not-hot")
-        or (os.clock() - last_roam_t > ROAM_RECENT_S and "no-recent-roam")
+        -- The pause ring exists only in a gameplay world, so an arm from its closing is gameplay
+        -- however long the player browsed it (2026-10-16: ~100 s in the ring, then Soul Emblems
+        -- opened and stayed silent, "no-recent-roam").
+        or (not from_ring and os.clock() - last_roam_t > ROAM_RECENT_S and "no-recent-roam")
         or nil
     if why then
         if why ~= last_refusal then
@@ -644,7 +647,6 @@ local function arm_watch(classes)
     end
 end
 local function watch_grid() arm_watch(GRID_CLASSES) end
-local function watch_board() arm_watch(BOARD_CLASSES) end
 -- RENEWAL: extends the deadline only — no stagger reset, no wait_clock reset (a renewal
 -- that re-anchored the cap would never expire).
 local function renew_grid()
@@ -655,8 +657,9 @@ local function unwatch_grid()
 end
 -- Exported for screen_field's ring-close arm (the class lists live here only):
 -- "Soul Emblems" row -> grid lane, "Community Board" row -> board lane.
-Commu.watch_grid = watch_grid
-Commu.watch_board = watch_board
+-- The ring's entry points (screen_field, on the ring closing over a Community row).
+function Commu.watch_grid() arm_watch(GRID_CLASSES, true) end
+function Commu.watch_board() arm_watch(BOARD_CLASSES, true) end
 
 -- The Soul Emblems grid host. The MENU-opened grid ("EMBLEMAS DE ALMA") is the
 -- BLUEPRINT class Start_Commu_Emb_C (census 2026-07-15) — FindAllOf on the native

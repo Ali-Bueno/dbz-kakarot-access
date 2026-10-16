@@ -223,3 +223,8 @@ Player request: the board must be usable with the d-pad, not only the analog cur
 - Fixed alongside: the entry summary waited for the board to finish opening (it said "24
   panels" and listed no placed emblems), and it, the keyhelp line and the holding reminder are
   no longer re-queued after every d-pad move.
+- **Silent entry after a long stay in the ring (fixed same day).** `arm_watch` refused the
+  ring's arm with `no-recent-roam` when the player had browsed the pause ring for over
+  `ROAM_RECENT_S` (30 s): the minimap is hidden while the ring is up, so "free roam" was never
+  refreshed. Found by a screenshot of the emblem grid open with `adapter: none`. Arms coming from
+  the ring (`Commu.watch_board/grid`) now skip that gate; the ghost-board arms keep it.
