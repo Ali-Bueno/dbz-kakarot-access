@@ -60,9 +60,12 @@ current entry. No DLC is purchased, unlocked or launched by the reader.
 
 COMMUNITY BOARD / SOUL EMBLEMS
 ------------------------------
-The board uses the LEFT STICK to move its cursor. Listen for the panel number,
-the emblem occupying it (or an empty panel), and the leader label. Its automatic
-button help includes movement and page controls as well as the current actions.
+The D-PAD jumps the cursor to the next panel in that direction, both while
+looking around and while holding an emblem to place it; if there is no panel that
+way, the mod says so. The LEFT STICK still moves the cursor freely. Listen for
+the panel number, the emblem occupying it (or an empty panel), and the leader
+label. Its automatic button help includes movement and page controls as well as
+the current actions.
 
 Press F1 to repeat the current tutorial instruction when one is showing; otherwise
 it repeats the current selection and board summary. Press F2 for the full current
@@ -138,8 +141,8 @@ Controller (primary):
   Select + Y ........ world map: open zone travel (Y = Triangle)
   D-pad up/down ..... world map: move between zones
   X ................. world map: travel to the selected zone (X = A on Xbox)
-  Left stick ........ Community board: move around (d-pad support is planned,
-                      the way the map already works)
+  D-pad ............. Community board: jump to the next panel that way
+  Left stick ........ Community board: move the cursor freely
 
 Keyboard (optional extras — not required to play):
   F1 ................ repeat / re-announce the focused item

@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased
+## v0.1.9 - October 16, 2026
 
 **The Community Board works with the d-pad, and several menus read sooner.**
 

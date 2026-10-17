@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-16 evening (unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-16 evening (v0.1.9 released with the work of the unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
