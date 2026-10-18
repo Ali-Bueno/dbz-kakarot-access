@@ -204,7 +204,7 @@ Copy-Item $ScriptsSrc $StageScripts -Recurse
 # Drop runtime-generated files and the developer-only modules (only reachable via
 # the debug keybinds, which are compiled out below).
 $DevJunk = 'dumps', 'dump.txt', 'probe.txt', 'dev_probe.txt', 'config.txt',
-           'crash_trail.bin',
+           'crash_trail.bin', 'ray_fuse.txt',
            'discover.lua', 'dev_memdiff.lua', 'dev_log.lua', 'dev_channel.lua',
            'dev_charnames.lua', 'dev_questdump.lua',
            'tolk.dll'   # prism.dll does not import it (see $RequiredDlls); drop any stale copy
