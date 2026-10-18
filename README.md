@@ -71,6 +71,8 @@ See [BUILD.md](BUILD.md) for the exact layout
 - Main menu, pause menu, options / system / title screens, confirmation and choice popups.
 - Shops (food, materials, info), the item quick-slot palette, and the full Items / Party /
   Characters inventory (empty categories are announced as such).
+- Bulma's **R&D** build list: each machine, part or chip with its stats and the materials you
+  have and need, plus the result of each build.
 - Save / Load slots, including empty slots, in the correct order.
 - Character **status sheet** — name, level, EXP to next, HP, Ki, Battle Power, and every stat block.
 - **Skill Palette** (Super Attack equip slots) and the **Skill Tree** (node name, level, Ki cost,

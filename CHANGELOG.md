@@ -2,6 +2,28 @@
 
 ---
 
+## v0.1.11 - October 18, 2026
+
+**Bulma's R&D menu, where you build machines, now reads aloud.** A player reported it was
+silent.
+
+### R&D
+
+- The first menu reads the highlighted option as you move: building, customizing or levelling
+  up a machine.
+- The build list reads the tab (machines, machine parts or upgrade chips) and the highlighted
+  item. Then it reads the stats the item gives, then each required material with how many you
+  have and how many you need.
+- The build confirmation and the result sheet are read too. When you close the result, the item
+  is read again with the materials you have left.
+- Not covered yet: the customize and level-up screens. They only open once you own a machine,
+  and our test save has none.
+
+### Not yet
+
+- The training room at Capsule Corp is still silent. It is not unlocked in our test save, so we
+  could not look at it yet.
+
 ## v0.1.10 - October 18, 2026
 
 **Hover car races can be driven by ear.** A player reported that driving was not accessible.
