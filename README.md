@@ -20,6 +20,8 @@ changing how the game plays for everyone else.
 - **Braille display support** — every spoken line also goes to a refreshable braille display,
   through the same screen reader. On by default when your reader supports it.
 - **Audio navigation radar** with a directional beacon and arrival cues.
+- **Hover car races** — the beacon leads you through the checkpoints, with sounds for boost rings
+  and for obstacles ahead.
 - **Faithful gameplay** — nothing about the game is altered; the mod only reads and guides.
 - **Translatable menus and announcements** — editable text files in 13 languages,
   cutscene descriptions included; Spanish follows the game's Spain / Latin America split.

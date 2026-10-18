@@ -2,6 +2,30 @@
 
 ---
 
+## v0.1.10 - October 18, 2026
+
+**Hover car races can be driven by ear.** A player reported that driving was not accessible.
+Now the radar guides you through the race, with sounds for the boost rings and the obstacles.
+
+### Races
+
+- The radar beacon leads you to the next checkpoint. It is louder in races than in the field,
+  and it pans with the direction the car is facing.
+- Boost rings play the pickup sound from the nearest ring ahead. Steer into it.
+- Obstacles ahead, such as rocks and walls, play the danger sound from their side, faster as you
+  get closer. Steer away from it.
+- The beacon comes first: ring and obstacle sounds only play in the gaps between its pings, and
+  right next to a checkpoint the beacon plays alone.
+- Each checkpoint you pass is announced ("Checkpoint 3 of 10"), and so are the last 10 seconds
+  of the time limit.
+- F10 (or L3 + Y) during a race reads the checkpoint, the distance to it and the timers.
+- Tested in the story's driving licence race. The receptionist races, which need a car built
+  through Bulma, have not been tried yet.
+
+### Fixes
+
+- The radar said "level %d" where it meant "at the same height".
+
 ## v0.1.9 - October 16, 2026
 
 **The Community Board works with the d-pad, and several menus read sooner.**

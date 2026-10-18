@@ -87,6 +87,23 @@ The radar helps you move through the open world with sound.
 - Turn the radar on or off with F3 (off = instant silence).
 
 
+HOVER CAR RACES
+---------------
+The first race is the driving licence exam in the story. Drive with RT, brake
+or reverse with LT, and steer with the left stick. During a race:
+
+- The radar BEACON leads you to the next checkpoint, louder than usual. It is
+  the most important sound: the other two only play in the gaps between its
+  pings, and right next to a checkpoint it plays alone.
+- BOOST RINGS have their own sound (the pickup sound) from the nearest ring
+  ahead of you. Steer INTO it for extra speed.
+- OBSTACLES ahead (rocks, walls) play the danger sound from their side, faster
+  as you get closer. Steer AWAY from it.
+- Each checkpoint you pass is announced ("Checkpoint 3 of 10"), and so are the
+  last 10 seconds of the time limit.
+- F10, or L3 + Y, reads the checkpoint, the distance to it and the timers.
+
+
 CHOOSING WHAT TO TRACK — THE TARGET PICKER (R3)
 -----------------------------------------------
 - Click the RIGHT STICK (R3) to open the picker. It freezes game input while
