@@ -190,6 +190,17 @@ function getters.fm(ns) return prop(find_hud(ns), "UIFieldManager") end
 function getters.bm(ns) return prop(find_hud(ns), "UIBattleManager") end
 function getters.cm(ns) return prop(find_hud(ns), "UICommManager") end
 function getters.wm(ns) return prop(getters.gi(ns), "WindowManager") end
+-- The GameMode: MenuManager is one of its components, so it is that root's outer (no scan).
+function getters.gm(ns)
+    local g = roots["gm"]
+    if Core.valid(g) then return g end
+    roots["gm"] = nil
+    local mm = getters.mm(ns)
+    if not Core.valid(mm) then return nil end
+    local ok, o = pcall(function() return mm:GetOuter() end)
+    if ok and Core.valid(o) then roots["gm"] = o return o end
+    return nil
+end
 
 -- ---- the world epoch (the transition gate's only signal) ---------------------------------
 --
@@ -331,8 +342,13 @@ local MAP = {
     -- CookingMenu.WL_CookingTop (AT.hpp:32237). Mapping only fm.ShopTop silenced the
     -- cook menu (user bug 2026-07-15) — screen_shoplist enumerates candidates and
     -- picks the one with visible rows, so both chains must be here.
+    -- Bulma's I+D keeps a THIRD copy on its own manager (AATGameMode.MechaDevManager @0x4A0 ->
+    -- MenuManager @0x358, AT.hpp:13224/13362); without it the directory called that menu absent.
     ["Shop_Top_C"]             = { {"fm", "ShopTop"},
-                                   {"fm", "CookingMenu", "WL_CookingTop"} },
+                                   {"fm", "CookingMenu", "WL_CookingTop"},
+                                   {"gm", "MechaDevManager", "MenuManager", "UIShopTop"} },
+    ["Shop_Develop_Dev_C"]     = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelop"} },
+    ["Shop_Develop_Result_C"]  = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelopResult"} },
     ["Shop_Cmn_C"]             = { {"fm", "ShopCommon"} },
     ["Shop_Cook_C"]            = { {"fm", "CookingMenu"} },
     ["Shop_Info_C"]            = { {"fm", "ShopInfo"} },
@@ -452,7 +468,7 @@ local MAP = {
 local memo = {}   -- cls -> { t = tick, list = {...} | false }
 
 -- The base root each chain key hangs off: fm/bm/cm are hops off the HUD, wm off the GameInstance.
-local BASE_ROOT = { fm = "hud", bm = "hud", cm = "hud", wm = "gi" }
+local BASE_ROOT = { fm = "hud", bm = "hud", cm = "hud", wm = "gi", gm = "mm" }
 -- Mapped classes whose last resolve found a live base root but a null owner (see resolve).
 local ownerless = {}
 
@@ -628,7 +644,7 @@ function Directory.debug_lines()
         end
     end
     for _, d in ipairs({ { "hud", getters.hud }, { "fm", getters.fm }, { "bm", getters.bm },
-                         { "cm", getters.cm }, { "wm", getters.wm } }) do
+                         { "cm", getters.cm }, { "wm", getters.wm }, { "gm", getters.gm } }) do
         local o = d[2]()
         lines[#lines + 1] = string.format("  root %s = %s", d[1],
             o and class_name_of(o) or "nil")

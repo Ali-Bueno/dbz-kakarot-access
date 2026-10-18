@@ -69,6 +69,7 @@ function C.help()
         "census                F7 discovery census -> Scripts/dumps/dump_<epoch>_<n>.txt",
         "navdump               Ctrl+F5   -> Scripts/dumps/dump_nav_targets.txt",
         "navlevels             Ctrl+Shift+F5 -> Scripts/dumps/dump_enemy_level.txt",
+        "dir [substring]       screen-directory roots and chain traces (works with a menu open)",
         "where                 F5: tracked target distance + clock direction (spoken and echoed)",
         "keys                  F2: on-screen button prompts (spoken and echoed)",
         "objective             F10: objective read, the race status while racing (spoken and echoed)",
@@ -351,6 +352,24 @@ function C.tp(cls, name_part)
     pawn:K2_SetActorRotation({ Pitch = 0, Yaw = math.deg(yaw) + 180, Roll = 0 }, true)
     out(string.format("tp -> %.0f %.0f %.0f (target %.0f %.0f %.0f)", dest.X, dest.Y, dest.Z,
         loc.X, loc.Y, loc.Z))
+end
+
+-- The directory part of the nav dump, which the dump skips whenever no world is "alive" (menus).
+function C.dir(filter)
+    local ok, lines = pcall(function() return require("ui_directory").debug_lines() end)
+    if not ok then return out("raised: " .. tostring(lines)) end
+    local Core = require("ui_core")
+    for _, l in ipairs(lines) do
+        if not filter or l:find("root ", 1, true) or l:find(filter, 1, true) then out(l) end
+        -- What the adapters actually get back: resolve() gates its hops, the trace above does not.
+        local cls = filter and l:match("^%s+([%w_]+_C)%s") or nil
+        if cls and l:find(filter, 1, true) then
+            local list = Core.cached_all(cls)
+            local flags = {}
+            for _, o in ipairs(list or {}) do flags[#flags + 1] = Core.on_screen(o) and "ON" or "off" end
+            out(string.format("    cached_all -> %d [%s]", #(list or {}), table.concat(flags, " ")))
+        end
+    end
 end
 
 function C.navlevels()

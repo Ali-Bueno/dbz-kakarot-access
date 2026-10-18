@@ -441,7 +441,11 @@ function Discover.run()
         -- 2026-07-14, UE4SS.log: two caught brush_of errors, then 0xe06d7363). After a few
         -- failures, stop probing brushes for the rest of this dump run.
         local brush_fails = 0
+        -- OFF (2026-10-18): GetName on a brush that passed Mem.alive still pierced pcall at Bulma's
+        -- I+D menu and killed the pad loop that hosts the dev channel. The census outlives it.
+        local PROBE_BRUSHES = false
         local function brush_of(o)
+            if not PROBE_BRUSHES then return "-" end
             -- THRESHOLD 2, not 3 (2026-07-31). The episode this fuse was written for is quoted
             -- right above: "two caught brush_of errors, then 0xe06d7363" — so the fatal probe is
             -- the THIRD one, and `>= 3` let it through every time. The fuse has never once

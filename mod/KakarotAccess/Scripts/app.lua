@@ -101,6 +101,8 @@ Registry.register(MapScreen, "screen_map")
 -- stay on_screen underneath, so training (the foreground screen) must win. It gates on
 -- Shop_Training_C being on_screen, so it never activates over a regular shop.
 Registry.register(require("screen_training"), "screen_training")
+-- Bulma's I+D build list and result sheet open OVER the I+D Shop_Top, which stays on screen.
+Registry.register(require("screen_develop"), "screen_develop")
 -- Item/info BUY lists open OVER the shop-top (which can stay on_screen underneath), so
 -- they must precede screen_shoplist/screen_shop:
 --   Shop_Cmn_C  — the food/material item list (name, price, purchase count, owned);

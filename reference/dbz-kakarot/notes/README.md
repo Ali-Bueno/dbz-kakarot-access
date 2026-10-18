@@ -55,6 +55,7 @@ notes are the evidence behind them.
 | [Save/Load + Items](dbz-kakarot-saveload-items-done.md) | Native selection indices; why stale-UI menus need native flags |
 | [Fast-travel internals](dbz-kakarot-fasttravel-internals.md) | World/area map internals; lazily-spawned icons and the wake-nudge |
 | [Radar picker](dbz-kakarot-radar-picker.md) | The R3 modal target menu, the XInput hook, and why raycast avoidance is dead here |
+| [I+D and training room](dbz-kakarot-develop.md) | Bulma's build menu: the MechaDevManager owner chain, widget names, what is read; what is known about the training room; hot-reload and census lessons |
 | [Race minigame](dbz-kakarot-race-minigame.md) | "Driving": the race classes, checkpoints vs. "rings", the HUD getters the guide reads, the shared beacon, and the live checklist |
 | [Dragon Ball radar](dbz-kakarot-dragonball-radar.md) | Why v0.1.6 never found a ball, the corrected minimap-icon layout (type on the switch at +0x398), the world-map mark, and the live checklist |
 | [UI cache: no notify feed](dbz-kakarot-event-driven-ui-cache.md) | The reversed rule: construction notifies fire on the loader thread and corrupt the Lua state |

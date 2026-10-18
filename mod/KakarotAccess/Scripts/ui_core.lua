@@ -1179,6 +1179,10 @@ local Dir = nil
 -- Assignment, not `local function`: the local is declared far above (see the forward
 -- declaration next to Core.poll_world, which calls this).
 dir_mod = function()
+    -- ui_core survives a hot reload (main.lua loads it before the snapshot) but ui_directory does
+    -- not: follow the reloaded copy, or directory edits only ever take effect after a restart.
+    local cur = package.loaded["ui_directory"]
+    if Dir and cur and cur ~= Dir then Dir = cur end
     if Dir == nil then
         local ok, m = pcall(require, "ui_directory")
         Dir = (ok and m) or false
