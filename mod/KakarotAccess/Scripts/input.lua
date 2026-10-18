@@ -154,4 +154,9 @@ function Input.vpad_press(mask, ms)
     return false
 end
 
+function Input.vpad_trigger(lt, rt, ms)
+    if loaded and ib.vpad_trigger then return ib.vpad_trigger(lt, rt, ms or 200) == true end
+    return false
+end
+
 return Input

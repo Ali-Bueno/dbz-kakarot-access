@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-16 evening (v0.1.9 released with the work of the unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-18 (race guide: boost-ring and obstacle cues, louder beacon, all run live; reflected `LineTraceSingle` proven to work). Before that: 2026-10-16 evening (v0.1.9 released with the work of the unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -42,6 +42,20 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-6. **Race minigame ("driving") — VERIFIED LIVE 2026-10-18 in the story's licence race.** A dev
+   driver steering only by the beacon's pan finished all 10 checkpoints. The player confirmed the
+   beacon by ear, then asked for ring and obstacle sounds and a louder beacon. All three were
+   built and run live the same day: boost-ring cue, ray obstacle sensor, beacon at 1.8x. Still
+   to do:
+   - The player's by-ear verdict on the ring and obstacle cues. Things to tune: obstacle
+     busyness, ray height, ring range.
+   - Cover the receptionist races. They need a car built through Bulma's I+D from gathered
+     materials.
+   - The test save is that player's profile in our Steam slot; restore ours with
+     `Downloads\Kakarot save backup 2026-10-17\restaurar mi partida.bat`.
+
+   Details and how to reach the race: [race minigame](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md).
 
 -5. **World map d-pad (2026-10-16, code only).** The Namek saves cannot open the world map, so
    the faster icon detection and the early-press replay are unplayed. Open it with Triangle from
@@ -218,7 +232,8 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Speech pipeline (PRISM) | done | Logs the chosen backend on boot. |
 | Overworld main menu (native selection) | done | `screen_field.lua`, reads via `UAT_UIStartTop` offsets. |
 | Battle-pause menu (native selection) | done | `screen_pause.lua`, `UAT_UIXCmnPause +0x43C`. |
-| Defeat / game-over menu | wip | Directory-mapped (`fm.Gameover`), so detection is a pointer read. `inViewport=true`, so `IsInViewport` is not what rejects the host. Probe now logs on signal change (incl. `pane_live`). Unverified. |
+| Defeat / game-over menu | done | Heard live 2026-10-18: "Fin de la partida, Reintentar", then "Cargar" and "Volver al título" on the d-pad. |
+| Defeat / game-over menu — earlier notes | wip | Directory-mapped (`fm.Gameover`), so detection is a pointer read. `inViewport=true`, so `IsInViewport` is not what rejects the host. Probe now logs on signal change (incl. `pane_live`). Unverified. |
 | Defeat / game-over menu — earlier rounds | wip | `screen_gameover.lua`, `Gameover_C` → `UAT_UIGameover`. Index = `CurrentSelectIndex` (fallback @0x3E0); rows via `List_Bar0N`. Unverified, needs restart. |
 | Dialog / message / confirm popups | done | `screen_dialog.lua`. Per-node composition; emblem reward via `WL_TextCmuCtn`. Verified 2026-07-16. Verbatim-repeat rewards rescued by fresh content rows within ~3 s: unverified. |
 | Tutorial guidance line | done | `guide_watch.lua` — reads the RICH side (`Txt_Detail`/`Txt_Help`/`Txt_Work` ExMainTxt; the plain side keeps stale text). F1 repeats. Verified 2026-07-16. |
@@ -246,6 +261,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Episode title cards | wip | `screen_questcard.lua`, `AT_UIQuestMainStart.TitleText` @0x3E0 via `{"fm","QuestMainStart"}` @0x558. `fm.QuestMainLogo` is image-only, unread by design. A cinematic chapter card went unread 2026-07-17; trace armed. Unverified. |
 | Cooking menu | done | `screen_cooking.lua`; entry menu via the second `Shop_Top_C`. CAVEAT: the ghost pane reads `vis=0 opacity=1.0`, so `pane_live` does NOT discriminate it — the shadowing is killed by the yields plus spoken-key suppression. `LATCH_DEBUG` on. Verified 2026-07-15. |
 | Fishing minigame | done | `screen_fishing.lua`. `AT_UIBattleRushSpeedCore` deliberately unmapped (the game never sets that pointer). `ring_core()` picks the on-screen pool instance. Phase 2 = bare letter on `fishing.phase == 2`. Verified 2026-07-15. |
+| Race minigame ("driving") | done | `race_guide.lua`: radar beacon (`beacon.lua`, shared with nav) aimed at the HUD's `GetNextCheckPointLocation()`, panned against the RIDER's yaw (the camera manager is frozen in races); counter spoken; 10 s low-time warning; F10/L3+Y reads the race. Boost rings (`race_rings.lua`, `item` cue) and obstacles (`obstacle_sensor.lua`, 3 Visibility traces, `enemy` cue); cue gains above 1 via `audio_bridge`. HUD via `GameHUD.UIMiniGameManager.UIMiniGameRace` (directory, no scan). Verified 2026-10-18 (licence race). [Note](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md). |
 | Fishing catch result ("¡BRAVO!" sheet) | done | `screen_fishresult.lua`, `Mgame_Result_C` < `AT_UIMiniGameResult`. `fm.MiniGameResult` @0x630 deliberately unmapped. OPACITY-ONLY gate. Registered ABOVE `screen_fishing`. Verified 2026-07-17, rest pending. |
 | Gameplay toasts (item log + level-up) | done | `screen_toasts.lua`. The level-up banner is `Info_Log02_C` (`TextBox` @0x3C0); `Info_Log_Level_C` DOES NOT EXIST. A raw `bar.Txt00` killed the game 2026-07-26 — the 07-17 pcall was NOT a fix. Every fetch now goes through `Core.member`. Unverified. |
 | Cinematic character-intro cards | wip | `screen_infoname.lua`. The pooled `Info_Name_C` class is a DEAD END — never use it; the real display is `fm.InfoName` → `InfoCoreCtn` @0x3A0. GONE_S=30 dedup, `Speech.say` `no_requeue`. Verified 2026-07-17. |
@@ -315,6 +331,17 @@ and what is genuinely missing. Local follow-ups are dated below.
 ## Backlog
 
 Open work only. How each item was derived is in the archive and the git log.
+
+- **Crash on world-map travel (2026-10-18, seen once).** It died inside
+  `ui.is_active screen_choicelist` while travelling (crash trail). Minidump at
+  `%LOCALAPPDATA%\AT\Saved\Crashes\UE4CC-Windows-A28DB6B3…`. Not reproduced in four more trips.
+- **Spoken raw ids and a language mix (seen 2026-10-18, not investigated).**
+  - Some exits read as "Area18".
+  - The objective was sometimes re-announced in English ("Give the materials to Dr. Briefs!") right
+    after the Spanish line.
+- **Fixed 2026-10-18:** the radar said "nivel %d" for "same height". `nav_level` meant both the
+  elevation zone and the enemy level, and the enemy one won. The elevation zone is now
+  `nav_same_level` in all 13 languages.
 
 - **2026-07-15 batch, coded and never verified in game**: quest HUD, level-up toast, radar
   `resume_pick`, subtitles option gate, episode-card reader (`screen_questcard.lua`), Soul Emblems

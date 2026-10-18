@@ -71,3 +71,12 @@ and ORs the buttons in before the snapshot is cached, so the mod's own pad reade
 press too. Both are leases; nothing can stay pressed. With nobody at the PC this is enough to
 boot, load a save and walk every menu. Two helpers live only in the session scratchpad: a
 press-sequence writer for `kakarot_cmd.txt`, and a `screen` reader.
+
+Added 2026-10-18 for the race test:
+
+- `trigger <lt> <rt> [ms]` is a third lease in the bridge; RT drives the car.
+- `where`, `keys` and `objective` echo F5, F2 and F10.
+- `tp`, `enemyhp` and `drive` are test shortcuts. One live session got through a story fight and
+  drove a whole race unattended.
+
+Table and caveats in [race minigame](dbz-kakarot-race-minigame.md).

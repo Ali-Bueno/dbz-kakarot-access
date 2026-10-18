@@ -25,6 +25,8 @@ libs/prism/lib/
 
 # User mod config (auto-generated at runtime by settings.lua / the in-game config menu)
 mod/KakarotAccess/Scripts/config.txt
+# Obstacle-sensor crash fuse (written at runtime by obstacle_sensor.lua)
+mod/KakarotAccess/Scripts/ray_fuse.txt
 
 # Dev discovery dumps (written at runtime by discover.lua / dev tools)
 mod/KakarotAccess/Scripts/dump.txt

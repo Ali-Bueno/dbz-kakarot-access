@@ -69,11 +69,19 @@ function C.help()
         "census                F7 discovery census -> Scripts/dumps/dump_<epoch>_<n>.txt",
         "navdump               Ctrl+F5   -> Scripts/dumps/dump_nav_targets.txt",
         "navlevels             Ctrl+Shift+F5 -> Scripts/dumps/dump_enemy_level.txt",
+        "where                 F5: tracked target distance + clock direction (spoken and echoed)",
+        "keys                  F2: on-screen button prompts (spoken and echoed)",
+        "objective             F10: objective read, the race status while racing (spoken and echoed)",
+        "ray [m] [ch] [dz_m]   one LineTraceSingle ahead of the pawn (testing: is a trace safe?)",
+        "drive [ms]            race test driver: steer by the beacon pan, hold RT for ms (testing)",
+        "enemyhp [value]       list enemy HP; with a value, set it (testing: get past a story fight)",
+        "tp <Class>|@<group>  put the player 1.5 m in front of a class instance / radar target (testing)",
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
         "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
         "press <BTN[+BTN]> [ms] virtual pad press, e.g. press A / press DPAD_DOWN 150",
         "stick <x> <y> [ms]    virtual left stick, -1..1 each axis (y up = +)",
+        "trigger <lt> <rt> [ms] virtual triggers, 0..1 each (RT accelerates the race car)",
         "commu                 community board geometry (reticle, sockets)",
         "unplug                drop the virtual pad",
     }) do out("  " .. l) end
@@ -104,6 +112,14 @@ function C.stick(x, y, ms)
     local ok = Input.vpad_stick(tonumber(x) or 0, tonumber(y) or 0, tonumber(ms) or 200)
     last_press = os.clock()
     out(string.format("stick %s,%s for %s ms hooked=%s", tostring(x), tostring(y), tostring(ms), tostring(ok)))
+end
+
+function C.trigger(lt, rt, ms)
+    local Input = require("input")
+    Input.vpad_plug(VPAD_PLUG_MS)
+    local ok = Input.vpad_trigger(tonumber(lt) or 0, tonumber(rt) or 0, tonumber(ms) or 200)
+    last_press = os.clock()
+    out(string.format("trigger %s,%s for %s ms hooked=%s", tostring(lt), tostring(rt), tostring(ms), tostring(ok)))
 end
 
 function C.story()
@@ -186,6 +202,155 @@ function C.navdump()
     if not App or not App.nav_dump then return out("App.nav_dump unavailable") end
     local ok, err = pcall(App.nav_dump)
     out(ok and "nav dump -> Scripts/dumps/dump_nav_targets.txt" or ("raised: " .. tostring(err)))
+end
+
+-- F5 without the keyboard: speak the tracked target's distance and clock direction, and echo it.
+function C.where()
+    local App = deps.app and deps.app()
+    if not App or not App.nav_where then return out("App.nav_where unavailable") end
+    local ok, err = pcall(App.nav_where)
+    if not ok then return out("raised: " .. tostring(err)) end
+    local sok, Speech = pcall(require, "speech")
+    local last = sok and Speech.recent and Speech.recent(1)[1]
+    out(last or "(nothing spoken)")
+end
+
+-- Test shortcut: list enemy HP and optionally set it (`enemyhp 1`) to get a test save past a story
+-- fight. HP is the native f32 at StatusInstance+0x394, enemy instances only (STATUS derived facts).
+function C.enemyhp(value, name_part)
+    local Core, Mem, Nav = require("ui_core"), require("mem"), require("nav_tracker")
+    local HP_OFF = 0x394
+    for _, c in ipairs(FindAllOf("AT_Character") or {}) do
+        if Core.valid(c) and Nav._char_side(c) == "enemy"
+            and (not name_part or tostring(c:GetFullName()):find(name_part, 1, true)) then
+            local a = Core.member(c, "AttributeComponent")
+            local si = Core.valid(a) and Core.member(a, "StatusInstance")
+            if Core.valid(si) then
+                local hp = Mem.float(si, HP_OFF)
+                local line = string.format("%s hp=%s", tostring(c:GetFullName()), tostring(hp))
+                if tonumber(value) and hp and hp > 0 then
+                    line = line .. " set=" .. tostring(Mem.write_float(si, HP_OFF, tonumber(value)))
+                end
+                out(line)
+            end
+        end
+    end
+end
+
+-- Race test driver: steer toward the next checkpoint with the SAME heading-relative pan the race
+-- beacon plays, holding RT for `ms`. Echoes what the beacon is being fed (testing only).
+function C.drive(ms)
+    local Core, Beacon, Input = require("ui_core"), require("beacon"), require("input")
+    ms = tonumber(ms) or 400
+    local host
+    for _, w in ipairs(Core.peek_all("AT_UIMiniGameRace")) do
+        if Core.valid(w) and Core.on_screen(w) then host = w end
+    end
+    if not host then return out("no race HUD") end
+    local n, p = host:GetNextCheckPointLocation(), host:GetPlayerLocation()
+    local pc = require("ui_directory").peek("hud", "PlayerOwner")
+    local pawn = Core.valid(pc) and Core.member(pc, "Pawn")
+    local yaw = Core.valid(pawn) and pawn:K2_GetActorRotation().Yaw or 0
+    local dx, dy, dz = n.X - p.X, n.Y - p.Y, n.Z - p.Z
+    local pan, fb = Beacon.cam_rel(dx, dy, math.cos(math.rad(yaw)), math.sin(math.rad(yaw)))
+    local steer = math.max(-1, math.min(1, pan * 1.6))
+    if fb < 0 then steer = pan >= 0 and 1 or -1 end
+    Input.vpad_plug(VPAD_PLUG_MS)
+    Input.vpad_stick(steer, 0, ms)
+    Input.vpad_trigger(0, 1, ms)
+    out(string.format("cp=%s dh=%.0fm dz=%.0fm pan=%.2f fb=%.2f steer=%.2f yaw=%.0f pos=%.0f,%.0f,%.0f",
+        tostring(Core.read_text(Core.member(host, "WL_Txt_Num_Cp"))), math.sqrt(dx * dx + dy * dy) / 100,
+        dz / 100, pan, fb, steer, yaw, p.X, p.Y, p.Z))
+end
+
+-- One LineTraceSingle (channel overload) straight ahead of the pawn, to settle whether a
+-- reflected trace survives on this build (engine-facts: they aborted in July). The breadcrumb
+-- file is written BEFORE the call, so a dead process leaves "calling" behind.
+function C.ray(dist_m, ch, dz_m)
+    local Core = require("ui_core")
+    local pc = require("ui_directory").peek("hud", "PlayerOwner")
+    local pawn = Core.valid(pc) and Core.member(pc, "Pawn")
+    if not Core.valid(pawn) then return out("no player pawn") end
+    local loc, rot = pawn:K2_GetActorLocation(), pawn:K2_GetActorRotation()
+    local d = (tonumber(dist_m) or 20) * 100
+    local yaw = math.rad(rot.Yaw)
+    local sx, sy, sz = loc.X + math.cos(yaw) * 150, loc.Y + math.sin(yaw) * 150, loc.Z + 50
+    local f = io.open("kakarot_ray_crumb.txt", "w")
+    if f then f:write("calling channel=" .. tostring(ch or 0) .. "\n") f:close() end
+    local k = StaticFindObject("/Script/Engine.Default__KismetSystemLibrary")
+    local hitres = {}
+    local ok, hit = pcall(function()
+        return k:LineTraceSingle(pawn, { X = sx, Y = sy, Z = sz },
+            { X = sx + math.cos(yaw) * d, Y = sy + math.sin(yaw) * d, Z = sz + (tonumber(dz_m) or 0) * 100 },
+            tonumber(ch) or 0, false, {}, 0, hitres, true,
+            { R = 0, G = 0, B = 0, A = 0 }, { R = 0, G = 0, B = 0, A = 0 }, 0.0)
+    end)
+    f = io.open("kakarot_ray_crumb.txt", "w")
+    if f then f:write("returned ok=" .. tostring(ok) .. "\n") f:close() end
+    out(string.format("ok=%s hit=%s (%s) from %.0f,%.0f,%.0f yaw %.0f", tostring(ok), tostring(hit), type(hit), sx, sy, sz, rot.Yaw))
+    for k2, v in pairs(hitres) do
+        local s = tostring(v)
+        if type(v) == "table" or type(v) == "userdata" then
+            pcall(function() s = string.format("%.1f,%.1f,%.1f", v.X, v.Y, v.Z) end)
+        end
+        out("  " .. tostring(k2) .. " = " .. s)
+    end
+end
+
+-- F10 without the keyboard: the objective read (the race status while racing), echoed.
+function C.objective()
+    local App = deps.app and deps.app()
+    if not App or not App.read_objective then return out("App.read_objective unavailable") end
+    local ok, err = pcall(App.read_objective)
+    if not ok then return out("raised: " .. tostring(err)) end
+    local sok, Speech = pcall(require, "speech")
+    out((sok and Speech.recent and Speech.recent(1)[1]) or "(nothing spoken)")
+end
+
+-- F2 without the keyboard: read the on-screen button prompts, and echo them.
+function C.keys()
+    local App = deps.app and deps.app()
+    if not App or not App.read_keyhelp then return out("App.read_keyhelp unavailable") end
+    local ok, err = pcall(App.read_keyhelp)
+    if not ok then return out("raised: " .. tostring(err)) end
+    local sok, Speech = pcall(require, "speech")
+    out((sok and Speech.recent and Speech.recent(1)[1]) or "(nothing spoken)")
+end
+
+-- Test shortcut: put the player 1.5 m in front of, and facing, the first live instance of a class, or of the
+-- first radar target in a group (`tp @minigames`).
+function C.tp(cls, name_part)
+    if not cls then return out("usage: tp <Class> [name substring] | tp @<radar group>") end
+    local Core = require("ui_core")
+    local target
+    if cls:sub(1, 1) == "@" then
+        for _, g in ipairs(require("nav_tracker").targets_cached() or {}) do
+            if g.key == cls:sub(2) then
+                for _, it in ipairs(g.items) do
+                    if Core.valid(it.actor) then target = it.actor break end
+                end
+            end
+        end
+    elseif name_part then
+        for _, o in ipairs(FindAllOf(cls) or {}) do
+            if Core.valid(o) and tostring(o:GetFullName()):find(name_part, 1, true) then target = o break end
+        end
+    else
+        target = FindFirstOf(cls)
+    end
+    if not Core.valid(target) then return out("no live " .. cls) end
+    out("target: " .. tostring(target:GetFullName()))
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    if not Core.valid(pawn) then return out("no player pawn (minimap down?)") end
+    local loc, rot = target:K2_GetActorLocation(), target:K2_GetActorRotation()
+    local yaw = math.rad(rot.Yaw or 0)
+    local dest = { X = loc.X + math.cos(yaw) * 150, Y = loc.Y + math.sin(yaw) * 150, Z = loc.Z + 100 }
+    pawn:K2_SetActorLocation(dest, false, {}, true)
+    -- Face the target, so an interaction prompt is in front of the player.
+    pawn:K2_SetActorRotation({ Pitch = 0, Yaw = math.deg(yaw) + 180, Roll = 0 }, true)
+    out(string.format("tp -> %.0f %.0f %.0f (target %.0f %.0f %.0f)", dest.X, dest.Y, dest.Z,
+        loc.X, loc.Y, loc.Z))
 end
 
 function C.navlevels()

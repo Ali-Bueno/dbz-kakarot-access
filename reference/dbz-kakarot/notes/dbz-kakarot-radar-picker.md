@@ -128,7 +128,7 @@ verify + the user's standing "no commit/push until I confirm" boundary).
 - **Dump additions**: navi-target sibling listing (same-class actors, sorted by name),
   staged per-overload raycast probes, navmesh coverage map (recast + navvol pos/scale),
   verbose FindPath probe (path obj / points / IsPartial / GetDebugString).
-- **Raycast avoidance is DEAD on this game** (all trace overloads = out-param abort);
+- **Raycast avoidance is DEAD on this game** (all trace overloads = out-param abort; corrected 2026-10-18: the channel `LineTraceSingle` works with all 12 arguments, see engine facts);
   route guidance pending the town navmesh test. Straight beacon + spoken distances is
   the field baseline.
 

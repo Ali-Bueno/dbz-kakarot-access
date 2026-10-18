@@ -303,7 +303,7 @@ end
 
 local empty_modules = {
     "keyhelp", "keyhelp_watch", "header_reader", "speech", "nav_tracker",
-    "radar_menu", "config_menu", "settings", "battle_monitor",
+    "radar_menu", "config_menu", "settings", "battle_monitor", "race_guide",
 }
 for _, name in ipairs(empty_modules) do
     package.loaded[name] = nil

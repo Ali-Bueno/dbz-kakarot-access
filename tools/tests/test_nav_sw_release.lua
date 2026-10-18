@@ -36,6 +36,7 @@ stub("speech", {})
 stub("audio", { stop = function() end })
 stub("i18n", {})
 stub("ui_registry", {})
+stub("race_guide", {})
 stub("raycast", {})
 stub("mem", { mark = function() end })
 local transition_cb

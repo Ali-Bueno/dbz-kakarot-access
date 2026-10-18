@@ -481,6 +481,12 @@ function Registry.is_enabled() return enabled end
 -- gates its audio cues on this: a menu/dialog owning the screen silences the radar.
 function Registry.active_adapter() return active end
 
+-- Does the active screen silence world audio guides? Adapters that don't pause the game
+-- (ambient chatter, the resident controls guide) opt out with `nav_mute = false`.
+function Registry.mutes_audio()
+    return active ~= nil and active.nav_mute ~= false
+end
+
 -- Inside the hot window (~1s after a fresh pad press or a screen commit)? Every
 -- legit "a screen is being opened right now" signal rides one — entry-signal watch
 -- arms require this, so a stale pointer read mid-cutscene can never arm a scan lane

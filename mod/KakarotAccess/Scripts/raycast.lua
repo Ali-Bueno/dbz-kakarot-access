@@ -89,6 +89,28 @@ function Ray.probe_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
     return hit, dist
 end
 
+-- probe_channel() plus the surface it hit: hit, distance, ImpactNormal.Z (1 = flat ground,
+-- 0 = a vertical wall). Verified live 2026-10-18: a downward trace returned hit=true,
+-- Distance 170, ImpactNormal (0,0,1), with OutHit filled in as a table.
+function Ray.probe_surface(ctx, sx, sy, sz, ex, ey, ez, channel)
+    local k = ksl()
+    if not k or not Core.valid(ctx) then return nil end
+    local out = {}
+    local hit
+    local ok = pcall(function()
+        hit = k:LineTraceSingle(ctx, { X = sx, Y = sy, Z = sz }, { X = ex, Y = ey, Z = ez },
+            channel or 0, false, {}, 0, out, true, NO_COLOR, NO_COLOR, 0.0)
+    end)
+    if not ok or type(hit) ~= "boolean" then return nil end
+    if not hit then return false end
+    local dist, nz
+    pcall(function()
+        dist = tonumber(out.Distance)
+        nz = tonumber(out.ImpactNormal.Z)
+    end)
+    return true, dist, nz
+end
+
 -- clear() over the channel overload; same nil-vs-boolean contract.
 function Ray.clear_channel(ctx, sx, sy, sz, ex, ey, ez, channel)
     local blocked = Ray.probe_channel(ctx, sx, sy, sz, ex, ey, ez, channel)

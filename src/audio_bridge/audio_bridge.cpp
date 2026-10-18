@@ -22,7 +22,7 @@
  * Lua usage:
  *   local audio = require("audio_bridge")
  *   local ok, err = audio.init()          -- load engine + sounds (once)
- *   audio.ping(pan, volume, pitch)        -- pan -1..1, volume 0..1, pitch 0.5..2
+ *   audio.ping(pan, volume, pitch)        -- pan -1..1, volume 0..4, pitch 0.5..2
  *   audio.arrival()                       -- interrupt beacon, play arrival cue
  *   audio.stop()                          -- silence everything
  *   audio.ready() -> bool
@@ -133,6 +133,10 @@ static float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+/* Cue volume ceiling. Above 1 XAudio2 amplifies; the shipped WAVs leave the headroom
+ * (beacon.wav peaks at -15 dBFS), so a guide can lift a cue over loud game audio. */
+static const float MAX_CUE_VOLUME = 4.0f;
+
 /* Equal-power stereo pan gains (from the XV2 player): pan -1 (left) .. +1 (right),
  * center = ~0.707 in both channels so perceived loudness is constant. */
 static void pan_gains(float pan, float *l, float *r) {
@@ -146,7 +150,7 @@ static void pan_gains(float pan, float *l, float *r) {
  * is panned through the output matrix; other channel counts play as-is. */
 static bool play_cue(Cue *c, float pan, float volume, float pitch, bool applyPan) {
     if (!g_ready || !c->voice) return false;
-    volume = clampf(volume, 0.0f, 1.0f);
+    volume = clampf(volume, 0.0f, MAX_CUE_VOLUME);
     /* 0.5..2.0 stays inside XAudio2's default max frequency ratio (2.0). */
     pitch = clampf(pitch, 0.5f, 2.0f);
 

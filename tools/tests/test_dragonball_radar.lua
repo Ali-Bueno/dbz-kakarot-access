@@ -91,7 +91,11 @@ module("i18n", { t = function(key)
     if key == "nav_clock" then return "%d o'clock" end
     return key
 end })
-module("ui_registry", { active_adapter = function() return active_adapter end })
+module("ui_registry", {
+    active_adapter = function() return active_adapter end,
+    mutes_audio = function() return active_adapter ~= nil and active_adapter.nav_mute ~= false end,
+})
+module("race_guide", { owns_audio = function() return false end })
 module("transition", { active = function() return transition_active end, on_begin = function() end })
 module("raycast", {})
 module("quest_objective", { item_requirement = function() return nil end })

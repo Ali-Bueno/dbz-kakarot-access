@@ -41,6 +41,8 @@ Nav._dragonball_marker = require("dragonball_marker")
 -- Precise objective routing (fishing spot / door / minigame / campfire). On the module
 -- table for the same reason as the line above: this chunk is at Lua's 200-local ceiling.
 Nav._quest_route = require("quest_route")
+-- The race minigame guide owns the beacon while a race is up (same reason, same table).
+Nav._race = require("race_guide")
 -- NOTE: this file sits AT Lua's 200-upvalue/local limit for the main chunk. A new module-level
 -- `local` fails to compile ("too many local variables"); hang new state off `Nav` instead.
 
@@ -82,14 +84,8 @@ local TICK_MS = 100                   -- radar loop period. 50 ms felt smoother 
                                       -- (user-visible lag, 2026-07-03); at 100 ms the
                                       -- radar is inaudibly different and half the cost.
 local M = 100                         -- UE units per meter
-local NEAR_DIST = 5 * M               -- distance mapped to the FASTEST ping
-local FAR_DIST = 200 * M              -- distance mapped to the SLOWEST ping
-local MIN_INTERVAL_MS = 100           -- ping period when at NEAR_DIST (XV2 used 120;
-                                      -- 100 = one ping per tick at the closest range)
-local MAX_INTERVAL_MS = 850           -- ping period when at FAR_DIST (XV2 value)
-local VOL_SLOPE = 0.6                 -- volume = 1 - VOL_SLOPE * t (XV2 value)
-local BEHIND_PITCH_SLOPE = 0.3        -- pitch = 1 + fb * slope when behind (XV2)
-local PITCH_MIN = 0.6                 -- clamp for the behind pitch (XV2 value)
+-- The ping's pan/pitch/volume/cadence shape lives in beacon.lua, shared with the race guide.
+local Beacon = require("beacon")
 local ARRIVE_DIST = 8 * M             -- 3D arrival radius for AUTO quest targets (large
                                       -- trigger areas)
 local ARRIVE_DIST_MANUAL = 1.5 * M   -- TIGHT arrival for hand-picked targets: a
@@ -345,8 +341,7 @@ local function now_ms() return tick * TICK_MS end
 -- Adapters that DON'T pause the game (ambient chatter, the resident controls guide)
 -- opt out with `nav_mute = false`.
 local function ui_muted()
-    local a = Registry.active_adapter and Registry.active_adapter()
-    return a ~= nil and a.nav_mute ~= false
+    return Registry.mutes_audio() or Nav._race.owns_audio()
 end
 
 -- The minimap radar widget: its visibility is the game's own "you are free-roaming"
@@ -918,6 +913,8 @@ end
 -- fatal EXCEPTION_ACCESS_VIOLATION (2026-07-13, in-game crash). ForObjects had already
 -- aborted uncatchably on Area02/Area04 (2026-07-06). Guidance goes direct-to-target;
 -- only re-enable if a reflected trace is someday proven safe on this game.
+-- 2026-10-18: the channel overload, with all 12 arguments, returned live and now drives the race
+-- obstacle sensor (obstacle_sensor.lua). Walking avoidance has not been re-tested.
 local RAYCAST_AVOIDANCE = false
 
 -- Which trace overload is still usable here? ForObjects first (validated where it
@@ -1033,7 +1030,7 @@ local function elev_zone(dz, dh)
     local ang = math.deg(math.atan(dz, dh))   -- +up / -down; atan(y,x) handles dh == 0
     if ang >= ELEV_DEADBAND_DEG then return "nav_up" end
     if ang <= -ELEV_DEADBAND_DEG then return "nav_down" end
-    return "nav_level"
+    return "nav_same_level"
 end
 
 local function announce_tracking(label, dist)
@@ -1636,7 +1633,7 @@ local function enemy_alert(px, py, pz)
             or (pan >= 0 and "nav_right" or "nav_left"))
     end
     local ez = elev_zone(dz, dh)
-    if ez ~= "nav_level" then
+    if ez ~= "nav_same_level" then
         parts[#parts + 1] = I18n.t(ez)
     end
     parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(d))
@@ -2183,37 +2180,16 @@ local function step()
     end
 
     -- Direction to the CURRENT guidance point, camera-relative (ground plane).
-    local dx, dy = gx - px, gy - py
-    local dh = math.sqrt(dx * dx + dy * dy)
-    local nx, ny = 0, 1
-    if dh > 1 then nx, ny = dx / dh, dy / dh end
-
-    local pan, fb = 0, 1
     local fx, fy = camera_forward()
-    if fx then
-        -- UE left-handed ground plane: forward(yaw) = (cos, sin), right = (-sin, cos).
-        local rx, ry = -fy, fx
-        pan = nx * rx + ny * ry
-        fb = nx * fx + ny * fy
-        if pan > 1 then pan = 1 elseif pan < -1 then pan = -1 end
-    end
+    local pan, fb = Beacon.cam_rel(gx - px, gy - py, fx, fy)
 
     -- Cadence/volume from the FINAL objective distance; pan/pitch from the
-    -- guidance direction. Formulas validated in the XV2 mod.
-    local t = (d3 - NEAR_DIST) / (FAR_DIST - NEAR_DIST)
-    if t < 0 then t = 0 elseif t > 1 then t = 1 end
-    local vol = 1.0 - VOL_SLOPE * t
-    local pitch = 1.0
-    if fb < 0 then
-        pitch = 1.0 + fb * BEHIND_PITCH_SLOPE
-        if pitch < PITCH_MIN then pitch = PITCH_MIN end
-    end
-    local interval = MIN_INTERVAL_MS + (MAX_INTERVAL_MS - MIN_INTERVAL_MS) * t
-
+    -- guidance direction.
+    local vol, interval = Beacon.cadence(d3)
     local ms = now_ms()
     if ms - last_ping_ms >= interval then
         last_ping_ms = ms
-        Audio.ping(pan, vol, pitch)
+        Audio.ping(pan, vol, Beacon.behind_pitch(fb))
     end
 
     -- Sparse spoken cues, XV2 style: the dominant direction word when it CHANGES
@@ -2241,12 +2217,12 @@ local function step()
     if ez ~= last_elev_zone and ms - last_elev_ms >= ELEV_CUE_MS then
         local prev = last_elev_zone
         last_elev_zone, last_elev_ms = ez, ms
-        if ez ~= "nav_level" then
+        if ez ~= "nav_same_level" then
             last_dist_ms = ms
             Nav.say_cue(string.format("%s, %s", I18n.t(ez), dist_txt))
         elseif prev then   -- returned to level from above/below (not the first read)
             last_dist_ms = ms
-            Nav.say_cue(I18n.t("nav_level"))
+            Nav.say_cue(I18n.t("nav_same_level"))
         end
     end
     if ms - last_dist_ms >= DIST_CUE_MS then
@@ -2330,21 +2306,10 @@ local function explore_cue(grp) return EXPLORE_CUE[grp] or "item" end
 
 -- Camera-relative pan (-1..1) and forward component fb (cos of the angle) for a POI.
 local function explore_cam_rel(p, px, py, fx, fy)
-    local dx, dy = p.x - px, p.y - py
-    local dh = math.sqrt(dx * dx + dy * dy)
-    if dh < 1 or not fx then return 0, 1 end
-    local nx, ny = dx / dh, dy / dh
-    local pan = nx * -fy + ny * fx
-    local fb = nx * fx + ny * fy
-    if pan > 1 then pan = 1 elseif pan < -1 then pan = -1 end
-    return pan, fb
+    return Beacon.cam_rel(p.x - px, p.y - py, fx, fy)
 end
 
-local function explore_pitch(fb)
-    if fb >= 0 then return 1.0 end
-    local p = 1.0 + fb * BEHIND_PITCH_SLOPE
-    return p < PITCH_MIN and PITCH_MIN or p
-end
+local explore_pitch = Beacon.behind_pitch
 
 local function explore_vol(d2, scale)
     local t = math.sqrt(d2) / EXPLORE_MAX_DIST
@@ -2497,7 +2462,7 @@ local function explore_tick()
                 or (pan >= 0 and "nav_right" or "nav_left")
             local parts = { focus.label, I18n.t(dir) }
             local ez = elev_zone(focus.z - pz, math.sqrt((focus.x - px) ^ 2 + (focus.y - py) ^ 2))
-            if ez ~= "nav_level" then parts[#parts + 1] = I18n.t(ez) end
+            if ez ~= "nav_same_level" then parts[#parts + 1] = I18n.t(ez) end
             parts[#parts + 1] = string.format(I18n.t("nav_meters"), meters(math.sqrt(focus_d2)))
             Nav.say_cue(table.concat(parts, ", "))
         end

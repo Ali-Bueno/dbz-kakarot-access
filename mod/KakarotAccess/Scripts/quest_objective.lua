@@ -24,6 +24,7 @@ local Transition = require("transition")
 local A = require("ui_archetypes")
 local Input = require("input")        -- the on-demand read's pad chord (see pad_step)
 local PadPoll = require("pad_poll")   -- shared 20 ms pad dispatch (dispatch only, no logic)
+local Race = require("race_guide")    -- while racing, the on-demand read reports the race
 
 local Quest = {}
 
@@ -627,6 +628,7 @@ local function read_now()
     if Transition.active() then return end
     tick = tick + 1
     Core.begin_scan_tick()
+    if Race.read_status() then return end
     -- NO PER-PRESS VERDICT ON "there is no objective". The tempting version of this reads the
     -- 4th return and answers `objective_none` when the HUD was readable and empty, so the cache
     -- can never be stale. It was written and rejected on review (2026-09-07): the HUD

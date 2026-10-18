@@ -377,6 +377,11 @@ local MAP = {
     ["Battle_Tips_Tutorial_C"] = { {"fm", "BattleTipsTutorial"} },
     ["AT_UIMgameFishing"]      = { {"fm", "MiniGameFishing"} },
     ["AT_UIMiniGamePop"]       = { {"fm", "MiniGamePop"} },
+    -- Race minigame HUD: AAT_GameHUD.UIMiniGameManager @0x580 (AT.hpp:14683) ->
+    -- UAT_UIMiniGameManager.UIMiniGameRace @0x40 (AT.hpp:34691). race_guide reads it through
+    -- Core.peek_all only, so it never scans. Unverified in game (2026-10-17): a race HUD created
+    -- without this field set would leave the guide silent — the fishing ring-core shape.
+    ["AT_UIMiniGameRace"]      = { {"hud", "UIMiniGameManager", "UIMiniGameRace"} },
     -- AT_UIBattleRushSpeedCore deliberately NOT mapped: AT.hpp declares the pointer on
     -- the fishing widget (UAT_UIMgameFishing.UIBattleRushSpeedCore, 0x3F0) but live
     -- sampling (dump_fishing, 2026-07-03) showed the game never sets it — mapping it made

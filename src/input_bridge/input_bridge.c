@@ -107,6 +107,8 @@ static volatile LONG    g_vpadBtns = 0;
 static volatile LONG    g_vpadPkt = 0;
 static volatile LONG64  g_vpadStickUntil = 0;
 static volatile LONG    g_vpadLX = 0, g_vpadLY = 0;
+static volatile LONG64  g_vpadTrigUntil = 0;
+static volatile LONG    g_vpadLT = 0, g_vpadRT = 0;
 
 static int lease_live(volatile LONG64 *until) {
     LONG64 u = InterlockedCompareExchange64(until, 0, 0);
@@ -251,6 +253,10 @@ static DWORD WINAPI hookGetState(DWORD idx, XI_STATE *pState) {
         if (lease_live(&g_vpadStickUntil)) {
             pState->Gamepad.sThumbLX = (SHORT)g_vpadLX;
             pState->Gamepad.sThumbLY = (SHORT)g_vpadLY;
+        }
+        if (lease_live(&g_vpadTrigUntil)) {
+            pState->Gamepad.bLeftTrigger = (BYTE)g_vpadLT;
+            pState->Gamepad.bRightTrigger = (BYTE)g_vpadRT;
         }
         pState->dwPacketNumber += (DWORD)InterlockedIncrement(&g_vpadPkt);
     }
@@ -565,6 +571,20 @@ static int l_vpad_stick(lua_State *L) {
     return 1;
 }
 
+/* vpad_trigger(lt, rt, ms) : DEV ONLY. Hold the triggers at lt/rt in 0..1 for `ms` ms. */
+static int l_vpad_trigger(lua_State *L) {
+    double lt = luaL_checknumber(L, 1), rt = luaL_checknumber(L, 2);
+    lua_Integer ms = luaL_optinteger(L, 3, 200);
+    if (lt < 0.0) lt = 0.0; else if (lt > 1.0) lt = 1.0;
+    if (rt < 0.0) rt = 0.0; else if (rt > 1.0) rt = 1.0;
+    InterlockedExchange(&g_vpadLT, (LONG)(lt * 255.0));
+    InterlockedExchange(&g_vpadRT, (LONG)(rt * 255.0));
+    InterlockedExchange64((volatile LONG64 *)&g_vpadTrigUntil,
+                          (LONG64)GetTickCount64() + (LONG64)(ms > 0 ? ms : 0));
+    lua_pushboolean(L, g_hooked);
+    return 1;
+}
+
 /* inject_off() : release the injected stick immediately. */
 static int l_inject_off(lua_State *L) {
     (void)L;
@@ -608,6 +628,7 @@ static const luaL_Reg input_funcs[] = {
     {"vpad_plug",    l_vpad_plug},
     {"vpad_press",   l_vpad_press},
     {"vpad_stick",   l_vpad_stick},
+    {"vpad_trigger", l_vpad_trigger},
     {"kb_is_hooked", l_kb_is_hooked},
     {NULL, NULL}
 };

@@ -303,7 +303,7 @@ local S = {
         nav_clock = "a las %d",
         nav_up = "arriba",
         nav_down = "abajo",
-        nav_level = "a nivel",
+        nav_same_level = "a nivel",
         explore_on = "explorar activado",
         explore_off = "explorar desactivado",
         -- Mod config menu (config_menu.lua), opened with L3 + R3 in the overworld.
@@ -331,6 +331,10 @@ local S = {
         nav_quest_mode = "Objetivo de misión",
         -- Quest objective HUD reader (quest_objective.lua).
         objective_none = "Sin objetivo activo",
+        race_checkpoint = "Punto de control %s",
+        race_count = "%d de %d",
+        race_time_s = "%d segundos",
+        race_time_ms = "%d minutos %d segundos",
         -- Save/Load slot reader (screen_saveload.lua).
         saveload_empty = "ranura vacía",
         -- Item "use" character-select (screen_itemuse.lua).
@@ -586,7 +590,7 @@ local S = {
         nav_clock = "at %d o'clock",
         nav_up = "above",
         nav_down = "below",
-        nav_level = "level",
+        nav_same_level = "level",
         explore_on = "explore on",
         explore_off = "explore off",
         -- Mod config menu (config_menu.lua), opened with L3 + R3 in the overworld.
@@ -614,6 +618,10 @@ local S = {
         nav_quest_mode = "Quest objective",
         -- Quest objective HUD reader (quest_objective.lua).
         objective_none = "No active objective",
+        race_checkpoint = "Checkpoint %s",
+        race_count = "%d of %d",
+        race_time_s = "%d seconds",
+        race_time_ms = "%d minutes %d seconds",
         -- Save/Load slot reader (screen_saveload.lua).
         saveload_empty = "empty slot",
         -- Item "use" character-select (screen_itemuse.lua).
