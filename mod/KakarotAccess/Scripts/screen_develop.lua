@@ -7,6 +7,14 @@
 -- Txt_Num_Param_L / Txt_Status_00_01 the tab shows), materials = UIDevMaterial_List rows
 -- (Txt_List + Txt_Num "have/need"). Rows left over from a longer recipe stay valid but
 -- collapsed, so every row is on_screen-gated. Notes: reference/dbz-kakarot/notes/dbz-kakarot-develop.md
+--
+-- Personalización and Subes de nivel are ONE host, Shop_Develop_Custom_C (UAT_UIShopDevelopCustom,
+-- MenuManager.UIShopDevelopCustom), census 2026-10-21: machine Txt_Titl00 + Txt_Lv, next level
+-- Txt_Titl01 + Txt_Num01, memory Txt_Memory + Txt_Num_Memory, stats UIDevParam_List. Subes de
+-- nivel shows the materials list Xlist_List01_Lay9_00 (a MenuListBase01: title "Materiales", rows
+-- name + owned count); Personalización shows the chip slots Xlist_Custom00_Lay10 (Item_List rows,
+-- label Txt_List00) and the colour (Shop_Custom_Color: Txt_Cap00 "Color:" + Txt_Color). The quantity
+-- prompt that feeding a material opens is screen_numberwin's.
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -15,7 +23,8 @@ local Develop = {}
 
 local ann = Core.make_announcer()       -- the build list
 local res_ann = Core.make_announcer()   -- the result sheet (its own focus, so closing it is silent)
-local host, result = nil, nil
+local host, result, custom = nil, nil, nil
+local cust_ann = Core.make_announcer()  -- Personalización / Subes de nivel
 local tick = 0
 local last_sig = nil
 local cur_tab = nil
@@ -92,15 +101,79 @@ local function result_live()
         and shown_text(result, "Txt_Detail00") ~= nil
 end
 
+-- "Siguiente nivel: 100": a label ending in a colon takes its figure after a space.
+local function labelled(label, num)
+    if label and num and label:find(":%s*$") then return label:gsub("%s+$", "") .. " " .. num end
+    return Core.phrase(label, num)
+end
+
+local function custom_live()
+    custom = Core.cached_live("Shop_Develop_Custom_C", tick)
+    return Core.on_screen(custom) and Core.pane_live(custom)
+        and shown_text(custom, "Txt_Titl00") ~= nil
+end
+
+-- Machine, level, next level and memory: spoken on entry.
+local function custom_header()
+    return Core.phrase(shown_text(custom, "Txt_Titl00"), shown_text(custom, "Txt_Lv"),
+        labelled(shown_text(custom, "Txt_Titl01"), shown_text(custom, "Txt_Num01")),
+        Core.phrase(shown_text(custom, "Txt_Memory"), shown_text(custom, "Txt_Num_Memory")))
+end
+
+-- The chip slot under the cursor: the row whose Border_Cursor is on screen, else the only/first
+-- labelled row (the test save has a single slot, so the marker is unverified with several).
+local function selected_slot()
+    local list = Core.member(custom, "Xlist_Custom00_Lay10")
+    local arr, n = Core.array_of(list, "Item_List")
+    local first, marked = nil, nil
+    if arr then pcall(function()
+        for i = 1, n do
+            local r = arr[i]
+            if Core.valid(r) and Core.on_screen(r) then
+                local label = shown_text(r, "Txt_List00")
+                if label then
+                    first = first or label
+                    if not marked and Core.on_screen(Core.member(r, "Border_Cursor")) then marked = label end
+                end
+            end
+        end
+    end) end
+    return marked or first
+end
+
+local function custom_update()
+    local stats = function()
+        local parts = stat_parts(custom)
+        return #parts > 0 and table.concat(parts, ", ") or nil
+    end
+    -- The mode is whichever sub-list is interactive: leaving Subes de nivel parks its list
+    -- HitTestInvisible but still on_screen (measured live), and it would shadow Personalización.
+    local mats = Core.member(custom, "Xlist_List01_Lay9_00")
+    if Core.on_screen(mats) and Core.pane_live(mats) then
+        -- Subes de nivel: the materials list, "Mineral de hierro, 86".
+        local row = A.list_selected_row(mats)
+        local title = clean(Core.read_text(Core.member(mats, "Txt_Title")))
+        if not row or not row.name then return end
+        cust_ann:focus(Core.phrase(custom_header(), title), nil, clean(row.name), clean(row.num), nil)
+        return
+    end
+    -- Personalización: the slot, with the colour as its value so a colour change speaks alone.
+    local color = Core.member(custom, "Shop_Custom_Color")
+    local cval = Core.on_screen(color)
+        and labelled(shown_text(color, "Txt_Cap00"), shown_text(color, "Txt_Color")) or nil
+    cust_ann:focus(custom_header(), nil, selected_slot(), cval ~= "" and cval or nil, stats)
+end
+
 function Develop.is_active()
     tick = tick + 1
     if result_live() then return true end
+    if custom_live() then return true end
     host = Core.cached_live("Shop_Develop_Dev_C", tick)
     if not (Core.on_screen(host) and Core.pane_live(host)) then return false end
     return shown_text(host, "Txt_Title00") ~= nil or list_title() ~= nil
 end
 
-function Develop.reset() last_sig, cur_tab = nil, nil; ann:reset(); res_ann:reset() end
+function Develop.reset() last_sig, cur_tab = nil, nil; ann:reset(); res_ann:reset(); cust_ann:reset() end
 
 function Develop.update()
     if result_live() then
@@ -112,6 +185,8 @@ function Develop.update()
         return
     end
     res_ann:reset()
+    if custom_live() then custom_update() return end
+    cust_ann:reset()
     local list = item_list()
     local row = A.list_selected_row(list)
     local name = shown_text(host, "Txt_Title00") or (row and clean(row.name))

@@ -113,9 +113,25 @@ local function roster_row()
     return Core.phrase(name, r.lv, Core.phrase(r.pow, r.num))
 end
 
+-- The Capsule Corp training room opens its OWN party screen before a battle: the researcher's
+-- ShopComponent.StartPartyMenu (AT.hpp:43371), which no directory root reaches, so the mapped
+-- AT_UIStartParty chains answer "absent" (census 2026-10-21: Start_Party_C_0, same Blueprint).
+-- Her top menu (Shop_Top01_C, fm.ShopTop01) stays on screen under it for the whole visit, and
+-- that cheap pointer read gates the scan, so the Blueprint name is only ever scanned there.
+-- Her top menu ALSO stays Visible through the battle that follows, and the party pane is only
+-- parked there (HitTestInvisible, still on_screen — measured live), so the pane must be
+-- genuinely live or it holds the tick for the whole fight.
+local function shop_party()
+    if not Core.on_screen(Core.peek_all("Shop_Top01_C")[1]) then return nil end
+    for _, h in ipairs(Core.cached_all("Start_Party_C", tick) or {}) do
+        if Core.on_screen(h) and Core.pane_live(h) then return h end
+    end
+    return nil
+end
+
 function Party.is_active()
     tick = tick + 1
-    host = Core.first_on_screen("AT_UIStartParty", tick)
+    host = Core.first_on_screen("AT_UIStartParty", tick) or shop_party()
     if not host then return false end
     list = Core.member(host, "WL_Start_Party_List")
     cur_idx = cursor_index()

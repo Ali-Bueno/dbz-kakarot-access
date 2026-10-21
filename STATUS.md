@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live; the training room is not reachable on the test save). Before that: 2026-10-18 (v0.1.10 released with the race guide: checkpoint beacon, boost-ring and obstacle cues, louder beacon, all run live; reflected `LineTraceSingle` proven to work). Before that: 2026-10-16 evening (v0.1.9 released with the work of the unattended live session: Community Board d-pad, menu latency, virtual pad — [menu latency](reference/dbz-kakarot/notes/dbz-kakarot-menu-latency.md)). Before that: 2026-10-16 (v0.1.8 released with the movie and cutscene audio stutter fix, unplayed by us; v0.1.7 released 2026-10-13 with the Dragon Ball radar rework; the rest of the backlog below is UNCHANGED and still unplayed).
+**Last updated:** 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; unreleased). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -26,7 +26,7 @@
 
 ## Where the mod stands
 
-46 screen adapters, PRISM speech, 4 native bridges, an audio radar with 14 target categories, and
+48 screen adapters, PRISM speech, 4 native bridges, an audio radar with 14 target categories, and
 external localization in 13 languages. Most of it is verified in game; the table below says which.
 
 The earlier upstream backlog includes the following unrun checks:
@@ -43,11 +43,10 @@ The earlier upstream backlog includes the following unrun checks:
 
 **One session with the game running**, in this order, because each item unblocks the next.
 
--7. **Bulma's I+D and the training room (tester report 2026-10-18).** I+D is fixed and verified
-   live: the menu, the build list and the result sheet. Still to do:
-   - Personalización and Subes de nivel open only once a machine is built.
-   - The training room is not unlocked on the test save. Ask the tester where they open it, or
-     play on until `AREA19_TRAINING` loads. Then take a census before writing any code.
+-7. **Bulma's I+D and the training room — DONE and verified live 2026-10-21** on a second tester
+   save (Android saga). Still open: the chip slot cursor and chip list (need chips), `Icon_Clear`
+   (needs an uncleared training), `fm.ShopTraining02..05` (need a census), and one game-over menu
+   after a lost training battle that ignored every confirm. Not released yet.
 
    Details: [I+D and training room](reference/dbz-kakarot/notes/dbz-kakarot-develop.md).
 
@@ -268,8 +267,8 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Quest objective: the cached line is never stale | done (unverified) | 2026-09-07. `objective_text`'s 4th return is now `Core.prop_ready(host)` — the rows are read through the STRICT member gate, so "host found, nothing on it" and "host found, nothing askable" were indistinguishable. `step` clears `last_text` (never `last_key`, the diff gate) after `GONE_POLLS` readable-and-empty polls, `defer_poll()` resets that counter on every gated poll, and `last_text` is refreshed on every settled reading. `read_now` is deliberately unchanged: a per-press verdict was rejected (the HUD repopulates progressively). `Quest.reannounce` now says `objective_none` instead of nothing. Logs `objective -> none`. |
 | Episode title cards | wip | `screen_questcard.lua`, `AT_UIQuestMainStart.TitleText` @0x3E0 via `{"fm","QuestMainStart"}` @0x558. `fm.QuestMainLogo` is image-only, unread by design. A cinematic chapter card went unread 2026-07-17; trace armed. Unverified. |
 | Cooking menu | done | `screen_cooking.lua`; entry menu via the second `Shop_Top_C`. CAVEAT: the ghost pane reads `vis=0 opacity=1.0`, so `pane_live` does NOT discriminate it — the shadowing is killed by the yields plus spoken-key suppression. `LATCH_DEBUG` on. Verified 2026-07-15. |
-| Bulma's I+D (build list, result sheet) | done | `screen_develop.lua`; the I+D `Shop_Top_C` and both panes resolve through the new `gm` root (GameMode → `MechaDevManager.MenuManager`). Verified 2026-10-18. Personalización / Subes de nivel NOT covered (need a built machine). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
-| Training room (Capsule Corp) | todo | Reported silent by a tester 2026-10-18; not unlocked on the test save (`AREA19_TRAINING` not loaded). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
+| Bulma's I+D (build list, result sheet, Personalización, Subes de nivel) | done | `screen_develop.lua`; the I+D `Shop_Top_C` and all panes resolve through the `gm` root (GameMode → `MechaDevManager.MenuManager`). Build list verified 2026-10-18; Personalización / Subes de nivel (one host, `Shop_Develop_Custom_C`) and the quantity window (`screen_numberwin.lua`) verified 2026-10-21. Chip slot cursor unverified (one slot, no chips). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
+| Training room (Capsule Corp) | done | Researcher NPC `Cpl073_Training`. Top menu `Shop_Top01_C` (`fm.ShopTop01`, `screen_shoplist`), remodel and battle panes `Shop_Training00/01_C` (`fm`, `screen_trainroom.lua`), pre-battle party = the NPC's `ShopComponent.StartPartyMenu` (`screen_party` gated fallback). Verified end to end 2026-10-21. `Icon_Clear` not spoken; `ShopTraining02..05` unmapped (no census). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
 | Fishing minigame | done | `screen_fishing.lua`. `AT_UIBattleRushSpeedCore` deliberately unmapped (the game never sets that pointer). `ring_core()` picks the on-screen pool instance. Phase 2 = bare letter on `fishing.phase == 2`. Verified 2026-07-15. |
 | Race minigame ("driving") | done | `race_guide.lua`: radar beacon (`beacon.lua`, shared with nav) aimed at the HUD's `GetNextCheckPointLocation()`, panned against the RIDER's yaw (the camera manager is frozen in races); counter spoken; 10 s low-time warning; F10/L3+Y reads the race. Boost rings (`race_rings.lua`, `item` cue) and obstacles (`obstacle_sensor.lua`, 3 Visibility traces, `enemy` cue); cue gains above 1 via `audio_bridge`. HUD via `GameHUD.UIMiniGameManager.UIMiniGameRace` (directory, no scan). Verified 2026-10-18 (licence race). [Note](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md). |
 | Fishing catch result ("¡BRAVO!" sheet) | done | `screen_fishresult.lua`, `Mgame_Result_C` < `AT_UIMiniGameResult`. `fm.MiniGameResult` @0x630 deliberately unmapped. OPACITY-ONLY gate. Registered ABOVE `screen_fishing`. Verified 2026-07-17, rest pending. |

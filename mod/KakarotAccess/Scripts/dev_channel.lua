@@ -77,6 +77,7 @@ function C.help()
         "drive [ms]            race test driver: steer by the beacon pan, hold RT for ms (testing)",
         "enemyhp [value]       list enemy HP; with a value, set it (testing: get past a story fight)",
         "tp <Class>|@<group>  put the player 1.5 m in front of a class instance / radar target (testing)",
+        "tpxyz <x> <y> <z>     put the player at world coordinates in cm (testing)",
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
         "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
@@ -352,6 +353,47 @@ function C.tp(cls, name_part)
     pawn:K2_SetActorRotation({ Pitch = 0, Yaw = math.deg(yaw) + 180, Roll = 0 }, true)
     out(string.format("tp -> %.0f %.0f %.0f (target %.0f %.0f %.0f)", dest.X, dest.Y, dest.Z,
         loc.X, loc.Y, loc.Z))
+end
+
+-- Put the player at raw world coordinates (cm), e.g. a door's playerStart from the nav dump.
+function C.tpxyz(x, y, z)
+    x, y, z = tonumber(x), tonumber(y), tonumber(z)
+    if not (x and y and z) then return out("usage: tpxyz <x> <y> <z>") end
+    local Core = require("ui_core")
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    if not Core.valid(pawn) then return out("no player pawn (minimap down?)") end
+    pawn:K2_SetActorLocation({ X = x, Y = y, Z = z }, false, {}, true)
+    local l = pawn:K2_GetActorLocation()
+    out(string.format("tpxyz -> %.0f %.0f %.0f", l.X, l.Y, l.Z))
+end
+
+-- Liveness of every cached instance of a class: on_screen (ancestor walk), own visibility enum,
+-- render opacity, pane_live and pane_rendered. For "why does this host still claim the tick?".
+function C.vis(cls, member)
+    if not cls then return out("usage: vis <Class> [member]") end
+    local Core = require("ui_core")
+    local list = Core.cached_all(cls)
+    if member then
+        local w = {}
+        for _, o in ipairs(list or {}) do w[#w + 1] = Core.member(o, member) end
+        list = w
+    end
+    out(string.format("%s: %d cached", cls, #(list or {})))
+    for i, o in ipairs(list or {}) do
+        if Core.valid(o) then
+            local v, op
+            pcall(function() v = o:GetVisibility() end)
+            pcall(function() op = o:GetRenderOpacity() end)
+            local n = "?"
+            pcall(function() n = o:GetFName():ToString() end)
+            out(string.format("  [%d] %s on_screen=%s vis=%s op=%s live=%s rendered=%s", i, n,
+                tostring(Core.on_screen(o)), tostring(v), tostring(op),
+                tostring(Core.pane_live(o)), tostring(Core.pane_rendered(o))))
+        else
+            out(string.format("  [%d] invalid", i))
+        end
+    end
 end
 
 -- The directory part of the nav dump, which the dump skips whenever no world is "alive" (menus).

@@ -349,10 +349,17 @@ local MAP = {
                                    {"gm", "MechaDevManager", "MenuManager", "UIShopTop"} },
     ["Shop_Develop_Dev_C"]     = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelop"} },
     ["Shop_Develop_Result_C"]  = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelopResult"} },
+    -- Personalización and Subes de nivel share one host (census 2026-10-21, tester save with a machine).
+    ["Shop_Develop_Custom_C"]  = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelopCustom"} },
     ["Shop_Cmn_C"]             = { {"fm", "ShopCommon"} },
     ["Shop_Cook_C"]            = { {"fm", "CookingMenu"} },
     ["Shop_Info_C"]            = { {"fm", "ShopInfo"} },
     ["Shop_Training_C"]        = { {"fm", "ShopTraining"} },
+    -- Capsule Corp training room (AT.hpp:32893/32913): the researcher's top menu and its
+    -- two panes, remodel (00) and training battles (01). Census 2026-10-21.
+    ["Shop_Top01_C"]           = { {"fm", "ShopTop01"} },
+    ["Shop_Training00_C"]      = { {"fm", "ShopTraining00"} },
+    ["Shop_Training01_C"]      = { {"fm", "ShopTraining01"} },
     ["Map_World_C"]            = { {"fm", "MapWorld"} },
     ["Map_M_C"]                = { {"fm", "MapMng", "AreamapIns"} },
     ["AT_UIMiniMapRadar"]      = { {"fm", "MapMng", "MinimapIns"} },

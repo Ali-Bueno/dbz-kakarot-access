@@ -2,6 +2,30 @@
 
 ---
 
+## Unreleased
+
+**The training room at Capsule Corp and the rest of Bulma's machine menus now read aloud.** A
+player sent a save that reaches them.
+
+### Training room
+
+- Talk to the researcher next to the training room door. Her menu reads the room's level and
+  the highlighted option: remodel or train.
+- Remodel reads each room level with its description, then every material it needs with how
+  many you have and how many you need.
+- Train reads the character (switch with LB/RB), the training's name, the recommended level,
+  the goal, the enemies and their levels, the rewards, and the super attack it teaches.
+- The party screen before the battle is read too, and so are the confirmation, the battle
+  result and the researcher's reply.
+
+### R&D
+
+- Customize reads the machine, its level, the experience to the next level, the memory used,
+  the selected chip slot, the color and the stats. Changing the color reads the new color.
+- Level up reads the materials list, and the quantity window reads the amount, the experience
+  you will gain and the level you will reach as you change it.
+- Not checked yet: the chip list itself. Our test save owns no chips.
+
 ## v0.1.11 - October 18, 2026
 
 **Bulma's R&D menu, where you build machines, now reads aloud.** A player reported it was

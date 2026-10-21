@@ -51,6 +51,9 @@ Registry.register(require("screen_results"), "screen_results")
 -- Game-over / defeat menu (Gameover_C): the "Fin de la partida" retry/load/title list.
 -- High priority — a full-screen modal that owns the screen when the player is defeated.
 Registry.register(require("screen_gameover"), "screen_gameover")
+-- The quantity prompt shares screen_dialog's window class (Xcmn_Win02_C); it claims only while
+-- the input row is up, so it must come first.
+Registry.register(require("screen_numberwin"), "screen_numberwin")
 Registry.register(require("screen_dialog"), "screen_dialog")
 -- Boot agreement / privacy policy (AT_UIXcmnAgreement): the first screen after launch.
 -- Below the dialog reader (a confirm popup over it must win), above everything else —
@@ -103,6 +106,8 @@ Registry.register(MapScreen, "screen_map")
 Registry.register(require("screen_training"), "screen_training")
 -- Bulma's I+D build list and result sheet open OVER the I+D Shop_Top, which stays on screen.
 Registry.register(require("screen_develop"), "screen_develop")
+-- The training room's remodel and battle panes open OVER her Shop_Top01_C, which stays on screen.
+Registry.register(require("screen_trainroom"), "screen_trainroom")
 -- Item/info BUY lists open OVER the shop-top (which can stay on_screen underneath), so
 -- they must precede screen_shoplist/screen_shop:
 --   Shop_Cmn_C  — the food/material item list (name, price, purchase count, owned);

@@ -26,6 +26,7 @@ local DEBUG = false
 
 local ann = Core.make_announcer()
 local host = nil
+local header = nil  -- spoken on entry; only the training room's top (Shop_Top01_C) has one
 local tick = 0
 local last_sig = nil
 
@@ -41,11 +42,16 @@ local function rows_of(h) return A.shoptop_rows(h) end
 -- UNSELECTED. CursorWidget visibility and GetNotSelect() do NOT distinguish rows here
 -- (verified live: both mode rows read cursor=true, notSelect=false), so the state enum
 -- is the reliable signal.
+-- The ENTER states are the row just confirmed: it stays the selection while the list animates out
+-- (measured 2026-10-21: "Entrenar" goes 1 -> 2 on A, every other row stays 0).
 local SELECT_STATES = {
     [1] = true,   -- STATE_SELECT
+    [2] = true,   -- STATE_ENTER
     [6] = true,   -- STATE_SUBIN_SELECT
     [7] = true,   -- STATE_SUBOUT_SELECT
+    [8] = true,   -- STATE_SUBENTER
     [10] = true,  -- STATE_SELECT_NO_ENTER
+    [12] = true,  -- STATE_END_ENTER
 }
 local function row_state(r)
     local ok, s = pcall(function() return r:GetState() end)
@@ -61,11 +67,21 @@ local function row_label(r)
 end
 
 -- Pick the on-screen Shop_Top_C that has visible ListBarCtn rows (the mode list is up).
+-- The Capsule Corp training room's researcher uses its own subclass, Shop_Top01_C
+-- (fm.ShopTop01: Modificar / Entrenar), with a header the plain shop top does not declare:
+-- Txt_List00 "Sala de entrenamiento", Txt_Cap01 "Nivel de instalación", Txt_Num_Lv "Nvl. 1"
+-- (census 2026-10-21). Returns the host and that header, read only on a Shop_Top01_C.
 local function acquire()
     for _, h in ipairs(Core.cached_all("Shop_Top_C", tick) or {}) do
-        if Core.on_screen(h) and #rows_of(h) > 0 then return h end
+        if Core.on_screen(h) and #rows_of(h) > 0 then return h, nil end
     end
-    return nil
+    for _, h in ipairs(Core.cached_all("Shop_Top01_C", tick) or {}) do
+        if Core.on_screen(h) and #rows_of(h) > 0 then
+            local function txt(n) return clean(Core.read_text(Core.member(h, n))) end
+            return h, Core.phrase(txt("Txt_List00"), txt("Txt_Cap01"), txt("Txt_Num_Lv"))
+        end
+    end
+    return nil, nil
 end
 
 local function dump(rows, sel_label)
@@ -91,7 +107,7 @@ function ShopList.is_active()
     if Core.free_roam(tick) then state = nil return false end
     -- And yield to the pause RING family (all registered below — see screen_cooking).
     if Core.ring_open(tick) then state = nil return false end
-    host = acquire()
+    host, header = acquire()
     if not host then state = nil return false end
     local rows = rows_of(host)
     local labels, sel = {}, nil
@@ -111,13 +127,23 @@ function ShopList.is_active()
     return true
 end
 
-function ShopList.reset() ann:reset() last_sig = nil end
+-- While the list animates in or out, no row reports a select state for a tick or two, and the
+-- first-row fallback below then spoke the WRONG option (training room 2026-10-21: "Modificar"
+-- between pressing A on "Entrenar" and its pane opening, and again on coming back, when every row
+-- reads STATE_UNSELECTED for a few polls). The fallback now waits NOSEL_TICKS polls for a real
+-- selection; it only exists for a list whose rows never report one.
+local NOSEL_TICKS = 8
+local nosel = 0
+
+function ShopList.reset() ann:reset() last_sig = nil nosel = 0 end
 
 function ShopList.update()
     local s = state
     if not s then return end
+    if s.sel then nosel = 0 else nosel = nosel + 1 end
+    if not s.sel and nosel < NOSEL_TICKS then return end
     -- Choice-style: speak the highlighted option; re-announced as the cursor moves.
-    ann:focus(nil, nil, s.sel or s.labels[1], nil, nil)
+    ann:focus(header ~= "" and header or nil, nil, s.sel or s.labels[1], nil, nil)
 end
 
 return ShopList
