@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased
+## v0.1.12 - October 21, 2026
 
 **The training room at Capsule Corp and the rest of Bulma's machine menus now read aloud.** A
 player sent a save that reaches them.

@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; unreleased). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
+**Last updated:** 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -46,7 +46,7 @@ The earlier upstream backlog includes the following unrun checks:
 -7. **Bulma's I+D and the training room — DONE and verified live 2026-10-21** on a second tester
    save (Android saga). Still open: the chip slot cursor and chip list (need chips), `Icon_Clear`
    (needs an uncleared training), `fm.ShopTraining02..05` (need a census), and one game-over menu
-   after a lost training battle that ignored every confirm. Not released yet.
+   after a lost training battle that ignored every confirm. Released in v0.1.12.
 
    Details: [I+D and training room](reference/dbz-kakarot/notes/dbz-kakarot-develop.md).
 
