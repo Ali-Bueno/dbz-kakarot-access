@@ -81,6 +81,8 @@ function C.help()
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
         "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
+        "items <text>|<id>     drop slugs whose localized item name contains <text> (or one id's name)",
+        "drops <slug substr>   live pickups/animals whose drop slug matches, with distance",
         "press <BTN[+BTN]> [ms] virtual pad press, e.g. press A / press DPAD_DOWN 150",
         "stick <x> <y> [ms]    virtual left stick, -1..1 each axis (y up = +)",
         "trigger <lt> <rt> [ms] virtual triggers, 0..1 each (RT accelerates the race car)",
@@ -437,6 +439,143 @@ function C.charnames()
     local rok, err = pcall(mod.run)
     out(rok and "char name probe -> Scripts/dumps/dump_char_names.txt"
              or ("charnames raised: " .. tostring(err)))
+end
+
+-- Reverse lookup over the game's OWN item names: which drop slugs (item_drop_ids.lua) resolve to
+-- a localized name containing <text>? Answers "what in the world gives this quest item" without
+-- leaving the game. A bare number prints Item_<n>_Name instead. Spaces are allowed in <text>.
+function C.items(...)
+    local q = table.concat({ ... }, " ")
+    if q == "" then return out("usage: items <name substring> | items <numeric id>") end
+    local Nav = require("nav_tracker")
+    if q:match("^%d+$") then
+        return out(string.format("Item_%s_Name = %s", q, tostring(Nav._message_text("Item_" .. q .. "_Name"))))
+    end
+    local ok, ids = pcall(require, "item_drop_ids")
+    if not ok or type(ids) ~= "table" then return out("item_drop_ids unavailable") end
+    local want, by_id = q:lower(), {}
+    for slug, num in pairs(ids) do
+        local nm = Nav._message_text("Item_" .. num .. "_Name")
+        if nm and nm:lower():find(want, 1, true) then
+            by_id[num] = by_id[num] or { name = nm, slugs = {} }
+            table.insert(by_id[num].slugs, slug)
+        end
+    end
+    local n = 0
+    for num, e in pairs(by_id) do
+        table.sort(e.slugs)
+        out(string.format("%d %s <- %s", num, e.name, table.concat(e.slugs, ", ")))
+        n = n + 1
+    end
+    if n == 0 then out("no drop slug resolves to a name containing '" .. q .. "'") end
+end
+
+-- Live actors whose DROP SLUG contains <substr>: field pickups (ItemTableComponent) and wild
+-- animals (AnimalMob_Pawn_C.FieldItemTable), with distance and hidden flag. Answers "is the quest
+-- item anywhere in the loaded world, and is the radar's naming path able to see it?".
+function C.drops(sub)
+    if not sub then return out("usage: drops <slug substring>   e.g. drops Snail") end
+    local Core = require("ui_core")
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    local p = Core.valid(pawn) and pawn:K2_GetActorLocation() or nil
+    local want, n = sub:lower(), 0
+    for _, c in ipairs({
+        { cls = "AccessPointItemBase", comp = "ItemTableComponent", strict = true },
+        { cls = "PlacementObjectInfo", comp = "ItemTableComponent" },
+        { cls = "AnimalMob_Pawn_C",    comp = "FieldItemTable",     strict = true },
+    }) do
+        for _, a in ipairs(FindAllOf(c.cls) or {}) do
+            if Core.valid(a) then
+                local slug
+                pcall(function()
+                    local comp = Core.member(a, c.comp, c.strict)
+                    if not Core.valid(comp) then return end
+                    local d = Core.member(comp, "FieldItemDropData", true)
+                    if not Core.valid_ref(d) then return end
+                    local s = {}
+                    for _, f in ipairs({ "FixedId", "NormalId" }) do
+                        local v = Core.name_str(d[f])
+                        if v and v ~= "None" then s[#s + 1] = f .. "=" .. v end
+                    end
+                    slug = table.concat(s, " ")
+                end)
+                if slug and slug:lower():find(want, 1, true) then
+                    local l = a:K2_GetActorLocation()
+                    local dist = p and math.sqrt((l.X - p.X) ^ 2 + (l.Y - p.Y) ^ 2 + (l.Z - p.Z) ^ 2) / 100 or -1
+                    local hid
+                    pcall(function() hid = Core.member(a, "bHidden") end)
+                    local cn = "?"
+                    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                    out(string.format("%-28s %s  d=%.0fm hidden=%s @ %.0f %.0f %.0f",
+                        cn, slug, dist, tostring(hid), l.X, l.Y, l.Z))
+                    n = n + 1
+                    if n >= 60 then return out("(capped at 60)") end
+                end
+            end
+        end
+    end
+    if n == 0 then out("no live actor carries a drop slug containing '" .. sub .. "'") end
+end
+
+-- Wild-animal SPAWN VOLUMES in the loaded world: the class each spawns, that class's DEFAULT drop
+-- slug (read off the class default object's FieldItemTable), distance. Animals only exist while
+-- the player is inside their volume, so the volume is the only thing a radar can point at before
+-- that. `spawners [substr]` filters on class name or slug.
+function C.spawners(sub)
+    local Core = require("ui_core")
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    local p = Core.valid(pawn) and pawn:K2_GetActorLocation() or nil
+    local want = sub and sub:lower()
+    local n = 0
+    local function cdo_slug(cls)
+        local slug
+        pcall(function()
+            local cdo = cls:GetCDO()
+            if not Core.valid(cdo) then return end
+            local comp = Core.member(cdo, "FieldItemTable", true)
+            if not Core.valid(comp) then return end
+            local d = Core.member(comp, "FieldItemDropData", true)
+            if not Core.valid_ref(d) then return end
+            local s = {}
+            for _, f in ipairs({ "FixedId", "NormalId" }) do
+                local v = Core.name_str(d[f])
+                if v and v ~= "None" then s[#s + 1] = v end
+            end
+            slug = table.concat(s, " ")
+        end)
+        return slug or "-"
+    end
+    for _, vc in ipairs({ "AnimalSpawnerVolumeGround", "AnimalSpawnerVolumeSky" }) do
+        for _, v in ipairs(FindAllOf(vc) or {}) do
+            if Core.valid(v) then
+                local arr, cnt = Core.array_of(v, "AnimalSpawnData", true)
+                local l = v:K2_GetActorLocation()
+                local dist = p and math.sqrt((l.X - p.X) ^ 2 + (l.Y - p.Y) ^ 2 + (l.Z - p.Z) ^ 2) / 100 or -1
+                for i = 1, (cnt or 0) do
+                    local cname, slug, max = "?", "-", "?"
+                    pcall(function()
+                        local e = arr[i]
+                        local cls = e.ClassToSpawn
+                        if Core.valid(cls) then
+                            cname = cls:GetFName():ToString()
+                            slug = cdo_slug(cls)
+                        end
+                        max = tostring(e.MaxAnimalNum)
+                    end)
+                    local line = string.format("%s[%d] %-24s max=%s slug=%s d=%.0fm @ %.0f %.0f %.0f",
+                        vc:sub(20), i, cname, max, slug, dist, l.X, l.Y, l.Z)
+                    if not want or line:lower():find(want, 1, true) then
+                        out(line)
+                        n = n + 1
+                        if n >= 80 then return out("(capped at 80)") end
+                    end
+                end
+            end
+        end
+    end
+    if n == 0 then out("no animal spawn volume matches") end
 end
 
 function C.questdump()

@@ -63,6 +63,11 @@ PAKS = [                                           # searched in order for each 
 ]
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 OUT_LUA = os.path.join(REPO_ROOT, "mod", "KakarotAccess", "Scripts", "item_drop_ids.lua")
+# Second output: every item a slug CAN drop (all slots, every CondEpisode row, every table), for the
+# slugs where that set is larger than the one id above. The quest-item match needs it: the primary
+# id is the earliest common drop, and a quest that asks for a later or rarer drop of the same spot
+# (Lost_Snail_01 is "river shrimp" in episode 1 and "meaty river snail" later) never matched it.
+OUT_ALTS_LUA = os.path.join(REPO_ROOT, "mod", "KakarotAccess", "Scripts", "item_drop_alts.lua")
 
 # The localized message table we cross-check emitted ids against. Any locale works -- the KEYS are
 # locale-independent -- es_MX is simply the one this mod ships against.
@@ -253,6 +258,13 @@ def read_tagged_properties(pkg, r):
             out[name] = read_fname_raw(pkg, r)     # (rendered, base, raw_number)
         elif ptype == "IntProperty":
             out[name] = r.i32()
+        # Talk / action-command tables key everything on strings (talk_id, command_id) and enums;
+        # dump_course_teachers.py needs both. The drop tables never carry either, so their output
+        # is unchanged by these two branches (verified by re-running: identical item_drop_ids.lua).
+        elif ptype == "StrProperty":
+            out[name] = r.fstring()
+        elif ptype == "EnumProperty":
+            out[name] = read_fname_raw(pkg, r)
         r.o = start + size                         # always trust Size, never the value reader
     return out
 
@@ -314,6 +326,23 @@ def pick_drop(props):
         if best is None or cand[:2] > best[:2]:
             best = cand
     return best[2] if best else None
+
+
+def all_drops(props):
+    """Every item id a row can drop: each DropItemId slot that names an item. A slot whose weight
+    is stored and is 0 can never be rolled, so it is left out; a row with no weights at all keeps
+    every named slot (pick_drop treats that case the same way)."""
+    out = set()
+    for slot in range(1, 6):
+        val = props.get("DropItemId_%d" % slot)
+        if not val or val[0] in NONE_NAMES:
+            continue
+        if ("DropItemWeight_%d" % slot) in props and not props.get("DropItemWeight_%d" % slot):
+            continue
+        _, base, raw_num = val
+        if base == ITEM_NAME_BASE and raw_num:
+            out.add(raw_num - 1)                            # the N+1 rule, see module docstring
+    return out
 
 
 def pick_row(rows):
@@ -384,6 +413,7 @@ def main():
     episode_variants = 0
     conflicts = []
     raw_numbers = {}       # slug -> raw stored FName number, for the KNOWN_GOOD assertions
+    possible = defaultdict(set)   # slug -> every item id any row/slot/table can drop
 
     try:
         for asset in assets:
@@ -416,6 +446,8 @@ def main():
             emitted_here = 0
             for slug in sorted(by_slug):
                 group = by_slug[slug]
+                for _, p in group:
+                    possible[slug] |= all_drops(p)
                 if len(set((pick_drop(p) or (None,))[0] for _, p in group)) > 1:
                     episode_variants += 1
                 _, props = pick_row(group)
@@ -489,6 +521,26 @@ def main():
     with open(OUT_LUA, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
 
+    # --- the alternates module: only slugs that can drop more than their primary id -------------
+    alts = {}
+    for slug in sorted(merged):
+        extra = sorted(i for i in possible.get(slug, ()) if i != merged[slug])
+        if extra:
+            alts[slug] = extra
+    alines = [
+        "-- GENERATED FILE -- DO NOT EDIT BY HAND.",
+        "-- Regenerate with tools/item-ids/dump_drop_item_ids.py after a game update.",
+        "-- Every OTHER item id a drop slug can yield (other DropItemId slots, later CondEpisode rows,",
+        "-- later tables), for the %d slugs that have any. item_drop_ids.lua holds the primary id;" % len(alts),
+        "-- this file only widens what the quest-item match may recognise. Ids only, no text.",
+        "return {",
+    ]
+    for slug in sorted(alts):
+        alines.append('    ["%s"] = { %s },' % (slug, ", ".join(str(i) for i in alts[slug])))
+    alines.append("}")
+    with open(OUT_ALTS_LUA, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(alines) + "\n")
+
     print("")
     print("ROWS: %d emitted, %d skipped (%d empty DropItemId_1, %d non-item drop)"
           % (len(merged), skipped_none + skipped_non_item, skipped_none, skipped_non_item))
@@ -499,7 +551,9 @@ def main():
     for c in conflicts[:10]:
         print("  %s: %d (%s) kept, %d (%s) ignored" % (c[0], c[2], c[1], c[4], c[3]))
     print("ORPHANS: %d" % len(orphans))
+    print("ALTERNATES: %d slugs can drop more than their primary id" % len(alts))
     print("WROTE: %s" % OUT_LUA)
+    print("WROTE: %s" % OUT_ALTS_LUA)
 
 
 if __name__ == "__main__":

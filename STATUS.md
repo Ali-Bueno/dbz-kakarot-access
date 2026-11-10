@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
+**Last updated:** 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -26,7 +26,7 @@
 
 ## Where the mod stands
 
-48 screen adapters, PRISM speech, 4 native bridges, an audio radar with 14 target categories, and
+48 screen adapters, PRISM speech, 4 native bridges, an audio radar with 15 target categories, and
 external localization in 13 languages. Most of it is verified in game; the table below says which.
 
 The earlier upstream backlog includes the following unrun checks:
@@ -42,6 +42,32 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-8. **Player report 2026-11-09 (tester save, Cell saga, Goku) — partly fixed and verified live.**
+   - *Antidote sub-story (`Sub_Cpl001_01`) "no markers, items not tracked":* the game sets no
+     marker for a collection phase, and the radar's name table held only each spot's EARLIEST
+     drop. Now every possible drop (`item_drop_alts.lua`, generated) and every open HUD row are
+     matched. VERIFIED LIVE: river snails auto-tracked from 3 km. The golden-gazelle antler (hunt
+     promotion, plus rare animals spoken as rare) is coded and unplayed. Details:
+     [quest item tracking](reference/dbz-kakarot/notes/dbz-kakarot-quest-item-tracking.md), last
+     section.
+   - *Bonyu special training silent:* not reproduced; this install lacks the pre-order add-on.
+     The hypothesis and what to ask the tester for (their `UE4SS.log`) are in
+     [I+D and training room](reference/dbz-kakarot/notes/dbz-kakarot-develop.md), "Not covered".
+   - *Full-course meal teachers as an R3 category:* new group *Platos completos*, coded and
+     unplayed. 14 of the 16 courses map to a teacher through a generated table
+     (`course_teachers.lua`, built by `tools/item-ids/dump_course_teachers.py`), matched on the
+     NPC talk component's `m_talkParamId`. First live check, and the open questions:
+     [course teachers](reference/dbz-kakarot/notes/dbz-kakarot-course-teachers.md).
+   - The quest checklist now reads the item first ("Caracol de río carnoso 0/4").
+   - The Steam slot now holds this tester's save (the archive was `Downloads\851850.7z`). The
+     previous tester's save is in `Downloads\Kakarot save backup 2026-11-09 (tester Android
+     saga)`, and ours is restored with `Downloads\Kakarot save backup 2026-10-17\restaurar mi
+     partida.bat`. This install lacks the tester's add-ons (Bonyu early unlock, music pack and
+     others); the title screen says so on boot.
+   - Also seen: the world map read ~11 s late on its second opening in a session, and the radar
+     re-says "Rastreando …" each time the area map opens. Neither was investigated.
+   - Released in v0.1.13 (2026-11-10).
 
 -7. **Bulma's I+D and the training room — DONE and verified live 2026-10-21** on a second tester
    save (Android saga). Still open: the chip slot cursor and chip list (need chips), `Icon_Clear`

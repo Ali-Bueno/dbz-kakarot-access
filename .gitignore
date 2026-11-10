@@ -42,3 +42,6 @@ mod/KakarotAccess/Scripts/dev_probe.txt
 
 # Crash black box (memory-mapped marker ring, written at runtime by mem_bridge)
 mod/KakarotAccess/Scripts/crash_trail.bin
+
+# Python bytecode from the pak tools
+__pycache__/

@@ -138,8 +138,8 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- over the outdoors too. Inside a building this costs nothing anyway: nearly every other group is
 -- empty there and empty groups are skipped when cycling.
 local GROUP_ORDER = {
-    "quests", "exit", "collectibles", "npc", "companions", "enemies", "hunt", "sites", "fishing",
-    "gathering", "shops", "minigames", "dragonball", "other",
+    "quests", "exit", "collectibles", "npc", "courses", "companions", "enemies", "hunt", "sites",
+    "fishing", "gathering", "shops", "minigames", "dragonball", "other",
 }
 local ICON_GROUP = {
     -- quests (no distance limit)
@@ -1471,6 +1471,22 @@ local function animal_species(a)
     return key
 end
 
+-- Is this a RARE animal (the golden deer / wolf / gazelle variants)? `RareFlag` is declared on
+-- UAnimalComponentBase (AT.hpp:39775 +0x580), and the component is IsA-checked against that class
+-- before the fetch, so the member is known to exist. Requested 2026-11-09: a golden gazelle only
+-- ever appears inside an ordinary gazelle herd, so a blind hunter needs the list to say which one.
+local function animal_rare(a)
+    local rare = false
+    pcall(function()
+        if not animal_comp_cls then return end
+        local comp = Core.member(a, "NpcComponent")
+        if not (Core.valid(comp)) or not comp:IsA(animal_comp_cls) then return end
+        local v = Core.member(comp, "RareFlag")
+        rare = (v == true or v == 1)
+    end)
+    return rare
+end
+
 -- TEMP passive probe (2026-07-06, remove once the field-enemy class is confirmed):
 -- combat starts too fast for a manual Ctrl+F5 near enemies, so this logs every Pawn
 -- within 150 m — class name + SpawnType (AT_Characters only; reading it on other
@@ -2134,8 +2150,12 @@ local function step()
     -- tracking the item was meant to end. `homegrp` keeps the volume exception intact: a fruit
     -- patch promoted out of "gathering" still needs the wide radius, because its actor origin can
     -- sit meters from the orbs.
+    -- A promoted HUNT target (an animal whose drop the quest wants) is not a pickup either: it
+    -- moves, flees and has to be shot down first, so it takes the wide radius and the plain
+    -- arrival line rather than "you can pick it up".
+    local hunted = target.homegrp == "hunt"
     local arrive_r = ((target.manual or target.questitem)
-        and target.grp ~= "gathering" and target.homegrp ~= "gathering")
+        and target.grp ~= "gathering" and target.homegrp ~= "gathering" and not hunted)
         and ARRIVE_DIST_MANUAL or ARRIVE_DIST
     if d3 <= arrive_r then
         if not arrived then
@@ -2143,7 +2163,7 @@ local function step()
             Audio.arrival()
             -- Hand-picked target: you're right on it — prompt the interact button so a
             -- collectible/NPC can be grabbed/talked to. Auto quest target: plain arrival.
-            Speech.say((target.manual or target.questitem)
+            Speech.say(((target.manual or target.questitem) and not hunted)
                 and I18n.t("nav_arrived_pickup") or I18n.t("nav_arrived"), false)
             -- A hand-picked (manual) target STOPS on arrival: the beacon goes quiet, the
             -- target is dropped, AND the auto-scan is suppressed so it can't immediately
@@ -2907,15 +2927,90 @@ function Nav._wants_item(want, name)
     return w == n or w:find(n, 1, true) ~= nil or n:find(w, 1, true) ~= nil
 end
 
+-- The full-course recipe item ids an NPC teaches, from its talk id (UNpcTalkComponent
+-- m_talkParamId, char_types.talk_param_id), or nil. Player request 2026-11-09: "a marker for the
+-- characters that teach the full-course meals". course_teachers.lua is GENERATED from the paks by
+-- tools/item-ids/dump_course_teachers.py, which documents the grant chain; the two key rules here
+-- must match its MNQ_RE / SUB_RE exactly:
+--   mini-quest NPC  `C1m13041_mad0001s[_p1]` -> "C1m13|mad0001s" (any step of that mini-quest)
+--   sub-quest NPC   `Sub_Cooking_01_Mob_01`  -> "Sub_Cooking_01"
+function Nav._course_teacher(tid)
+    if type(tid) ~= "string" or tid == "" then return nil end
+    if Nav._courses == nil then
+        local ok, t = pcall(require, "course_teachers")
+        Nav._courses = (ok and type(t) == "table") and t or false
+        if not Nav._courses then
+            print("[KakarotAccess] course_teachers unavailable: " .. tostring(t) .. "\n")
+        end
+    end
+    if not Nav._courses then return nil end
+    local mnq, actor = tid:match("^(%u%dm%d%d)%d*_(%a+%d+%a?)")
+    if mnq then
+        local hit = Nav._courses.mnq and Nav._courses.mnq[mnq .. "|" .. actor]   -- lint:plain-table
+        if hit then return hit end
+    end
+    local q = tid:match("^(Sub_%w+_%d%d)_") or tid:match("^(Sub_%w+_%d%d)$")
+    return q and Nav._courses.quest and Nav._courses.quest[q] or nil
+end
+
+-- The open checklist row of `req` that asks for `name`, or nil. `req.all` lists every unfinished
+-- row of the quest group (quest_objective.item_requirement); a requirement without it is a single
+-- row. Used wherever "does the quest still want this item" is asked, so the radar can guide to
+-- whichever wanted item is nearest rather than only the first one on the list.
+function Nav._req_row(req, name)
+    if type(req) ~= "table" then return nil end
+    for _, r in ipairs(req.all or { req }) do
+        if Nav._wants_item(r.name, name) then return r end
+    end
+    return nil
+end
+
+-- Every item a drop SLUG can yield, primary first: item_drop_ids.lua holds the earliest common
+-- drop, item_drop_alts.lua (same generator) the others -- later story episodes, rarer slots. The
+-- quest match needs the full set: `Lost_Snail_01` is "river shrimp" in episode 1 and the
+-- antidote quest's "meaty river snail" later, and only the shrimp was ever compared.
+function Nav._drop_ids_of(slug)
+    if type(slug) ~= "string" or slug == "" then return {} end
+    if Nav._drop_ids == nil then Nav._field_item_name(slug) end   -- loads the primary map lazily
+    local primary = Nav._drop_ids and Nav._drop_ids[slug]
+    if not primary then return {} end
+    if Nav._drop_alts == nil then
+        local ok, t = pcall(require, "item_drop_alts")
+        Nav._drop_alts = (ok and type(t) == "table") and t or false
+        if not Nav._drop_alts then
+            print("[KakarotAccess] item_drop_alts unavailable: " .. tostring(t) .. "\n")
+        end
+    end
+    local ids = { primary }
+    for _, n in ipairs((Nav._drop_alts and Nav._drop_alts[slug]) or {}) do ids[#ids + 1] = n end
+    return ids
+end
+
+-- The localized name of whichever item `slug` can drop that `req` still asks for, or nil.
+function Nav._wanted_drop_name(slug, req)
+    if not req or type(slug) ~= "string" then return nil end
+    for _, num in ipairs(Nav._drop_ids_of(slug)) do
+        local nm = Nav._message_text("Item_" .. num .. "_Name")
+        if nm and Nav._req_row(req, nm) then return nm end
+    end
+    return nil
+end
+
 -- Spoken name for a placed collectible: its drop-table id resolved to the game's own localized
 -- item name. On the module rather than inside the sweep because BOTH scans need it -- the direct
 -- class scan that finds unmarked collectibles, and the map-icon scan that finds every POI the
 -- game marks. `strict` refuses the ItemTableComponent fetch when the class has not been
 -- introspected, which is mandatory on the map-icon path: there the owner can be any class at all.
-function Nav._drop_item_name(a, strict)
+-- `req` (optional, Nav._quest_req()): when the quest still asks for an item this spot CAN drop --
+-- any slot, any episode, either slug -- that item's name is returned instead of the primary one,
+-- so the promotion sees the match and the player hears the name of the thing they came for.
+-- `comp_name` (optional) is the member holding the FieldItemTableComponent; wild animals carry it
+-- as `FieldItemTable` (AnimalMob_Pawn_C, live reflection 2026-11-09), pickups as the default.
+function Nav._drop_item_name(a, strict, req, comp_name)
     local raw
+    local slugs = {}
     pcall(function()
-        local comp = Core.member(a, "ItemTableComponent", strict)
+        local comp = Core.member(a, comp_name or "ItemTableComponent", strict)
         if not (Core.valid(comp)) then return end
         -- STRICT with the caller: on the map-icon path the component's own class is
         -- whatever the game map-icons, and a fail-open fetch of an undeclared member is
@@ -2933,10 +3028,19 @@ function Nav._drop_item_name(a, strict)
         for _, fld in ipairs({ "FixedId", "NormalId" }) do
             -- FName members of the struct: read them as names, never IsValid them.
             local s = Core.name_str(d[fld])
-            if s and s ~= "None" then raw = s return end
+            if s and s ~= "None" then
+                slugs[#slugs + 1] = s
+                raw = raw or s
+            end
         end
     end)
     if not raw then return nil end
+    if req then
+        for _, s in ipairs(slugs) do
+            local wanted = Nav._wanted_drop_name(s, req)
+            if wanted then return wanted end
+        end
+    end
     -- THE GAME'S OWN LOCALIZED NAME FIRST (2026-08-19). `raw` is the drop-table row key,
     -- which the generated map turns into the numeric item id the message table is keyed by
     -- -- so a collection point announces "Fruta namekuseijin" instead of the class-derived
@@ -3024,7 +3128,17 @@ function Nav._quest_req()
     end
     if req then Nav.qreq_gone_at = nil end
     local prev = Nav.qreq
-    if req and prev and req.name == prev.name and req.got ~= prev.got then
+    -- The pickup edge is judged over EVERY open row (req.all), because the radar may be guiding to
+    -- the second or third item of the checklist: the same rows with a different count is a
+    -- pickup; a different set of rows is a different question.
+    local function sig(r, counts)
+        local t = {}
+        for _, x in ipairs((r and r.all) or (r and { r }) or {}) do
+            t[#t + 1] = counts and (x.name .. ":" .. tostring(x.got)) or x.name
+        end
+        return table.concat(t, "|")
+    end
+    if req and prev and sig(req) == sig(prev) and sig(req, true) ~= sig(prev, true) then
         -- Timestamped, and it ARMS a boxed rebuild rather than invalidating the snapshot: nilling
         -- `targets_snap_at` would push the next explore_rescan into the SYNCHRONOUS
         -- `Nav.targets_cached()` path, which is a 0.4-1.2 s sweep on the game thread. The
@@ -3032,7 +3146,7 @@ function Nav._quest_req()
         -- gathered before the pickup is simply not elected from.
         Nav.qreq_bump, Nav.qreq_miss, Nav.qreq_missn = os.clock(), nil, nil
         Nav.targets_want = true
-    elseif (req and req.name) ~= (prev and prev.name) then
+    elseif sig(req) ~= sig(prev) then
         -- A DIFFERENT item is being asked for (or none at all): whatever the last search concluded
         -- was about the old one, so the travel wait must not carry over to the new question.
         Nav.qreq_miss, Nav.qreq_missn = nil, nil
@@ -3092,7 +3206,7 @@ function Nav._quest_item_target(px, py, pz)
     -- a rebuild. A pending bump deliberately skips this branch: "re-elect" is precisely how the
     -- radar advances to the next item.
     if not bump and not forced and target and target.questitem
-        and Nav._wants_item(req.name, target.questitem)
+        and Nav._req_row(req, target.questitem)
         and Core.valid(target.actor) and not Nav._actor_hidden(target.actor)
         and not Nav._point_taken(target.actor, target.stateful) then
         return target
@@ -3132,17 +3246,19 @@ function Nav._quest_item_target(px, py, pz)
                 -- Items come sorted nearest-first, so the first match IS the nearest one, and
                 -- "advance to the next as each is collected" needs no state of its own: the taken
                 -- one is filtered out of the rebuilt sweep and the next one wins this loop.
-                if it.qitem and Core.valid(it.actor)
+                -- Any open row counts (req.all): the nearest wanted item wins, whichever row of the
+                -- checklist it belongs to, and its OWN counts go into the label.
+                local row = it.qitem and Nav._req_row(req, it.name)
+                if row and Core.valid(it.actor)
                     and not Nav._actor_hidden(it.actor)
-                    and not Nav._point_taken(it.actor, it.stateful)
-                    and Nav._wants_item(req.name, it.name) then
+                    and not Nav._point_taken(it.actor, it.stateful) then
                     Nav.qreq_bump, Nav.qreq_miss, Nav.qreq_missn = nil, nil, nil
                     -- `homegrp` is the group the collectible would have been in but for the
                     -- promotion. The arrival radius needs it: a fruit patch is a spawner VOLUME
                     -- whose origin sits meters from the orbs, which is why "gathering" arrives
                     -- wide, and the promotion must not lose that by renaming the group.
                     return { actor = it.actor, key = it.key, pri = pri, grp = "quests",
-                             label = string.format("%s (%d/%d)", it.name, req.got, req.need),
+                             label = string.format("%s (%d/%d)", it.name, row.got, row.need),
                              stateful = it.stateful, questitem = it.name, homegrp = it.homegrp }
                 end
             end
@@ -3553,11 +3669,9 @@ function Nav.list_targets(boxed)
     -- add_target, which every source calls. `Nav._quest_req` is the shared, per-tick-cached
     -- reader (the auto-track election asks the same one), and it is optional by construction --
     -- with the quest module unavailable it answers nil and the sweep behaves exactly as before.
-    local want_item
-    do
-        local req = Nav._quest_req()
-        want_item = req and req.name
-    end
+    -- `want_req` is the whole requirement (every open checklist row in req.all), so a spot or an
+    -- animal that can drop ANY still-wanted item is promoted, not only the first row's.
+    local want_req = Nav._quest_req()
 
     local seen = {}
     local groups = {}
@@ -3631,11 +3745,13 @@ function Nav.list_targets(boxed)
         -- Only the two collectible families are promotable, which is exactly the set add_icon
         -- resolves names for.
         local home
-        if want_item and name and (grp == "gathering" or grp == "collectibles")
-            and Nav._wants_item(want_item, name) then
+        -- "hunt" joined 2026-11-09: a wild animal is named by its drop ONLY when that drop is a
+        -- still-wanted quest item (see section 5b), so the group gate stays as tight as before.
+        if want_req and name and (grp == "gathering" or grp == "collectibles" or grp == "hunt")
+            and Nav._req_row(want_req, name) then
             home, grp = grp, "quests"
-            if Nav.qreq_logged ~= want_item then
-                Nav.qreq_logged = want_item
+            if Nav.qreq_logged ~= name then
+                Nav.qreq_logged = name
                 print(string.format("[KakarotAccess] nav quest item promoted: %s (was %s, src=%s)\n",
                     tostring(name), tostring(home), tostring(src)))
             end
@@ -3681,7 +3797,9 @@ function Nav.list_targets(boxed)
             -- enemies) use the tight cap precisely because beyond it lies the game's
             -- parked preload pool (Trunks km away resurfaced through the rescue,
             -- user 2026-07-06) — never rescue those.
-            if src ~= "questchar" and src ~= "collectible" and src ~= "enemy" then
+            -- "teacher" (full-course NPCs) is a QuestCharacter too, so it shares the parked-pool
+            -- exclusion; it only gets the wider map cap, since a town spans more than 300 m.
+            if src ~= "questchar" and src ~= "collectible" and src ~= "enemy" and src ~= "teacher" then
                 dropped[grp] = dropped[grp] or {}
                 dropped[grp][#dropped[grp] + 1] = item
             end
@@ -3729,7 +3847,7 @@ function Nav.list_targets(boxed)
         -- costs nothing on the shops/sites/fishing icons that share this scan. STRICT as well,
         -- because the icon's owner is whatever the game map-icons and an ungated fetch of an
         -- undeclared member is the uncatchable abort rather than a nil.
-        local name = stateful and Nav._drop_item_name(actor, true) or nil
+        local name = stateful and Nav._drop_item_name(actor, true, want_req) or nil
         add_target(actor, grp, noun, range, src, name, stateful)
     end
 
@@ -3853,7 +3971,24 @@ function Nav.list_targets(boxed)
             for _, npc in pairs(Nav.SW.class_list(cls)) do
                 if Core.valid(npc) and npc_present(npc) and not npc_seen[tostring(npc:GetAddress())] then
                     npc_seen[tostring(npc:GetAddress())] = true
-                    add_target(npc, "npc", "cat_npc", nil, "questchar", npc_name(npc), nil, true)
+                    local who = npc_name(npc)
+                    add_target(npc, "npc", "cat_npc", nil, "questchar", who, nil, true)
+                    -- FULL-COURSE MEAL TEACHERS (2026-11-09): the same NPC again, in its own group,
+                    -- named with the recipe(s) it teaches in the game's own words.
+                    do
+                        local ctok, CT = pcall(require, "char_types")
+                        local courses = ctok and CT and CT.talk_param_id
+                            and Nav._course_teacher(CT.talk_param_id(Core, npc)) or nil
+                        if courses then
+                            local names = {}
+                            for _, num in ipairs(courses) do
+                                names[#names + 1] = Nav._message_text("Item_" .. num .. "_Name")
+                            end
+                            add_target(npc, "courses", "cat_course_teacher", nil, "teacher",
+                                Core.phrase(who or I18n.t("cat_course_teacher"),
+                                    table.concat(names, ", ")), nil, true)
+                        end
+                    end
                     if iddump then
                         local addr = tostring(npc:GetAddress())
                         if not id_seen[addr] then
@@ -4058,7 +4193,7 @@ function Nav.list_targets(boxed)
                         end
                     end
                     local name = (c.action and action_name(a))
-                        or (c.item and drop_item_name(a, c.strict_item)) or nil
+                        or (c.item and drop_item_name(a, c.strict_item, want_req)) or nil
                     -- QUEST ITEM PROMOTION (2026-08-19). A collectible the active quest is still
                     -- asking for moves into the QUESTS group: that group has no distance cap, so
                     -- the item is findable from wherever the quest marker dropped the player,
@@ -4173,7 +4308,23 @@ function Nav.list_targets(boxed)
                 if not (hidden == true or hidden == 1) then
                     -- Wild animals are HUNT targets (prey), not combat enemies — their own
                     -- category so the deer/wolves/dinos/dragons don't clutter "Enemies".
-                    add_target(a, "hunt", animal_species(a) or "cat_animal", nil, "enemy")
+                    -- QUEST DROPS (2026-11-09, Goku's antidote sub-story wants a golden-gazelle
+                    -- antler): while a collection quest is open, name the animal by the wanted
+                    -- item it can drop, so add_target promotes it into Quests. Only then — an
+                    -- animal is never spoken as its meat otherwise. STRICT: `FieldItemTable` is
+                    -- declared by the AnimalMob_Pawn_C blueprint, not by the native base the
+                    -- first scan returns, and an undeclared fetch is the uncatchable abort.
+                    local qname = want_req
+                        and Nav._drop_item_name(a, true, want_req, "FieldItemTable") or nil
+                    if qname and not Nav._req_row(want_req, qname) then qname = nil end
+                    local species = animal_species(a) or "cat_animal"
+                    -- A rare (golden) animal says so in the list. animal_species ran first, so the
+                    -- component class it resolves is cached for animal_rare.
+                    local label = qname
+                    if not label and animal_rare(a) then
+                        label = string.format(I18n.t("animal_rare_fmt"), I18n.t(species))
+                    end
+                    add_target(a, "hunt", species, nil, "enemy", label)
                 end
             end
         end

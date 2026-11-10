@@ -145,7 +145,15 @@ local function row_line(host, member)
     if not Core.on_screen(row) then return nil end
     local obj = read_clean(Core.member(row, "Txt_List_00"))
     if not obj then return nil end
-    return Core.phrase(obj, read_clean(Core.member(row, "Txt_List_01"))), obj
+    local second = read_clean(Core.member(row, "Txt_List_01"))
+    -- A collection row puts its counter in Txt_List_00 and the item in Txt_List_01, so it was read
+    -- "17/3, Hierba de alta calidad, 0/4, Caracol…" -- which count goes with which item is
+    -- ambiguous by ear. Speak the item first and glue its own count to it (2026-11-09). Decided BY
+    -- CONTENT, like requirement_from; the signature (second return) is unchanged.
+    if second and obj:match("^%s*%d+%s*/%s*%d+%s*$") then
+        return second .. " " .. obj, obj
+    end
+    return Core.phrase(obj, second), obj
 end
 
 -- WHAT THE ACTIVE QUEST STILL NEEDS YOU TO COLLECT (2026-08-19, user request: the radar sends
@@ -180,7 +188,14 @@ end
 -- `kind` ("main"/"sub") is carried out with the answer because the radar's auto-track must not
 -- drift off the quest the player is on: `preempt.focus` is a standing MAIN-or-SUB context, and an
 -- item requirement belonging to the other group has to be declined rather than tracked.
+--
+-- EVERY unfinished row, not just the first (2026-11-09, player report: Goku's antidote sub-story
+-- asks for herbs, river snails AND a golden-gazelle antler, and only the first open row was ever
+-- looked for). The first row stays the answer's own name/got/need -- the pickup-edge and hold
+-- logic in nav_tracker key on it -- and `all` lists every open row of the SAME group, first
+-- included, so the radar can promote and elect whichever wanted item is nearest.
 local function requirement_from(host, rows, kind)
+    local first, all = nil, {}
     for _, m in ipairs(rows) do
         local row
         -- STRICT, for the same reason row_line is: these members are not declared on every host
@@ -199,11 +214,14 @@ local function requirement_from(host, rows, kind)
             -- A finished row (got == need) is skipped on purpose: the caller wants the thing
             -- still to fetch, and the turn-in marker is the right target once the count is met.
             if name and got and need and got < need then
-                return { name = name, got = got, need = need, kind = kind }
+                local r = { name = name, got = got, need = need, kind = kind }
+                all[#all + 1] = r
+                first = first or r
             end
         end
     end
-    return nil
+    if first then first.all = all end
+    return first
 end
 
 -- `prefer` ("main"/"sub", optional) asks the OTHER group first. On-screen order puts main before

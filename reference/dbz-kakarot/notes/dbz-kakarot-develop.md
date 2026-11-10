@@ -135,6 +135,20 @@ Not covered:
   which is cleared; with no uncleared training to compare, it is not spoken.
 - `fm.ShopTraining02..05` (other training layouts: two-enemy, score, skill). No census yet, so
   not mapped (no speculative class names).
+- **Bonyu's special training: player-reported fully silent (2026-11-09), not reproduced.** It is
+  a "Super Training" (`ESuperTrainingType::SuperTraining`, AT_enums.hpp:9368), run by a
+  `USuperTrainingComponent` on the NPC (AT.hpp:43616). That component owns its OWN `ShopTop`,
+  `StartPartyMenu`, `SkillCustomize` and `SkillTreeMenu` instances, which no directory root
+  reaches. So outside the hot window the mapped chains answer "absent", which would explain the
+  silence. The tester's save carries the pre-order add-on "Desbloqueo anticipado: Bonyu". This
+  install does not own it (title: "Se perdieron los datos de este complemento"), and
+  `findall SuperTrainingComponent` found none in Area09, so the screen could not be opened here.
+  What would settle it: the tester's `UE4SS.log` after opening it. A line
+  `directory: <Class> found by scan with a null owner` names the class, and the hot-window scan
+  logs it by itself. The fix is then a gated fallback like `screen_party.shop_party()`. The layouts
+  `UAT_UIShopTraining02..05` (AT.hpp:35996-36120) mirror `01`: `Xlist_List05_Lay7`, enemies
+  `Txt_Name_E0n`, goals `Txt_Task_Detail0n`, `Txt_Detail`. `fm.ShopTraining02..05` exist
+  (AT.hpp:32918+).
 - The game-over menu after losing a training battle ("Reintentar" / "Abandonar el
   entrenamiento") is read, but in one run it ignored every confirm (pad A, Enter, Start) and the
   game had to be killed. Not reproduced; watch for it.

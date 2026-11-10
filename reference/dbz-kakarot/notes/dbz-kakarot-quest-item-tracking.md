@@ -163,3 +163,53 @@ all, and its absence is the first thing to check.
 - **Optional refinement, still not built:** hook `UAT_UIQuestNavigation::SetSubQuestCollectionNum` /
   `SetMainQuestCollectionNum` for an instant pickup edge instead of noticing the counter on the
   next poll.
+
+## 2026-11-09: every drop, every row, and hunted animals (verified live in part)
+
+Player report: Goku's sub-story *Accidente Animorfalino* (`Sub_Cpl001_01`, Cell saga, the
+antidote quest) had "no markers and the items are not in the tracker". The HUD row was
+`17/3 Hierba de alta calidad, 0/4 Caracol de río carnoso, 0/1 Asta de gacela dorada`. Tester save,
+measured with the new dev commands `items <text>`, `drops <slug>`, `spawners`.
+
+**Why it found nothing, three separate causes:**
+
+1. **The game sets no marker.** `QuestManager.NavigatedSubQuestId = None`, and the R3 picker had no
+   *Misiones* group at all. A collection phase (`QuestPhase_GetItem`) shows nothing on the map, so
+   the item promotion is the only guidance there is. Pressing the quest menu's "A: Navegación"
+   did not change `NavigatedSubQuestId`.
+2. **The name table held only the earliest drop.** `Lost_Snail_01` (the river pickups,
+   `LostPropertyItem_R_C`) mapped to item 36015 "Camarón de río", its episode-1 drop, and never
+   matched the snail (36019) it gives in the Cell saga. Fix: the generator now also writes
+   `item_drop_alts.lua` (660 slugs, every other id any slot/episode/table can drop), and
+   `Nav._drop_item_name(a, strict, req)` returns the WANTED alternate when there is one.
+3. **Only the first open row was ever wanted.** `item_requirement()` now carries `all` (every
+   unfinished row of the same group). Promotion, hold and election match any row through
+   `Nav._req_row`, and the label uses that row's own counts. The pickup edge compares the counts of
+   all rows (`sig` in `Nav._quest_req`).
+
+**Verified live 2026-11-09:** after the fix the radar auto-tracked *"Rastreando Caracol de río
+carnoso (0/4)"* at 9 m, 511 m and 2974 m (log: `nav quest item promoted: Caracol de río carnoso`).
+Pickups read `bHidden = true` while the pause menu is open and `false` once it closes, at any
+distance tested; that is not a distance cull.
+
+**The antler (coded, not played):**
+
+- Only gazelles whose drop slug can yield 53017 give it: `DLC03_Area02_Animal_GoldGazelle_02`
+  (primary), `..._02_Fixed` and `DLC03_Area06_Animal_GoldDeer_01` (alternates). The base
+  `Animal_GoldGazelle_Fixed` drops meat (31009) only.
+- Guides: a golden gazelle appears at random inside an ordinary gazelle herd (East Ravine,
+  Central Plains, Continent Center, Blake Bog...).
+- Wild animals carry their drop on `AnimalMob_Pawn_C.FieldItemTable` (a `FieldItemTableComponent`,
+  live reflection), not `ItemTableComponent`. Section 5b of the sweep now names an animal by a
+  WANTED drop only, and the promotion gate accepts `hunt`. A promoted animal arrives with the wide
+  radius and the plain "arrived" line, never "you can pick it up".
+- Animals exist only while the player is inside their spawn volume (`AAnimalSpawnerVolume*`,
+  `AnimalSpawnData[].ClassToSpawn`). `spawners` lists the loaded ones; only four bird volumes were
+  loaded in Area09, so the volume cannot be targeted from afar yet.
+- Rare animals now read "<species> (ejemplar raro)" in *Caza*, from
+  `UAnimalComponentBase.RareFlag`, so the golden one can be picked out of a herd.
+
+**Still to hear:** walk into a gazelle herd with the quest open. A golden gazelle must appear in
+*Caza* as rare. If its slug can drop the antler, it must also move to *Misiones* as *"Asta de gacela
+dorada (0/1)"*. If it never moves, its slug is one of the meat-only ones and the antler comes from
+quest logic instead (look for `QuestPhase_Hunting`).

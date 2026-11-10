@@ -234,6 +234,22 @@ function M.talk_speaker_id(Core, actor)
     return nil
 end
 
+-- The talk ROW the NPC is currently set to, `UNpcTalkComponent.m_talkParamId` (FString, AT.hpp
+-- +0x110; read live 2026-08-19 as `Sub_Npc086_01_Npc086_03`). This is the NpcTalkParam talk_id
+-- space, which is how the generated course_teachers.lua recognises a full-course-meal teacher
+-- (2026-11-09). Same component, same STRICT multi-candidate gate as talk_speaker_id above.
+function M.talk_param_id(Core, actor)
+    if not Core or actor == nil then return nil end
+    for _, cn in ipairs(TALK_COMPONENTS) do
+        local comp = Core.member(actor, cn, true)
+        if Core.valid(comp) then
+            local id = Core.name_str(Core.member(comp, "m_talkParamId", true))
+            if id and id ~= "" and id ~= "None" then return id end
+        end
+    end
+    return nil
+end
+
 -- FALLBACK for the ENEMY branch: derive the message-table id from the BLUEPRINT CLASS NAME.
 --
 -- WHY IT IS NEEDED (2026-08-18, measured live). `speakerID` answers on QuestCharacter but is an
