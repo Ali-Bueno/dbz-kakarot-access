@@ -93,8 +93,13 @@ See [BUILD.md](BUILD.md) for the exact layout
 **Navigation radar**
 - A directional 3‑D audio beacon that tracks your current quest objective and plays an arrival cue,
   auto-resuming after battles.
-- A target picker (**R3**) to lock onto anything tracked, sorted by category: **Quests, Collectibles,
-  Characters, Companions, Enemies, Sites, Fishing, Gathering, Shops, Minigames, Dragon Balls**.
+- A target picker (**R3**) to lock onto anything tracked, sorted by category: **Quests, Exits,
+  Collectibles, Characters, Full-course meals, Companions, Enemies, Hunt, Sites, Fishing, Gathering,
+  Shops, Minigames, Dragon Balls**.
+- **Full-course meals** lists the characters nearby who teach a full-course recipe, with the recipe
+  they teach.
+- Items a quest asks you to collect or hunt are tracked under **Quests**, every open row of the
+  list, including rare animals (announced as "rare" under **Hunt**).
 - Enemy announcements include the enemy's **level**.
 - Auto-retargets when the objective changes, and auto-advances through gathering points as you take
   them.

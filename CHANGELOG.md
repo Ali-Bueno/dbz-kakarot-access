@@ -2,6 +2,30 @@
 
 ---
 
+## v0.1.13 - November 10, 2026
+
+**The radar now finds every item a side story asks you to collect, and a new radar category
+points you to the characters who teach full-course meals.** Both came from a player report.
+
+### Quest items
+
+- Goku's antidote side story ("Animorphaline Accident") asks for herbs, river snails and a
+  golden gazelle antler. The radar found none of them. The snails now show up under Quests
+  and the radar takes you there from far away.
+- Every unfinished item of a quest list is looked for now, not only the first one.
+- The objective reads the item before the count: "Meaty River Snail 0/4".
+- Rare animals are announced as "rare" in the Hunt category. When a rare animal can drop
+  an item your quest needs, it moves to Quests. Not checked in game yet: the golden gazelle.
+
+### Full-course meals
+
+- New category in the R3 picker: **Full-course meals**. It lists the characters nearby who
+  teach a full-course recipe, with the recipe they teach. It covers 14 of the 16 recipes:
+  the basic meat one is a main-story gift and the steak one comes from a DLC event, so
+  nobody teaches them.
+- Only characters the game has loaded show up, within 1 km, so go to their area first.
+- Not checked in game yet. If the category never appears near a teacher, please tell us.
+
 ## v0.1.12 - October 21, 2026
 
 **The training room at Capsule Corp and the rest of Bulma's machine menus now read aloud.** A
