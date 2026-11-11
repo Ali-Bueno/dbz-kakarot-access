@@ -2,6 +2,21 @@
 
 ---
 
+## v0.1.14 - November 11, 2026
+
+**Four things from one player report.** None of them has been checked in game yet.
+
+- **Full-course meals** listed nobody. The characters who teach the recipes are ordinary
+  townsfolk, and the radar was only looking at story characters. They are listed now, at any
+  distance inside their area. The seven DLC teachers each name their own recipe.
+- New radar category: **Villainous enemies**. It lists the villainous enemies that are out in
+  the area, from any distance, with name and level. The world map also says "villainous
+  enemies" after the name of an area that has them, like it does for Dragon Balls.
+- New radar category: **Mining**. Each deposit names the ores it can give, so you can pick the
+  ones with refined iron, silver or gold. Rare deposits say so.
+- **Whis's training** (A New Power Awakens): the training lists now read the selected training,
+  the recommended level, the enemy, the goals, the rewards and the description.
+
 ## v0.1.13 - November 10, 2026
 
 **The radar now finds every item a side story asks you to collect, and a new radar category
