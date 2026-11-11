@@ -48,6 +48,12 @@ module("ui_core", {
     valid = function(o) return type(o) == "table" and o.valid == true end,
     valid_ref = function(o) return type(o) == "table" end,
     member = function(o, key) return o and o[key] end,
+    name_str = function(v) return type(v) == "string" and v or nil end,
+    phrase = function(...)
+        local parts = {}
+        for _, p in ipairs({ ... }) do if p and p ~= "" then parts[#parts + 1] = p end end
+        return table.concat(parts, ", ")
+    end,
     array_of = function(o, key)
         local a = o and o[key]
         if a then return a, #a end
@@ -243,6 +249,60 @@ mm.MapIconList = {}
 check(Nav._dragonball_available(ball) == false,
     "removal from a readable marker list retires a still-live pickup")
 mm.MapIconList = { icon }
+
+-- Villainous enemies share the native marker path (2026-11-11): the game registers EMapIcon
+-- 30/31/34/35 on the spawned enemy itself, which has no ATMapIconComponent. The marker is the
+-- authority, so bHidden is deliberately not consulted.
+local villain = object("AT_Character_c059_BP_C", { x = 400000, bHidden = true })
+local villain_icon = marker(villain, 30)
+local villain_boss = object("AT_Character_c060_BP_C", { x = 500000, bHidden = true })
+mm.MapIconList = { icon, villain_icon, marker(villain_boss, 31) }
+items = group("villainous")
+check(#items == 2 and items[1].actor == villain and items[1].noun == "cat_villainous",
+    "a villainous marker 4 km away on a component-free actor is listed")
+check(#items == 2 and items[2].noun == "cat_villainous_boss",
+    "the villainous boss marker carries its own noun")
+check(#group("dragonball") == 1 and #group("enemies") == 0,
+    "villainous markers join neither the Dragon Balls nor the ordinary enemies")
+check(Nav._villain_available(villain) == true, "a listed villainous marker is available")
+release(villain_icon)
+check(#group("villainous") == 1, "a beaten enemy's released marker is no longer listed")
+check(Nav._villain_available(villain) == false,
+    "a released marker in a readable list means the enemy is beaten")
+native_unreadable = true
+check(Nav._villain_available(villain) == nil, "an unreadable marker list is not proof of defeat")
+native_unreadable = false
+restore(villain_icon, villain)
+villain_icon.WL_Icon_ImgSw.bytes[0x398] = 34
+check(#group("villainous") == 2, "the second villainous icon type is recognised too")
+mm.MapIconList = { icon }
+
+-- Mineral deposits have their own category: the ORE map marker no longer sits in Gathering.
+local deposit = object("MineralMiningMapIconGroup_C", { x = 5000 })
+deposit.component = object("ATMapIconComponent", { MapIconType = 8, bShowMapIcon = true })
+function deposit.component:GetOwner() return deposit end
+pool.ATMapIconComponent = { shop.component, deposit.component }
+items = group("mining")
+check(#items == 1 and items[1].actor == deposit and items[1].noun == "cat_ore",
+    "an ore deposit marker is listed under Mining")
+check(#group("gathering") == 0, "and no longer under Gathering")
+pool.ATMapIconComponent = { shop.component }
+
+-- Full-course teachers are static townsfolk (StandStaticMob_C), not QuestCharacters: one is
+-- listed by its talk id at any distance, and the other townsfolk stay out of the radar.
+local teacher = object("StandStaticMob_C", { x = 250000, bHidden = false,
+    NPCTALK = object("NpcTalkComponent", { m_talkParamId = "C1m13041_mad0001s" }) })
+local passerby = object("StandStaticMob_C", { x = 1000, bHidden = false,
+    NPCTALK = object("NpcTalkComponent", { m_talkParamId = "C1m02011_mad0001s" }) })
+pool.AT_MobBase = { teacher, passerby }
+pool.NpcBase_C = { teacher, passerby }
+items = group("courses")
+check(#items == 1 and items[1].actor == teacher,
+    "a townsfolk mob whose talk id teaches a course is listed once, 2.5 km away")
+teacher.bHidden = true
+check(#group("courses") == 0, "a hidden teacher is not listed")
+teacher.bHidden = false
+pool.AT_MobBase, pool.NpcBase_C = nil, nil
 
 -- Exercise the real game-tick consumer too: a correct list alone must not leave
 -- the beacon tracking a live actor after the game removes its marker.

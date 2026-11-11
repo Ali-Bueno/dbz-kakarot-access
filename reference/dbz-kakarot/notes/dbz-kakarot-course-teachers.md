@@ -20,39 +20,83 @@ NpcTalkParam's `talk_event` / `quest_item_param_id` play no part: no table conta
 `COOKING` talk event. The shared parser in `dump_drop_item_ids.py` needed `StrProperty` and
 `EnumProperty` for these tables. Its own output was re-checked byte-identical after the change.
 
-Result: 14 of 16 courses have a teacher. That is 9 mini-quest NPCs (the DLC3 vendor teaches seven
-by itself) plus 6 sub-quests (`Sub_Cooking_01..04`, `Sub_Cpl032_01`, `Sub_Cpl041A_01`).
+Result: 14 of 16 courses have a teacher. That is 8 mini-quest NPCs, 7 DLC3 mobs (one course
+each) and 6 sub-quests (`Sub_Cooking_01..04`, `Sub_Cpl032_01`, `Sub_Cpl041A_01`).
 `Receta de plato de carne` (96001) is a main-story gift and 96016 a DLC event command; neither has
 an NPC to point at. The DLC3 drone shop also sells eight courses.
+
+## Why v0.1.13 listed nobody (found 2026-11-11, from the paks)
+
+Player report: "the locations of the full course meals characters don't show up". The talk-id
+rule was right; the scan was looking at the wrong class.
+
+- Every mini-quest teacher is a **static townsfolk mob**: `StandStaticMob_C` (one, C1m09, is
+  `SitStaticMob_C`) < `Mob00_BP_C` < `NpcBase_C` < `AAT_MobBase`. None is an `AQuestCharacter`,
+  and the teacher test ran only inside the QuestCharacter scan.
+- The talk component is on the mob itself: `StandStaticMob_C.NPCTALK` @0x428
+  (`CXXHeaderDump/StandStaticMob.hpp`). Its `m_talkParamId` is baked into the quest sublevel and
+  is an exact `NpcTalkParam.talk_id` (`C01_MNQ_13_Mob` holds `C1m13041_mad0001s`). The quest
+  Blueprint can swap it with `ChangeMobTalkID` (AT.hpp:41329).
+- How it was read: the quest sublevels (`Maps/AreaNN/Quest/AREAnn_C0c_MNQ_xx.umap`) parsed with
+  the `Package` reader in `tools/item-ids/dump_drop_item_ids.py`.
+- DLC3 is **seven mobs, one course each** (`D3_Recipe_Mob_01..07`, talk ids
+  `D3m09010..016_mad0001s`), not one vendor. The old key `D3m09|mad0001s` gave all seven
+  recipes to each of them.
 
 ## How the mod recognises a teacher
 
 - `UniqueId` is useless here: it is only `NpcNNN` / `CplNNN` ([NPC names](dbz-kakarot-npc-names.md)).
-- The NPC's talk component carries `m_talkParamId` (`UNpcTalkComponent` +0x110, an FString; read
-  live 2026-08-19 as `Sub_Npc086_01_Npc086_03`). That is the talk_id space.
-  `char_types.talk_param_id` reads it through the same strict two-spelling gate as
-  `talk_speaker_id` (`NPCTALK` / `NpcTalkComponent`).
-- **Mini-quest ids** look like `C1m13041_mad0001s`: chapter 1, mini-quest 13, step 04, then the
-  actor code. The same NPC speaks other steps under other ids (`C1m13011_mad0001s`), plus variants
-  (`_p1`, `_Clear`), so the key is `C1m13|mad0001s`.
-- **Sub-quest ids** are keyed by quest prefix (`Sub_Cooking_01`).
-- `Nav._course_teacher` applies both rules. They must stay identical to the generator's
-  `MNQ_RE` / `SUB_RE`; `tools/tests/test_quest_item_alts.lua` pins them.
-- Each match is listed a second time, in the new group `courses` (after `npc`), as
-  "<name or 'maestro de cocina'>, <recipe names>". The recipe names come from `Item_<id>_Name`.
-- The cap is 1000 m (`src = "teacher"`: map cap, not the 300 m NPC cap, because a town is wider).
-  A teacher is not rescued past that, for the same parked-pool reason as other NPCs.
+- The talk component's `m_talkParamId` (`UNpcTalkComponent` +0x110, an FString) is the key.
+  `char_types.talk_param_id` reads it. A `StandStaticMob_C` is read as an ordinary fetch (its
+  header declares `NPCTALK`); any other class goes through the strict two-spelling probe
+  (`NPCTALK` / `NpcTalkComponent`), which waits for the property-set budget.
+- **Mini-quest ids** look like `C1m13041_mad0001s`: chapter 1, mini-quest 13, step 04, then a
+  shared actor code (`mad0001s` is not an identity; dozens of quests reuse it). The key is
+  `C1m13|mad0001s`, so any step matches.
+- **Step keys** (`step` table) are used where one such key would cover several teachers:
+  `D3m09010|mad0001s`. The generator decides: a key whose steps teach different courses is split.
+- **Sub-quest ids** are keyed by quest prefix (`Sub_Cooking_01`). Their mobs get the talk id at
+  runtime from the quest Blueprint, so they only match while the quest runs.
+- `Nav._course_teacher` applies the three rules. They must stay identical to the generator's
+  `STEP_RE` / `MNQ_RE` / `SUB_RE`; `tools/tests/test_quest_item_alts.lua` pins them.
+- The radar scans `AT_MobBase` (already swept for animals) and `NpcBase_C`, skips animals and
+  hidden mobs, and lists only a mob whose talk id matches (`nav_tracker.lua`, section 5b2). The
+  other townsfolk stay out of the radar. QuestCharacters are still tested as before.
+- A mob teacher takes **no distance cap**: it is level-placed, so every teacher of the loaded
+  area is listed. Label: "maestro de cocina, <recipe names>" (`Item_<id>_Name`).
 
-## Unverified — the first live test
+## Where each teacher is (from the paks)
 
-Nothing here has run in game. Things to settle, in order:
+Area names are the game's `Area_NN` messages (es_MX shown). Positions are the actor's
+translation inside its sublevel; the sublevel transform is unverified.
 
-1. Does a mini-quest NPC actually carry `m_talkParamId` with its `C#m#####_xxx####s` id while idle?
-   Stand in Orange City or near a teacher a guide names and open R3 → *Platos completos*. If the
-   group never appears, read the component of a nearby NPC (`kak_class` /
-   `findall NpcTalkComponent`) to see what the field holds. The rule may need the id the NPC uses
-   BEFORE its mini-quest starts.
-2. The group keeps listing a teacher after the recipe is learned. There is no inventory check;
-   decide from use whether that matters.
-3. Only teachers in the loaded world appear, within 1 km. The area each one lives in is in the
-   trade ids (`AREA04_C01_MNQ_13`), but area numbers are not yet mapped to the game's area names.
+| Recipe | Key | Area | Position |
+|---|---|---|---|
+| 96002 ramen | `C1m13` mad0001s | 04 llanuras centrales (the same mini-quest starts in 01) | -243362, 88260, -11973 |
+| 96003 pasta | `C1m09` mag0001s | 04 llanuras centrales | -200840, 207770, -11697 |
+| 96005 ramen y arroz | `C1m36` mad0001s | 03 montañas del sudeste | 108583, -213200, 1150 |
+| 96007 mariscos de lujo | `C3m54` mad0002s | 07 oeste | 64408, 232018, -354 |
+| 96008 pasta de lujo | `C3m42` fag0001s | 03 montañas del sudeste | 110745, -212339, 1150 |
+| 96009 carne especial | `C3m54` fag0001s | 05 islas del extremo sur | 114534, -70859, 1498 |
+| 96010 ramen especial | `C3m17` fad0001s | 07 oeste | 106920, 127924, 693 |
+| 96012 súper mariscos | `C4m66` fch0001s | 05 islas del extremo sur | 117783, -71381, 1498 |
+
+- The `C1m` / `C3m` / `C4m` prefix is the chapter whose sublevel holds the mob, so a teacher is
+  absent before its chapter. The exact streaming condition was not found.
+- DLC3 mobs: recipe 01 → 96002 and 03 → 96005 (Area07/35/40), 02 → 96003 and 05 → 96009
+  (Area03), 04 → 96007 and 07 → 96012 (Area02), 06 → 96010 (Area06).
+- Sub-quests: `Sub_Cooking_01..04` in Area03, `Sub_Cpl032_01` in Area02, `Sub_Cpl041A_01` in
+  Area03 and Area18.
+
+## Unverified
+
+Nothing here has run in game. To settle on the first live test:
+
+1. Stand in the central plains (Area04) in chapter 1 or later and open R3 → *Platos completos*.
+   Two teachers should be listed (ramen, pasta).
+2. If only the ramen one appears, `SitStaticMob_C` does not name its component `NPCTALK`;
+   read it with `kak_class SitStaticMob_C`.
+3. If neither appears, check whether `FindAllOf("AT_MobBase")` or `NpcBase_C` returns the
+   static mobs at all (`kak_dev navdump`).
+4. The group keeps listing a teacher after the recipe is learned. There is no inventory check.
+5. `C1m13` also matches the Area01 mob that starts that mini-quest; it does not teach.

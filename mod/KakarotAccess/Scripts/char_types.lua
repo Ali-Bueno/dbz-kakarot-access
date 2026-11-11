@@ -238,8 +238,17 @@ end
 -- +0x110; read live 2026-08-19 as `Sub_Npc086_01_Npc086_03`). This is the NpcTalkParam talk_id
 -- space, which is how the generated course_teachers.lua recognises a full-course-meal teacher
 -- (2026-11-09). Same component, same STRICT multi-candidate gate as talk_speaker_id above.
-function M.talk_param_id(Core, actor)
+-- `known` (optional): the component member this actor's class is KNOWN to declare (from its
+-- header). It is then an ordinary fetch, not a probe, so it does not wait for the per-tick
+-- property-set budget: a sweep over a town of mobs reads them all on its first pass.
+function M.talk_param_id(Core, actor, known)
     if not Core or actor == nil then return nil end
+    if known then
+        local comp = Core.member(actor, known)
+        if not Core.valid(comp) then return nil end
+        local id = Core.name_str(Core.member(comp, "m_talkParamId"))
+        return (id and id ~= "" and id ~= "None") and id or nil
+    end
     for _, cn in ipairs(TALK_COMPONENTS) do
         local comp = Core.member(actor, cn, true)
         if Core.valid(comp) then

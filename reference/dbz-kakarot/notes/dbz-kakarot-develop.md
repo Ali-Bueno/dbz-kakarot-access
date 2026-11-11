@@ -133,8 +133,10 @@ Not covered:
 
 - `Icon_Clear` (the "cleared" stamp on a training) is on screen for the save's one training,
   which is cleared; with no uncleared training to compare, it is not spoken.
-- `fm.ShopTraining02..05` (other training layouts: two-enemy, score, skill). No census yet, so
-  not mapped (no speculative class names).
+- `fm.ShopTraining02..05` are the super training layouts. Mapped and read from the header on
+  2026-11-11, unplayed: see [super training](dbz-kakarot-super-training.md). That note also
+  corrects the Bonyu paragraph below: the hub is `fm.ShopTop`, and the component's own widgets
+  are now reachable through the `st` directory root.
 - **Bonyu's special training: player-reported fully silent (2026-11-09), not reproduced.** It is
   a "Super Training" (`ESuperTrainingType::SuperTraining`, AT_enums.hpp:9368), run by a
   `USuperTrainingComponent` on the NPC (AT.hpp:43616). That component owns its OWN `ShopTop`,

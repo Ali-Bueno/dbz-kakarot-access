@@ -25,7 +25,9 @@ TWO KEY SHAPES
 * mini-quest NPCs ("MNQ"): talk ids look like `C1m13041_mad0001s` -- chapter 1, mini-quest 13, step
   04, then the NPC's actor code. The same NPC speaks other steps of the same mini-quest under other
   ids (`C1m13011_mad0001s`), and variants carry suffixes (`_p1`, `_Clear`), so the key is
-  "<C1m13>|<mad0001s>". The DLC3 vendor teaches seven courses under one `D3m09…_mad0001s` code.
+  "<C1m13>|<mad0001s>". Where one such key would cover SEVERAL teachers the full step is the key
+  instead: DLC3 has seven mobs, one course each, all `D3m09…_mad0001s` (`D3m09010` .. `D3m09016`),
+  so they go in a second table, `step`, keyed "<D3m09010>|<mad0001s>".
 * sub-quest NPCs: the grant is a quest command (`Sub_Cooking_01_WINDOW`, `Sub_Cpl041A_01_S080_START`)
   or reward (`Sub_Cpl032_01_Reward`), so the key is the quest prefix "Sub_Cooking_01".
 At runtime the id is the NPC talk component's `m_talkParamId` (UNpcTalkComponent +0x110; seen live
@@ -55,6 +57,8 @@ OUT_LUA = os.path.join(D.REPO_ROOT, "mod", "KakarotAccess", "Scripts", "course_t
 
 # Must stay equivalent to the Lua pattern in Nav._course_teacher: "^(%u%dm%d%d)%d*_(%a+%d+%a?)".
 MNQ_RE = re.compile(r"^([A-Z]\dm\d\d)\d*_([A-Za-z]+\d+[A-Za-z]?)")
+# The same id with its step kept: "^(%u%dm%d+)_(%a+%d+%a?)" in Lua.
+STEP_RE = re.compile(r"^([A-Z]\dm\d+)_([A-Za-z]+\d+[A-Za-z]?)")
 SUB_RE = re.compile(r"^(Sub_[A-Za-z0-9]+_\d\d)(?:_|$)")
 ITEM_RE = re.compile(r"^Item_(\d+)$")
 
@@ -113,6 +117,7 @@ def main():
                     cmd[cid].add(p1)
 
         mnq = defaultdict(set)     # "C1m13|mad0001s" -> items
+        steps = defaultdict(dict)  # "C1m13|mad0001s" -> { "C1m13041|mad0001s": items }
         quest = defaultdict(set)   # "Sub_Cooking_01" -> items
         origin = defaultdict(set)  # key -> provenance strings, written as comments
         used = set()
@@ -131,6 +136,16 @@ def main():
                     mnq[k] |= cmd[c]
                     origin[k].add("talk %s -> %s" % (tid, c))
                     used.add(c)
+                    sm = STEP_RE.match(tid)
+                    sk = sm.group(1) + "|" + sm.group(2)
+                    steps[k].setdefault(sk, set()).update(cmd[c])
+                    origin[sk].add("talk %s -> %s" % (tid, c))
+        # A key whose steps teach DIFFERENT courses is several teachers: key those by step.
+        step = {}
+        for k in list(mnq):
+            if len({frozenset(v) for v in steps[k].values()}) > 1:
+                step.update(steps[k])
+                del mnq[k]
         # 5) quest commands with no talk row: key by quest prefix
         for c, items in cmd.items():
             if c in used:
@@ -163,14 +178,19 @@ def main():
         "-- GENERATED FILE -- DO NOT EDIT BY HAND.",
         "-- Regenerate with tools/item-ids/dump_course_teachers.py after a game update.",
         "-- NPCs that teach a full-course meal recipe, keyed by their talk id (UNpcTalkComponent",
-        "-- m_talkParamId): `mnq` by \"<C1m13>|<actor code>\", `quest` by sub-quest prefix. Values are",
-        "-- recipe item ids; the spoken name is the game's own Item_<id>_Name. Ids only, no text.",
+        "-- m_talkParamId): `mnq` by \"<C1m13>|<actor code>\", `step` by \"<D3m09010>|<actor code>\" where",
+        "-- one mini-quest has several teachers, `quest` by sub-quest prefix. Values are recipe item",
+        "-- ids; the spoken name is the game's own Item_<id>_Name. Ids only, no text.",
         "return {",
         "    mnq = {",
     ]
     for k in sorted(mnq):
         lines.append("        -- %s" % "; ".join(sorted(origin[k])))
         lines.append('        ["%s"] = { %s },' % (k, ids(mnq[k])))
+    lines += ["    },", "    step = {"]
+    for k in sorted(step):
+        lines.append("        -- %s" % "; ".join(sorted(origin[k])))
+        lines.append('        ["%s"] = { %s },' % (k, ids(step[k])))
     lines += ["    },", "    quest = {"]
     for k in sorted(quest):
         lines.append("        -- %s" % "; ".join(sorted(origin[k])))
@@ -178,11 +198,11 @@ def main():
     lines += ["    },", "}"]
     with open(OUT_LUA, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines) + "\n")
-    covered = set().union(*mnq.values(), *quest.values()) if (mnq or quest) else set()
+    covered = set().union(*mnq.values(), *step.values(), *quest.values())
     print("COURSES: %d recipe items; %d have a teacher" % (len(courses), len(covered)))
     print("  without a teacher: %s" % ", ".join(str(c) for c in sorted(courses)
                                               if "Item_%d" % c not in covered))
-    print("KEYS: %d mini-quest NPCs, %d sub-quests" % (len(mnq), len(quest)))
+    print("KEYS: %d mini-quest NPCs, %d by step, %d sub-quests" % (len(mnq), len(step), len(quest)))
     print("WROTE: %s" % OUT_LUA)
 
 

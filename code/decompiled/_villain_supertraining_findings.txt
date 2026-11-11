@@ -1,0 +1,264 @@
+VILLAINOUS ("ATROCIOUS") MAP ICONS + SUPER TRAINING MENU - native RE findings (2026-11-11)
+=======================================================================================
+Ghidra 12.0, project code/ghidra/KakarotAT, program AT-Win64-Shipping.exe.unpacked.exe,
+headless -readOnly -noanalysis, 6G heap, BelowNormal priority, 8 runs.
+Scripts: code/ghidra/dragonball_probe.java (runs 1-5), code/ghidra/villain_probe.java (runs 6-8;
+copy of the former + `scaldec`/`qwdec` commands, and ufunc no longer requires a NUL before the
+name - see GOTCHA at the end).
+Raw decompiler output for every function cited: code/decompiled/_villain_supertraining_raw.txt.
+Offsets cross-checked against CXXHeaderDump AT.hpp / ATExt.hpp / AT_enums.hpp.
+Confidence tags: [PROVEN] read directly in code and consistent with the header dump;
+[LIKELY] strong inference; [UNKNOWN] not established.
+
+Shared names used below
+  fm      = UAT_UIFieldManager (getter FUN_140d2ba50). MapMng 0x520, CmnHeader 0x5A0,
+            CmnFadeBlur 0x5B0, ShopTop 0x600, ShopTraining 0x6A0, ShopTraining00..05 0x6A8..0x6D0.
+  mgr     = the atrocious manager: GameMode(DAT_14592f0e8).Components(0x550) TMap lookup by class
+            FUN_1417fd3e0, value+0x8 = component (getter FUN_140d245b0). Same scheme as
+            GetDragonBallManager. Identified as UATAtrociousManager [LIKELY]: PhaseMap is reflected
+            at 0x100 (size 0x50) and the code uses the next two unreflected fields
+            +0x150 (FName current level) and +0x158 (int32 current phase), class size 0x1A8.
+  save    = UAT_GameInstance.SaveManager(0x1EA0).SaveGame(0x100); Atrocious at SaveGame+0xDE760
+            (FATSaveGameAtrocious, ATExt.hpp:111).
+
+
+A1. WHO REGISTERS ICON TYPES 30/31/34/35, AND WITH WHICH OWNER
+-------------------------------------------------------------
+AddEventIcon (UAT_UIFieldManager) exec 0x141788400 -> impl FUN_14153bbb0  [PROVEN]
+    if (fm.MapMng(0x520)) MapManager AddIcon 0x141587930(MapMng, type, owner, name="", radius)
+    -> minimap 0x1415d5510 (slot alloc 0x1415e80a0) + area map 0x141587ea0, exactly as for
+    dragon balls (_dragonball_findings Q3). Type 0x1e/0x1f/0x22/0x23 are ordinary cases of the
+    minimap AddIcon switch.
+The villain type is computed by FUN_140d29110(mgr, levelFName, phase)  [PROVEN]:
+    phase 0 -> 30 EVIL_ENEMY        (52 GRD_EnemyGroup      when FUN_14107d9f0(DAT_14592ff28), the DLC5 mode)
+    phase 1 -> 31 EVIL_ENEMY_BOSS   (50 GRD_SuperEnemyGroup in DLC5 mode)
+    phase 2 -> 34 EVIL_ENEMY_2, or 35 EVIL_ENEMY_BOSS_2 when level == "Area16_P"
+    other   -> 0
+    wrappers: FUN_140d291d0(mgr) = type for (mgr+0x150, mgr+0x158);
+              FUN_140d291a0(mgr, level) = type for (level, FUN_140d24660(level)).
+Native registration of a villain  [PROVEN]:
+    spawn routine FUN_140d7d230(spawner, request, ...): spawns the character (FUN_140f34fa0);
+    if request+0x91 (atrocious flag) and the character's AAT_Character.AttributeComponent
+    (0x8E8, reflected) IsA class FUN_1418156d0 -> FUN_140f39dd0(component):
+        AddEventIcon(fm, FUN_140d291d0(mgr), component.Owner(+0xF0), 0)
+    So the OWNER/TARGET is the spawned enemy CHARACTER itself (AAT_Character), not the
+    AATTriggerBoxSymbolEnemySpawn, not a spawn point, not a fixed-position icon (same AddIcon
+    path as the dragon balls, which follow TargetActor).
+    The component at 0x8E8 is UATAtrociousAttributeComponent [LIKELY - class identity by its
+    use, the StaticClass FUN_1418156d0 was not resolved to a name].
+    No UATMapIconComponent is involved in this path; it is a purely native AddEventIcon call
+    driven by the attribute component.
+Other native AddEventIcon callers (not villains)  [PROVEN]: fishing 5 (FUN_140bd9160),
+    hunting 7 (FUN_140c7cbc0), enemies base +0x24c (FUN_1410aad50, UATEnemiesBaseBehaviour),
+    field memory 33/60/74 (FUN_14118c8d0/c930/e190, FUN_141195830, FUN_141196ad0),
+    mini-game 22/23 (FUN_14115f040). AddEventIcon is also a BlueprintCallable UFUNCTION, and
+    UATMapIconComponent.SetMapIcon/SetMapIconAndName (FUN_141108a30/FUN_141108ac0) register with
+    the component's owner; a Blueprint could therefore add a villain icon too [not examined].
+Lua check of a minimap icon (from the dragon-ball findings, unchanged):
+    icon+0x88 == 1, TargetActor(+0x28) valid, type = u8(icon.WL_Icon_ImgSw + 0x398) in {30,31,34,35}.
+
+
+A2. WHEN IS IT REGISTERED
+-------------------------
+[PROVEN] At the moment the villain character is SPAWNED, not at area load: the AddEventIcon call
+    sits inside the spawn routine FUN_140d7d230, right after the character is created.
+[PROVEN] FUN_140d7d230 is called only from FUN_140d91b00, a ticking spawner (vtable slot
+    0x143b2c798): it pops one queued request from its TArray at +0x1B8/+0x1C0 every 3 ticks
+    (+0x1D8 countdown) after gates FUN_140d87ed0(this) and FUN_140f411a0(FUN_140f3c530()).
+[UNKNOWN] Who enqueues those requests and whether that is distance-gated: not traced. The data
+    (UEncountManager.AtrociousVolumeList 0x60, AATTriggerBoxSymbolEnemySpawn.pAtrociousSpawnData
+    0x348, params AtrociousSearchShortDist/LongDist, AtrociousVolumeOutWaitTime) suggests volume/
+    proximity-driven spawning, so expect minimap villain icons to exist only for villains that
+    have actually spawned around the player.
+Once registered, the minimap slot is distance-independent (+0x89 is the in-radar flag only).
+
+
+A3. REMOVAL
+-----------
+Per enemy  [PROVEN]: FUN_140f392b0 (vtable slot 0x143bf9bc0 of the same attribute component,
+    calls Super first - EndPlay-like): RemoveEventIcon(fm, FUN_140d291d0(mgr), Owner(+0xF0))
+    -> impl FUN_14154d750 -> minimap FUN_1415ee940 (Release() on the icon whose type and
+    TargetActor match: +0x88=0, TargetActor=0, +0x89=0), area map FUN_14159f470 (switch hidden,
+    removed from WL_MapIconList), cache list +0x178 pruned.
+    Caveat [LIKELY]: the removal recomputes the type from the manager's CURRENT phase; if the
+    phase changed between add and remove, the per-enemy removal misses and only the bulk
+    removal below cleans up.
+Bulk  [PROVEN]: RemoveAtrociousIcon exec 0x1417892b0 -> impl FUN_14154d730:
+    minimap FUN_1415ee8e0: for every MapIconList(0x6A8) icon with GetType() in {30,31,34,35}
+        -> Release() (vfn +0x250 = 0x1415df920: +0x88=0, +0x8A=0, TargetActor=0, SetShown(0)).
+    area map FUN_14159efe0: same types -> switch SetVisibility(1 Collapsed), vfn+0x4f0 reset,
+        per-type counter -1, removed from WL_MapIconList.
+    Types 50/52 (DLC5 GRD) are NOT covered by the bulk removal.
+    Native caller: FUN_140d1d390 (the manager's phase-complete handler, also writes
+    save.Atrocious via FUN_1419d1090/FUN_1419d0e00).
+Target lost  [PROVEN, previous findings]: if the actor dies/gets destroyed without EndPlay
+    reaching the icon, the radar tick releases the slot when its validity check fails.
+
+
+A4. WORLD MAP MARK
+------------------
+YES, there is a per-area villain mark, and it is the world-map icon's Map_Icon_Switch.
+SetSwitchIcon FUN_1415ca6f0(icon, type)  [PROVEN]:
+    type in {30,31,34,35,50,52}: Map_Icon_Switch(+0x3B8)->SetVisibility(0 Visible);
+                                 ->vfn+0x4d8(type)  (writes the type byte at switch+0x398)
+    any other type:              Map_Icon_Switch->SetVisibility(1 Collapsed)
+    => on a UAT_UIMapWorldIcon, Map_Icon_Switch is used ONLY for villain marks (30/31/34/35 and
+       the DLC5 group types 50/52). Init FUN_1415b4940 calls FUN_1415ca6f0(this, 0) -> Collapsed.
+Who sets it  [PROVEN]: FUN_1415d10a0(mapWorld, i), called for every InfoIcon(0x4D0, stride 0x20)
+    from UAT_UIMapWorld::OnAnimationFinished_Implementation FUN_1415c3870 (i.e. after the
+    world map's open animation), gated by (!FUN_140d2fa40() [no DLC story] || DLC5), and from
+    the area info window FUN_1415ca300:
+        level = areaTable[InfoIcon[i].+0x1c].levelName   (base: DAT_145442d48, DLC5:
+                DAT_1454438d8; 0x50-byte rows, qword 0 = the level FName)
+        if (FUN_140d2e1e0(mgr, level))  icon->SetSwitchIcon(FUN_140d291a0(mgr, level))
+    FUN_140d2e1e0(mgr, level) = FUN_140d2da60(mgr, level, FUN_140d24660(level)), the
+    "villains active in this area now" predicate (see A5).
+    There is NO else branch: nothing re-collapses the switch when the predicate turns false.
+    Same staleness caveat as the dragon-ball mark (_dragonball_findings Q8): stale-visible as
+    long as the icon instance survives; whether the world map is recreated per opening is
+    still [UNKNOWN].
+Reader test on a world-map icon  [PROVEN mechanism]:
+    sw = icon.Map_Icon_Switch (0x3B8, reflected UAT_UIMapIconSwitchImproved)
+    villain mark shown  <=>  sw:GetVisibility() == 0 (Visible)  and  u8(sw+0x398) in {30,31,34,35,50,52}
+    u8(sw+0x398): 30 phase-1 villains, 31 phase-2 boss, 34/35 phase-3 (35 = Area16_P), 52/50 DLC5.
+    Read it after the open animation has finished (that is when the game computes it).
+Fever  [UNKNOWN]: Map_Icon_Fever (0x3A0, UAT_UIMapIconFever) was not traced. Header only:
+    UATFeverManager is a GameMode component with a single OnQuestChangeTiming UFUNCTION, so it is
+    a quest-timed per-area event state; FUN_1415cb310 hides the 0x3A0 child of some other map
+    widget, nothing more established.
+
+
+A5. CHEAP NATIVE PREDICATE "AREA X HAS UNCLEARED VILLAINS"
+---------------------------------------------------------
+The exact game predicate is FUN_140d2da60(mgr, levelFName, phase)  [PROVEN shape, not a
+UFUNCTION]. It returns 0 when ANY of these holds:
+    FUN_141367d80() (global block); or save.Atrocious Laps > 0 (FUN_1419d70b0: +0xD8, DLC5 +0x164)
+    and a positive float from FUN_1419d6180(save.Atrocious) (CoolTime 0xD0 [LIKELY]); or
+    IsCompletedAtrociousPhase(level) (FUN_140d2d330); or FUN_14107d9f0(DAT_14592ff18);
+    then DLC5-specific level checks ("DLC_05_Crowd_Area03_Atrocious01", "Area03_VillainPolice01"),
+    the phase object from mgr.PhaseMap(0x100) and its condition (FUN_140d1fd70, FUN_140d14050,
+    FUN_1412e0e70, FUN_140d2d3e0). Too much state to mirror safely in Lua.
+Reflected pieces a reader CAN use:
+    UEventBlueprintFunctionLibrary::IsCompletedAtrociousPhase(FName LevelName, uint8 PhaseNo)
+        (static UFUNCTION, exec 0x1418ae720 -> FUN_140dad0f0 -> FUN_140d2d330)  [PROVEN]:
+        returns TRUE when the level has no phase entry (or the phase class does not match),
+        otherwise save.Atrocious.PhaseComplete[saveIdx] > 1.
+    UEventBlueprintFunctionLibrary::GetAtrociousLaps() -> FUN_140d24570 -> FUN_1419d70b0  [PROVEN].
+Raw save layout (SaveGame+0xDE760)  [PROVEN]:
+    PhaseComplete int32[32] @+0x00 (DLC5: @+0xE0), value 2 = Complete_All (EATAtrociousSaveState),
+    index = per-(level,phase) save index (u8 at phaseEntry+0x10, entries of 0x10 bytes returned by
+    FUN_140d24840(level), PhaseClass at entry+0x8); CoolTime @+0xD0; Laps @+0xD8 (DLC5 @+0x164).
+    Writer: FUN_1419d1090(save.Atrocious, idx) sets PhaseComplete[idx] = 2.
+Recommendation: for "this area currently shows villains" use the world-map switch (A4), which
+    the game computes with the full predicate; for "this (level, phase) is cleared" call
+    IsCompletedAtrociousPhase. Neither tells you where the enemies stand - only spawned villains
+    have actors/minimap icons (A1/A2).
+
+
+B1. LaunchSuperTrainingMenu, STEP BY STEP
+-----------------------------------------
+Exec 0x141756410 -> FUN_140dae160(ownerComponent); FindlistID variant exec 0x141756480 ->
+FUN_140dae1b0(FString). Both build an event param (FUN_14134cbb0, 0xB8 bytes, [0]=component,
+[1..2]=FindlistID) and call FUN_1413a4d20  [PROVEN]:
+    actor = FindlistID lookup (FUN_1413d2270) or ownerComponent.Owner(+0xF0)
+    stc   = actor->FindComponentByClass(FUN_141902210) (vfn +0x600)   -> USuperTrainingComponent
+    other = actor->FindComponentByClass(FUN_1418d85a0); if any, FUN_140cbc5b0(other, 4)
+    parse param string [3..4] "0".."4" -> menu type (default 0) + four bool strings
+    FUN_1411bb840(stc, menuType, b1, b2, b3, b4)
+=> the component is an EXISTING component of the NPC actor; it is never created on launch.
+USuperTrainingComponent::Launch FUN_1411bb840  [PROVEN]:
+    if (*(int*)(stc+0x100) != 0) return;   (no native writer found - [UNKNOWN] meaning)
+    FUN_140d1a360(4)   (sends event 0x6E(2,4) to a GameMode component - [UNKNOWN] meaning)
+    stc.Owner(0x108) = GetOwner() if IsA AQuestCharacter; stc+0x2E0 = b4
+    switch (menuType)   [values = ESuperTrainingMenuType: native enum table rows at
+                         0x14439c130.. give BREAKTHROUGH_TRAINING=2,
+                         CHALLENGE_TO_GOD_OF_DESTRUCTION=3, CHALLENGE_FREEZER_F=4; 0/1 not dumped]
+      0 -> FUN_1411bc300: HUB. stc.ShopTop(0x110) = fm.ShopTop(0x600) (FUN_141634fd0 -> FUN_141545780);
+           ShopTop.vfn+0x4d8(11) = SetShopType(ESHOPTYPE_ID TYPE_SUPER_TRAINING) (FUN_141643140:
+           ShopTop+0x468 = 11; case 0xb -> rows from the static list DAT_145985600 via FUN_14163f080);
+           FUN_14163e1c0 opens it (ShopTop+0x45C = 1, CmnHeader SetFontType(0x22,...)), FUN_14163ea10
+           sets the NEW badge on row id 19 from ShopTraining04 data; binds ShopTop+0x3B0 (row
+           select) and +0x3C8 delegates, registers pad callbacks (keys 0x17,0x18,9,10,0x19).
+      1 -> ShopTraining03: FUN_1411bd030 (rows from SuperTrainingDataTableAccessor
+           (DAT_14595c308)+0x340 = SuperTrainingParam, FUN_14165cb50 sets the pane's lists) then
+           FUN_1411bca30 -> FUN_141667620 (open).
+      2 -> ShopTraining04 mode 1 (accessor+0x350 via FUN_1411becc0; open FUN_141667860)  = Breakthrough
+      3 -> ShopTraining04 mode 2 (accessor+0x360 via FUN_1411bcd50; open FUN_14166d940)  = God of Destruction
+      4 -> ShopTraining04 mode 3 (accessor+0x370 via FUN_1411bcb10; open FUN_14166d740)  = Freezer F
+    The first widget shown is therefore the shared fm.ShopTop only for menu type 0; types 1-4
+    open a ShopTraining pane directly.
+Hub rows (ShopTop, ESHOPTOP_SELECT_ID)  [PROVEN handler cases, row list LIKELY]:
+    row-select delegate execute FUN_1411aec90 / FUN_1411afa40 (lambda vtable 0x143d14928):
+        18 SELECT_ID_SUPER_TRAINING -> same as menu type 1 (ShopTraining03)
+        19 SELECT_ID_BREAKTHROUGH   -> same as menu type 2 (ShopTraining04 mode 1)
+        21 SELECT_ID_CANCEL         -> close (FUN_1411aaaf0 + FUN_1416eef40)
+    So the hub list is {18, 19, 21} [LIKELY: the static row list DAT_145985600 is filled by the
+    static initializer FUN_14034edb0, not decompiled]. Rows are the reflected
+    ShopTop.ListBarCtn (0x438, TArray<UAT_UIXListBar01*>), already handled by the shop adapter.
+ShutDownSuperTrainingMenu exec 0x141757e70 -> FUN_140dbbe10 -> FUN_1413b20b0 -> FUN_1411aaa20:
+    ShopTraining03 close FUN_141668030 + ShopTraining04 close FUN_141668160  [PROVEN].
+
+
+B2. WHICH fm PANE FOR WHICH TYPE, AND ARE THE fm FIELDS WRITTEN
+---------------------------------------------------------------
+[PROVEN] The component reaches panes ONLY through fm getters:
+    FUN_14165b2e0 -> FUN_1415457c0 = fm+0x6C0 (ShopTraining03): menu type 1 / hub row 18.
+    FUN_14165b300 -> FUN_1415457d0 = fm+0x6C8 (ShopTraining04): menu types 2,3,4 / hub row 19.
+    Cross-check: the open/close code plays 03.InAnimation 0x5B0 / OutAnimation 0x5B8 and
+    touches 03.Xlist_List05_Lay7 0x5E0; 04.InAnimation 0x528 / OutAnimation 0x530 / Xlist 0x5A8.
+[PROVEN] ShopTraining02 (0x6B8) and ShopTraining05 (0x6D0) are not used by USuperTrainingComponent
+    (02's getter FUN_1415457b0 has a single caller FUN_14165b2c0, not in this component; no
+    0x6D0 getter exists next to the others).
+[PROVEN] The fm fields ARE written: FUN_14154a690 (the completion of ShopTrainingLoader 0xA08,
+    callback list 0xA10; i.e. OnLoadedShopTraining [LIKELY name]) destroys any previous instance
+    (FUN_1429d9d20) and creates ShopTraining 0x6A0 and ShopTraining00..05 0x6A8..0x6D0
+    (CreateWidget FUN_140d18910 + AddToViewport z=0x82). OnLoadedShopTraining02/03
+    (FUN_14154a270 / FUN_14154a480) recreate 0x6B8 / 0x6C0 the same way.
+    Consequence: they are long-lived pooled panes sitting in the viewport -> gate readers on
+    liveness, not on presence.
+
+
+B3. LIST INDEX AND DETAIL TEXTS
+-------------------------------
+[PROVEN header] UAT_UIXlistList05Lay7 adds nothing to UAT_UIMenuListBase00: reflected
+    GetSelectValue(), GetListNum(), ForceSetSelect(), ListPlateCtn 0x3A8
+    (TArray<UAT_UIList00Choice*>: NewIcon 0x398, TxtNum 0x3A8, TxtName 0x3B0, PnlClear 0x3D0,
+    WL_Icon_ClearS 0x438). The usual MenuListBase00 reader applies [LIKELY].
+[LIKELY] DetailUpdate is a BlueprintImplementableEvent: its ASCII name exists 20 times, each
+    referenced only from UFunction construction code (0x1401b6536..0x140236f46), and no native
+    registration table row points at any of them. The detail texts (Txt_Cap0n, Txt_Recommend, Txt_Num_Lv,
+    Txt_Name_E0n, Txt_Task_Detail0n, Txt_Detail, Xlist_Bar02_0n) are therefore written by the
+    pane's Blueprint; native code was not seen calling it, so "follows the cursor" is not proven
+    statically - verify with two captures.
+Not-in-text state:
+    cleared = row visuals only (PnlClear / WL_Icon_ClearS visibility) [PROVEN header, no text];
+    lock reason [UNKNOWN];
+    hidden native bytes: ShopTraining04+0x520 mode (1 Breakthrough, 2 GoD, 3 Freezer F) [PROVEN];
+    ShopTraining03+0x590 mode (1 on open; 2 / 3..9 select other setups FUN_141670650 /
+    FUN_14166f500; also written by FUN_14166d2d0/FUN_14166d4e0/FUN_14166db70) [PROVEN writes,
+    meaning of 2..9 UNKNOWN].
+
+
+B4. CHEAP "SUPER TRAINING MENU IS OPEN" SIGNAL
+---------------------------------------------
+[PROVEN] ShopTraining04+0x5A0 (u8, unreflected, gap before Xlist 0x5A8): 1 set by all three
+    openers (FUN_141667860, FUN_14166d940, FUN_14166d740), 0 set by close FUN_141668160.
+[PROVEN] ShopTop+0x45C (int32, unreflected): 1 at open (FUN_14163e1c0), 2..7 during
+    transitions, 0 at close (FUN_141634700, FUN_141634ac0); ShopTop+0x468 (u8) = ESHOPTYPE_ID,
+    11 = TYPE_SUPER_TRAINING. ShopTop is shared by every shop, so test both.
+[PROVEN] ShopTraining03 has no comparable open flag (its +0x590 mode byte is never cleared on
+    close) -> use pane liveness (visibility + opacity) for 03.
+[LIKELY] Header: both the hub and ShopTraining03 call CmnHeader SetFontType(0x22), and types 2-4
+    / row 19 play CmnFadeBlur In (FUN_1416f2d90 on fm+0x5B0).
+[UNKNOWN] Whether the minimap/HUD is hidden: Launch sends event 0x6E with value 4 to a GameMode
+    component (FUN_140d1a360) - plausibly a HUD/UI mode switch, not traced.
+
+
+GOTCHA FOR FUTURE PROBES
+------------------------
+A UFUNCTION name for which `ufunc` finds no table row is most likely a BlueprintImplementableEvent
+(no native exec at all). Tell: `str NAME` lists one ASCII copy per declaring class, each referenced
+only from UFunction construction code in 0x1401xxxxx-0x1402xxxxx. Do not spend runs hunting its
+impl. (villain_probe.java also drops dragonball_probe's NUL-before-name check and counts only
+valid hits toward the 40 cap; harmless, since the exact table-pointer match keeps names exact,
+but it was NOT the cause of the empty DetailUpdate result.)

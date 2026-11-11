@@ -138,9 +138,11 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- over the outdoors too. Inside a building this costs nothing anyway: nearly every other group is
 -- empty there and empty groups are skipped when cycling.
 local GROUP_ORDER = {
-    "quests", "exit", "collectibles", "npc", "courses", "companions", "enemies", "hunt", "sites",
-    "fishing", "gathering", "shops", "minigames", "dragonball", "other",
+    "quests", "exit", "collectibles", "npc", "courses", "companions", "enemies", "villainous",
+    "hunt", "sites", "fishing", "gathering", "mining", "shops", "minigames", "dragonball", "other",
 }
+-- Message-table ids of the category names the game states itself (localized by the game).
+local GROUP_MESSAGE = { villainous = "Tutorial_Adv_Title_63" }
 local ICON_GROUP = {
     -- quests (no distance limit)
     [24] = "quests", [71] = "quests", [26] = "quests", [40] = "quests",
@@ -154,8 +156,10 @@ local ICON_GROUP = {
     [5] = "fishing",
     -- gathering (collect / ore / bugs / rocks). HUNT (7 = prey marker) gets its own
     -- "hunt" category alongside the wild animals, not lumped with fruit/ore gathering.
-    [6] = "gathering", [7] = "hunt", [8] = "gathering", [18] = "gathering",
+    [6] = "gathering", [7] = "hunt", [18] = "gathering",
     [63] = "gathering", [68] = "gathering", [69] = "gathering",
+    -- ORE: mineral deposits get their own category (player request 2026-11-11).
+    [8] = "mining",
     -- shops / stalls / eateries
     [1] = "shops", [2] = "shops", [3] = "shops", [51] = "shops", [54] = "shops",
     [55] = "shops", [58] = "shops", [66] = "shops",
@@ -183,15 +187,17 @@ local ICON_GROUP = {
     [64] = "sites",   -- Bonfire (campfire cooking)
     [67] = "sites",   -- ToFloatingIsland
     -- field ENEMIES (EMapIcon names in AT_enums.hpp)
-    [30] = "enemies", -- EVIL_ENEMY
-    [31] = "enemies", -- EVIL_ENEMY_BOSS
     [32] = "enemies", -- ENEMIES_BASE
-    [34] = "enemies", -- EVIL_ENEMY_2
-    [35] = "enemies", -- EVIL_ENEMY_BOSS_2
     [36] = "enemies", -- ENEMIES_AIRSHIP
     [49] = "enemies", -- GRD_Enemy
     [50] = "enemies", -- GRD_SuperEnemyGroup
     [52] = "enemies", -- GRD_EnemyGroup
+    -- VILLAINOUS enemies ("Atrocious" in the game's code): their own category, listed at any
+    -- distance like the area map does (player request 2026-11-11).
+    [30] = "villainous", -- EVIL_ENEMY
+    [31] = "villainous", -- EVIL_ENEMY_BOSS
+    [34] = "villainous", -- EVIL_ENEMY_2
+    [35] = "villainous", -- EVIL_ENEMY_BOSS_2
 }
 -- Per-EMapIcon spoken noun (i18n key) for the focused item; falls back to the group
 -- name when the type has no specific noun. Keeps items in a group distinguishable
@@ -210,8 +216,9 @@ local ICON_NOUN = {
     [43] = "cat_submarine", [45] = "cat_medical", [46] = "cat_replay",
     [62] = "cat_skyplatform", [64] = "cat_bonfire",
     -- enemies
-    [30] = "cat_enemy", [34] = "cat_enemy", [49] = "cat_enemy",
-    [31] = "cat_enemy_boss", [35] = "cat_enemy_boss",
+    [49] = "cat_enemy",
+    [30] = "cat_villainous", [34] = "cat_villainous",
+    [31] = "cat_villainous_boss", [35] = "cat_villainous_boss",
     [32] = "cat_enemy_base", [36] = "cat_enemy_airship",
     [50] = "cat_enemy_group", [52] = "cat_enemy_group",
 }
@@ -219,7 +226,7 @@ local ICON_NOUN = {
 -- ICON_GROUP so the two can never drift apart.
 local ENEMY_ICONS = {}
 for t, g in pairs(ICON_GROUP) do
-    if g == "enemies" then ENEMY_ICONS[t] = true end
+    if g == "enemies" or g == "villainous" then ENEMY_ICONS[t] = true end
 end
 -- EAccessPointState::State_Taken (AT_enums.hpp): a collected access-point item keeps
 -- its actor until respawn with InteractState == Taken (bHidden stays false, which is
@@ -1206,10 +1213,13 @@ local function chain_step(px, py, pz)
         -- actor. An unavailable read is NOT evidence that the ball was taken.
         advance = Nav._dragonball_available(a) == false
     end
+    local villain = chain_wait.grp == "villainous" and Nav.villain_marked[chain_wait.key]
+    if not advance and villain then advance = Nav._villain_available(a) == false end
     if not advance then
         local hidden, st = false, nil
         -- chain_wait.actor was captured on an earlier tick: streaming can free it.
-        pcall(function() hidden = Core.member(a, "bHidden") end)
+        -- A villainous marker may sit on an invisible volume: its marker is the authority.
+        if not villain then pcall(function() hidden = Core.member(a, "bHidden") end) end
         if chain_wait.stateful then
             pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
         end
@@ -1323,13 +1333,14 @@ function Nav._char_side(c)
     local ac
     pcall(function() ac = Core.member(c, "AttributeComponent") end)
     if not Core.valid(ac) then return nil end
-    local side
+    -- Second result: true for a VILLAINOUS enemy (the game's "Atrocious" attribute component).
+    local side, vile
     pcall(function()
         if ac:IsA(side_cls.ally) then side = "ally"
         elseif ac:IsA(side_cls.enemy) then side = "enemy"
-        elseif side_cls.atrocious and ac:IsA(side_cls.atrocious) then side = "enemy" end
+        elseif side_cls.atrocious and ac:IsA(side_cls.atrocious) then side, vile = "enemy", true end
     end)
-    return side
+    return side, vile
 end
 
 -- Live ENEMY level: reflected hops AAT_Character.AttributeComponent -> .StatusInstance,
@@ -1404,7 +1415,9 @@ local function enemies_list()
             -- game's own per-actor statement. It answers nil for a character that carries no
             -- attribute component, and nil must NOT mean "enemy" — so the old test still decides
             -- that case, which is exactly the behaviour this scan had before.
-            if Core.valid(c) and Nav._char_side(c) ~= "ally" and not is_playable_char(c)
+            local side, vile
+            if Core.valid(c) then side, vile = Nav._char_side(c) end
+            if Core.valid(c) and side ~= "ally" and not is_playable_char(c)
                 and char_visible(c) then
                 local near = true
                 if px then
@@ -1414,7 +1427,8 @@ local function enemies_list()
                 end
                 if near then
                     -- SpawnType 1/2/3 → specific noun; roaming enemies are SpawnType 0 → generic.
-                    local noun = ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] or "cat_enemy"
+                    local noun = vile and "cat_villainous"
+                        or ENEMY_NOUN_BY_SPAWN[enemy_spawn_type(c) or 0] or "cat_enemy"
                     -- The game's own display name (CharacterName id -> GetCharacterName),
                     -- so the radar says "Soldier X" instead of the generic "enemy".
                     local name = enemy_display_name and enemy_display_name(c) or nil
@@ -1426,7 +1440,8 @@ local function enemies_list()
                         disp = string.format("%s, %s", name or I18n.t(noun),
                             string.format(I18n.t("nav_level"), lvl))
                     end
-                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun, name = name, disp = disp }
+                    enemy_cache[#enemy_cache + 1] = { actor = c, noun = noun, name = name,
+                                                      disp = disp, vile = vile }
                 end
             end
         end
@@ -1679,6 +1694,7 @@ end
 -- chunk, and one more would not compile. Not part of the public API — nothing outside calls it.
 function Nav.release_world_refs()
     enemy_cache, enemy_next = nil, 0
+    Nav.villain_marked = {}
     navi_icons, navi_next = nil, 0
     -- ONLY the handle is released; the rest of the record (key, grp, label, manual, stateful) is
     -- plain Lua data, so WORLD_DROP_TICKS, remember_pick() and the resume path behave exactly as
@@ -2109,9 +2125,15 @@ local function step()
             chain_over()
             return
         end
+        local villain = target.grp == "villainous" and Nav.villain_marked[target.key]
+        if villain and Nav._villain_available(target.actor) == false then
+            chain_over()
+            return
+        end
         local hidden, st = false, nil
         -- target.actor is a handle picked minutes ago; the actor can be freed under it.
-        pcall(function() hidden = Core.member(target.actor, "bHidden") end)
+        -- A villainous marker may sit on an invisible volume: its marker is the authority.
+        if not villain then pcall(function() hidden = Core.member(target.actor, "bHidden") end) end
         if target.stateful then
             pcall(function() st = tonumber(Core.member(target.actor, "InteractState")) end)
         end
@@ -2154,8 +2176,11 @@ local function step()
     -- moves, flees and has to be shot down first, so it takes the wide radius and the plain
     -- arrival line rather than "you can pick it up".
     local hunted = target.homegrp == "hunt"
+    -- A deposit's map marker is a point amid its rocks, not a rock (no taken state): wide too.
+    local marker = target.grp == "mining" and not target.stateful
     local arrive_r = ((target.manual or target.questitem)
-        and target.grp ~= "gathering" and target.homegrp ~= "gathering" and not hunted)
+        and target.grp ~= "gathering" and target.homegrp ~= "gathering" and not hunted
+        and not marker)
         and ARRIVE_DIST_MANUAL or ARRIVE_DIST
     if d3 <= arrive_r then
         if not arrived then
@@ -2257,7 +2282,7 @@ local function step()
     -- camera yaw centers on it (|pan| within the reticle slack) inside Ki-blast
     -- range, say "on target" (interrupting — the shot window is short); re-arms
     -- when the aim drifts off. pan/fb here are already camera-relative.
-    if target.grp == "enemies" or target.grp == "hunt" then
+    if target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous" then
         local on_target = fb > 0 and math.abs(pan) <= AIM_ALIGN_PAN and d3 <= AIM_RANGE
         if on_target and not was_on_target then
             Speech.say(I18n.t("nav_on_target"), true)
@@ -2271,7 +2296,8 @@ local function step()
     -- player is on whenever that zone changes — "behind" = safe approach, "in front"
     -- = it can see you. K2_GetActorRotation is the reflected sibling of the
     -- K2_GetActorLocation call the whole tracker already relies on.
-    if (target.grp == "enemies" or target.grp == "hunt") and not coasting then
+    if (target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous")
+        and not coasting then
         local rot
         -- Method call on the long-lived target handle: re-check the actor first. Skipped while
         -- coasting for the same reason as the position read above — an enemy that a scan just
@@ -2759,6 +2785,16 @@ function Nav._dragonball_available(actor)
     return Nav._dragonball_marker.contains(minimap(), actor)
 end
 
+-- Keys (addresses) of the villainous targets the last sweeps took from a MAP MARKER. Only those
+-- answer to the marker's lifetime; a villainous character found by the enemy scan may have its
+-- marker on another actor, so for it "no marker" proves nothing. Plain data, dropped per gate.
+Nav.villain_marked = {}
+
+-- Is this villainous enemy's marker still on the minimap? false = beaten; nil = cannot tell.
+function Nav._villain_available(actor)
+    return Nav._dragonball_marker.contains_villain(minimap(), actor)
+end
+
 -- Snapshot the currently navigable field targets, grouped into the L1/R1 categories.
 -- MUST be called on the game thread (radar_menu wraps it in ExecuteInGameThread).
 -- Source = the game's OWN minimap icons (MapIconList) + active navi icons, so it
@@ -2933,6 +2969,7 @@ end
 -- tools/item-ids/dump_course_teachers.py, which documents the grant chain; the two key rules here
 -- must match its MNQ_RE / SUB_RE exactly:
 --   mini-quest NPC  `C1m13041_mad0001s[_p1]` -> "C1m13|mad0001s" (any step of that mini-quest)
+--   one of several  `D3m09010_mad0001s`      -> "D3m09010|mad0001s" (STEP_RE: the step is the NPC)
 --   sub-quest NPC   `Sub_Cooking_01_Mob_01`  -> "Sub_Cooking_01"
 function Nav._course_teacher(tid)
     if type(tid) ~= "string" or tid == "" then return nil end
@@ -2944,7 +2981,13 @@ function Nav._course_teacher(tid)
         end
     end
     if not Nav._courses then return nil end
-    local mnq, actor = tid:match("^(%u%dm%d%d)%d*_(%a+%d+%a?)")
+    local step, actor = tid:match("^(%u%dm%d+)_(%a+%d+%a?)")
+    if step then
+        local hit = Nav._courses.step and Nav._courses.step[step .. "|" .. actor]   -- lint:plain-table
+        if hit then return hit end
+    end
+    local mnq
+    mnq, actor = tid:match("^(%u%dm%d%d)%d*_(%a+%d+%a?)")
     if mnq then
         local hit = Nav._courses.mnq and Nav._courses.mnq[mnq .. "|" .. actor]   -- lint:plain-table
         if hit then return hit end
@@ -2996,6 +3039,25 @@ function Nav._wanted_drop_name(slug, req)
     return nil
 end
 
+-- Every distinct item the given drop slugs can yield, as one spoken list ("Iron ore, Refined
+-- iron ore"), or nil. For mineral deposits: which ore a rock gives is the whole reason to walk
+-- to it, and the refined ones only come out of some of them.
+function Nav._drop_names_of(slugs)
+    local MAX_NAMES = 4   -- a deposit lists two to four ores; more would bury the distance
+    local names, seen = {}, {}
+    for _, slug in ipairs(slugs) do
+        for _, num in ipairs(Nav._drop_ids_of(slug)) do
+            local nm = not seen[num] and Nav._message_text("Item_" .. num .. "_Name")
+            seen[num] = true
+            if nm and not seen[nm] and #names < MAX_NAMES then
+                seen[nm] = true
+                names[#names + 1] = nm
+            end
+        end
+    end
+    return #names > 0 and table.concat(names, ", ") or nil
+end
+
 -- Spoken name for a placed collectible: its drop-table id resolved to the game's own localized
 -- item name. On the module rather than inside the sweep because BOTH scans need it -- the direct
 -- class scan that finds unmarked collectibles, and the map-icon scan that finds every POI the
@@ -3006,7 +3068,8 @@ end
 -- so the promotion sees the match and the player hears the name of the thing they came for.
 -- `comp_name` (optional) is the member holding the FieldItemTableComponent; wild animals carry it
 -- as `FieldItemTable` (AnimalMob_Pawn_C, live reflection 2026-11-09), pickups as the default.
-function Nav._drop_item_name(a, strict, req, comp_name)
+-- `every` (optional) names every item the spot can yield instead of the primary one.
+function Nav._drop_item_name(a, strict, req, comp_name, every)
     local raw
     local slugs = {}
     pcall(function()
@@ -3046,6 +3109,10 @@ function Nav._drop_item_name(a, strict, req, comp_name)
     -- -- so a collection point announces "Fruta namekuseijin" instead of the class-derived
     -- noun "tesoro" the player was hearing, in whatever language the game is set to. See
     -- Nav._field_item_name for why this one hop needs a table when nothing else here does.
+    if every then
+        local all = Nav._drop_names_of(slugs)
+        if all then return all end
+    end
     local localized = Nav._field_item_name(raw)
     if localized then return localized end
     -- Strip the drop-table bookkeeping before speaking it. The keys are `<Item>_Fixed` and
@@ -3723,6 +3790,7 @@ function Nav.list_targets(boxed)
         if seen[key] and not dup_ok then return end
         local x, y, z = actor_pos(actor)
         if not x then return end
+        if src == "villain" then Nav.villain_marked[key] = true end
         -- QUEST ITEM PROMOTION (2026-08-19). A collectible the active quest still asks for joins
         -- the QUESTS group: that group has no distance cap, so the item is findable from wherever
         -- the quest marker dropped the player, instead of being filtered out by the tight
@@ -3747,8 +3815,8 @@ function Nav.list_targets(boxed)
         local home
         -- "hunt" joined 2026-11-09: a wild animal is named by its drop ONLY when that drop is a
         -- still-wanted quest item (see section 5b), so the group gate stays as tight as before.
-        if want_req and name and (grp == "gathering" or grp == "collectibles" or grp == "hunt")
-            and Nav._req_row(want_req, name) then
+        if want_req and name and (grp == "gathering" or grp == "collectibles" or grp == "hunt"
+            or grp == "mining") and Nav._req_row(want_req, name) then
             home, grp = grp, "quests"
             if Nav.qreq_logged ~= name then
                 Nav.qreq_logged = name
@@ -3760,7 +3828,10 @@ function Nav.list_targets(boxed)
         local kept = true
         -- Dragon Balls take no cap either: the area map shows every ball in the area at any
         -- distance, and a pickup marker the game registered is never a parked preload actor.
-        if grp ~= "quests" and grp ~= "dragonball" then
+        -- Villainous enemies likewise, but only through their MAP MARKER (src "villain"): a
+        -- villainous character found by the enemy scan keeps that scan's tight cap.
+        if grp ~= "quests" and grp ~= "dragonball" and src ~= "villain"
+            and src ~= "mobteacher" then
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
@@ -3828,13 +3899,26 @@ function Nav.list_targets(boxed)
         end
         local grp = ICON_GROUP[t] or "other"
         local noun = noun_override or ICON_NOUN[t] or ("radar_cat_" .. grp)
+        if grp == "villainous" then
+            -- The marker sits on the spawned enemy itself (native_offsets.miniMapIcon), so it
+            -- is named like any enemy. The side test guards the character-only reads.
+            local _, vile = Nav._char_side(actor)
+            local who = vile and enemy_display_name and enemy_display_name(actor) or nil
+            local lvl = vile and enemy_level(actor) or nil
+            if lvl then
+                who = string.format("%s, %s", who or I18n.t(noun),
+                    string.format(I18n.t("nav_level"), lvl))
+            end
+            add_target(actor, grp, noun, nil, "villain", who)
+            return
+        end
         local _, range = icon_info(actor)
         -- Gathering/collect spots that are access-point actors (mining points, bug
         -- nests, chests) DO carry the Taken state: mark them stateful so the chained
         -- sweep advances the moment they're collected, and drop already-taken ones
         -- from the list (a mined-out rock kept listing until respawn otherwise —
         -- user report 2026-07-17).
-        local stateful = (grp == "gathering" or grp == "collectibles")
+        local stateful = (grp == "gathering" or grp == "collectibles" or grp == "mining")
             and access_point_class(actor) or nil
         if stateful and point_taken(actor) then return end
         -- NAME the gathering/collect spots this scan reaches. It runs BEFORE the direct class
@@ -3847,7 +3931,8 @@ function Nav.list_targets(boxed)
         -- costs nothing on the shops/sites/fishing icons that share this scan. STRICT as well,
         -- because the icon's owner is whatever the game map-icons and an ungated fetch of an
         -- undeclared member is the uncatchable abort rather than a nil.
-        local name = stateful and Nav._drop_item_name(actor, true, want_req) or nil
+        local name = stateful
+            and Nav._drop_item_name(actor, true, want_req, nil, grp == "mining") or nil
         add_target(actor, grp, noun, range, src, name, stateful)
     end
 
@@ -3892,7 +3977,10 @@ function Nav.list_targets(boxed)
                         if Nav._dragonball_marker.actor(icon, mm) then
                             add_icon(ta, Nav._dragonball_marker.ICON_TYPE, "dragonball")
                         else
-                            add_icon(ta, (icon_info(ta)), "mapicon")
+                            -- Villainous enemies are registered the same native way, so the
+                            -- marker's own type outranks a component the actor may not have.
+                            local _, vkind = Nav._dragonball_marker.villain(icon, mm)
+                            add_icon(ta, vkind or (icon_info(ta)), "mapicon")
                         end
                     end
                 end
@@ -3942,6 +4030,22 @@ function Nav.list_targets(boxed)
             end
         end
     end
+    -- FULL-COURSE MEAL TEACHERS (2026-11-09): an NPC whose talk id teaches a recipe is listed in
+    -- its own group, named with the recipe(s) in the game's own words. Returns true on a match.
+    -- `known`: see char_types.talk_param_id.
+    local function add_teacher(npc, who, src, known)
+        local ctok, CT = pcall(require, "char_types")
+        local courses = ctok and CT and CT.talk_param_id
+            and Nav._course_teacher(CT.talk_param_id(Core, npc, known)) or nil
+        if not courses then return false end
+        local names = {}
+        for _, num in ipairs(courses) do
+            names[#names + 1] = Nav._message_text("Item_" .. num .. "_Name")
+        end
+        add_target(npc, "courses", "cat_course_teacher", nil, src,
+            Core.phrase(who or I18n.t("cat_course_teacher"), table.concat(names, ", ")), nil, true)
+        return true
+    end
     -- 3) talkable field NPCs (Chi-Chi, shopkeepers, quest givers): AQuestCharacter uses
     -- a MobIconComponent, NOT the ATMapIconComponent, so it's absent from MapIconList
     -- above. Scan them directly. Beyond the distance cap, filter by PRESENCE: the game
@@ -3973,22 +4077,8 @@ function Nav.list_targets(boxed)
                     npc_seen[tostring(npc:GetAddress())] = true
                     local who = npc_name(npc)
                     add_target(npc, "npc", "cat_npc", nil, "questchar", who, nil, true)
-                    -- FULL-COURSE MEAL TEACHERS (2026-11-09): the same NPC again, in its own group,
-                    -- named with the recipe(s) it teaches in the game's own words.
-                    do
-                        local ctok, CT = pcall(require, "char_types")
-                        local courses = ctok and CT and CT.talk_param_id
-                            and Nav._course_teacher(CT.talk_param_id(Core, npc)) or nil
-                        if courses then
-                            local names = {}
-                            for _, num in ipairs(courses) do
-                                names[#names + 1] = Nav._message_text("Item_" .. num .. "_Name")
-                            end
-                            add_target(npc, "courses", "cat_course_teacher", nil, "teacher",
-                                Core.phrase(who or I18n.t("cat_course_teacher"),
-                                    table.concat(names, ", ")), nil, true)
-                        end
-                    end
+                    -- The same NPC again under Full-course meals when it teaches one.
+                    add_teacher(npc, who, "teacher")
                     if iddump then
                         local addr = tostring(npc:GetAddress())
                         if not id_seen[addr] then
@@ -4078,8 +4168,11 @@ function Nav.list_targets(boxed)
             -- gathering, and Coleccionables should keep medals, chests and memories). The
             -- deposit's own icon-group marker already lives in `gathering`, so this puts the
             -- individual points beside it instead of in a second place.
-            { pat = "MiningPoint", noun = "cat_ore", grp = "gathering" },
-            { pat = "Mineral",     noun = "cat_ore", grp = "gathering" },
+            -- Since 2026-11-11 deposits have their own group (player request), and a rare
+            -- deposit says so: it is the one that yields the refined ores.
+            { pat = "MiningPointRare", noun = "cat_ore_rare", grp = "mining" },
+            { pat = "MiningPoint",     noun = "cat_ore", grp = "mining" },
+            { pat = "Mineral",         noun = "cat_ore", grp = "mining" },
         }
         -- Spoken noun and GROUP per action-point CLASS (2026-08-18, user report: "Sitios está
         -- detectando las tiendas / máquinas de cocina y la tienda que puso Bulma en Namek").
@@ -4192,14 +4285,23 @@ function Nav.list_targets(boxed)
                             if cn:find(m.pat, 1, true) then grp, noun = m.grp, m.noun break end
                         end
                     end
+                    local mining = (grp == "mining")
                     local name = (c.action and action_name(a))
-                        or (c.item and drop_item_name(a, c.strict_item, want_req)) or nil
+                        or (c.item and drop_item_name(a, c.strict_item, want_req, nil, mining))
+                        or nil
+                    -- A named rare deposit still says it is one.
+                    if name and noun == "cat_ore_rare" then
+                        name = Core.phrase(I18n.t(noun), name)
+                    end
                     -- QUEST ITEM PROMOTION (2026-08-19). A collectible the active quest is still
                     -- asking for moves into the QUESTS group: that group has no distance cap, so
                     -- the item is findable from wherever the quest marker dropped the player,
                     -- instead of being filtered out by the tight collectible cap and leaving them
                     -- in an empty clearing.
-                    add_target(a, grp, noun, nil, "collectible", name, c.state)
+                    -- A deposit is level geometry, never a parked preload actor, so it takes
+                    -- the wide map cap (and the empty-group rescue) instead of the tight one.
+                    add_target(a, grp, noun, nil, mining and "mine" or "collectible", name,
+                        c.state)
                 end
             end
         end
@@ -4285,8 +4387,11 @@ function Nav.list_targets(boxed)
 
     -- 5) field enemies: the direct SpawnType scan (enemies_list) — the minimap icon
     -- list does not carry the roaming enemies. Tight distance cap like NPCs.
+    -- A villainous one (attribute side, see Nav._char_side) joins its own category, beside the
+    -- map markers of the ones too far away to be spawned.
     for _, e in ipairs(enemies_list()) do
-        add_target(e.actor, "enemies", e.noun, nil, "enemy", e.disp or e.name)
+        add_target(e.actor, e.vile and "villainous" or "enemies", e.noun, nil, "enemy",
+            e.disp or e.name)
     end
     -- 5b) wild field animals (deer, wolves, dinosaurs, dragons…): the AT_MobAnimalBase subtree of
     -- AT_MobBase — a SEPARATE class tree from AT_Character (lineage probe 2026-07-06:
@@ -4325,6 +4430,35 @@ function Nav.list_targets(boxed)
                         label = string.format(I18n.t("animal_rare_fmt"), I18n.t(species))
                     end
                     add_target(a, "hunt", species, nil, "enemy", label)
+                end
+            end
+        end
+    end
+
+    -- 5b2) FULL-COURSE TEACHERS AMONG THE TOWNSFOLK (2026-11-11). Every mini-quest teacher is a
+    -- static mob (StandStaticMob_C / SitStaticMob_C < Mob00_BP_C < NpcBase_C < AT_MobBase), not
+    -- a QuestCharacter, so section 3 could never list one: the category stayed empty for the
+    -- player who asked for it. Only a matching talk id makes a target; the other townsfolk stay
+    -- out of the radar. The Blueprint base is scanned beside the native one for the usual
+    -- reason. Level-placed, so no distance cap: whoever teaches in this area is listed.
+    -- SAFETY: bHidden and the strict talk-component gate only (see 5b's note on this tree).
+    do
+        local mob_seen = {}
+        for _, cls in ipairs({ "AT_MobBase", "NpcBase_C" }) do
+            for _, a in pairs(Nav.SW.class_list(cls)) do
+                if Core.valid(a) and not is_animal(a) then
+                    local addr = tostring(a:GetAddress())
+                    if not mob_seen[addr] then
+                        mob_seen[addr] = true
+                        if not Nav._actor_hidden(a) then
+                            -- StandStaticMob.hpp declares NPCTALK @0x428; any other mob class
+                            -- (SitStaticMob_C has no header) goes through the strict probe.
+                            local cn
+                            pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                            add_teacher(a, nil, "mobteacher",
+                                cn == "StandStaticMob_C" and "NPCTALK" or nil)
+                        end
+                    end
                 end
             end
         end
@@ -4471,7 +4605,9 @@ function Nav.list_targets(boxed)
         local g = groups[gk]
         if g and #g.items > 0 then
             table.sort(g.items, function(a, b) return a.dist < b.dist end)
-            out[#out + 1] = { key = gk, name = I18n.t("radar_cat_" .. gk), items = g.items }
+            -- The game's own words where it has them (its tutorial title for villainous enemies).
+            local own = GROUP_MESSAGE[gk] and Nav._message_text(GROUP_MESSAGE[gk])
+            out[#out + 1] = { key = gk, name = own or I18n.t("radar_cat_" .. gk), items = g.items }
         end
     end
     return out

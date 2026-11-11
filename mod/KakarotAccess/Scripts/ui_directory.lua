@@ -202,6 +202,64 @@ function getters.gm(ns)
     return nil
 end
 
+-- The super-training component (Whis and the other DLC trainers; USuperTrainingComponent,
+-- AT.hpp:43616) owns its menu widgets itself and no manager points at it, so it is the one root
+-- found by a class scan. Looked for only while a menu nobody reads may be open — a press in a
+-- gameplay world with no minimap, no battle HUD and no committed adapter — on its own backoff.
+-- Notes: reference/dbz-kakarot/notes/dbz-kakarot-super-training.md
+local ST_BACKOFF = 50   -- ticks (~5 s) between scans while that state lasts
+local ST_WIDGETS = { "ShopTop", "StartPartyMenu", "SkillCustomize", "SkillTreeMenu" }
+
+-- 2 = one of the component's menus is on screen, 1 = it has created one, 0 = idle (or the CDO).
+local function st_state(comp)
+    local state = 0
+    for _, name in ipairs(ST_WIDGETS) do
+        local w = prop(comp, name)
+        if w ~= nil then
+            if Core.on_screen(w) then return 2 end
+            state = 1
+        end
+    end
+    return state
+end
+
+local function st_gate()
+    if not in_gameplay() or not Core.hot() or Core.scan_quiet() then return false end
+    if Core.minimap_peek() or Core.battle_hud_peek() then return false end
+    local reg = package.loaded["ui_registry"]
+    return not (reg and reg.active_adapter and reg.active_adapter() ~= nil)
+end
+
+local st_logged = false
+function getters.st(ns)
+    local r = roots["st"]
+    if not Core.valid(r) then r = nil; roots["st"] = nil end
+    if ns or not st_gate() then return r end
+    -- Several trainers can share a world: keep the cached one only while ITS menu is the one up.
+    if r and st_state(r) == 2 then return r end
+    local tick = now()
+    if (root_next["st"] or 0) > tick then return r end
+    if not Core.take_scan_slot("st") then return r end
+    root_next["st"] = tick + ST_BACKOFF
+    local all
+    if not pcall(function() all = Core.findall("SuperTrainingComponent") end) or not all then
+        return r
+    end
+    local best, best_state = r, r and 1 or 0
+    for _, o in pairs(all) do
+        if Core.valid(o) then
+            local state = st_state(o)
+            if state > best_state then best, best_state = o, state end
+        end
+    end
+    if best and not st_logged then
+        st_logged = true
+        print("[KakarotAccess] directory: super training component found\n")
+    end
+    roots["st"] = best
+    return best
+end
+
 -- ---- the world epoch (the transition gate's only signal) ---------------------------------
 --
 -- Identity of the world we are in right now, as a plain number, polled from the game thread
@@ -266,10 +324,13 @@ local MAP = {
     ["Start_Top_C"]            = { {"mm", "m_xRootMenu", "m_UIStartTop"}, {"fm", "StartTop"} },
     ["Start_Item_C"]           = { {"mm", "m_xItemInventoryMenu", "ItemMenu"} },
     ["Start_Item_Customize_C"] = { {"mm", "m_xItemInventoryMenu", "ItemPalette"} },
+    -- The `st` chains are the super-training component's own copies (AT.hpp:43616-43622).
     ["Start_Skilltree_C"]      = { {"mm", "m_xStartSkillTreeMenu", "SkillTreeMenu"},
-                                   {"mm", "m_xPartyMenu", "SkillTreeMenu"} },
+                                   {"mm", "m_xPartyMenu", "SkillTreeMenu"},
+                                   {"st", "SkillTreeMenu"} },
     ["Start_Skillcustom_C"]    = { {"mm", "m_xStartSkillCustomize", "SkillCustomize"},
-                                   {"mm", "m_xPartyMenu", "SkillCustomize"} },
+                                   {"mm", "m_xPartyMenu", "SkillCustomize"},
+                                   {"st", "SkillCustomize"} },
     ["AT_UIStartChar"]         = { {"mm", "m_xCharacterMenu", "MenuUI"} },
     ["AT_UIStartStatus"]       = { {"mm", "m_xStatusMenu", "MenuUI"} },
     ["AT_UIStartSaveLoad"]     = { {"mm", "m_xSaveMenu", "m_UIStartSaveLoad"},
@@ -344,9 +405,11 @@ local MAP = {
     -- picks the one with visible rows, so both chains must be here.
     -- Bulma's I+D keeps a THIRD copy on its own manager (AATGameMode.MechaDevManager @0x4A0 ->
     -- MenuManager @0x358, AT.hpp:13224/13362); without it the directory called that menu absent.
+    -- A super trainer (Whis) keeps a FOURTH on its own component (`st`, AT.hpp:43619).
     ["Shop_Top_C"]             = { {"fm", "ShopTop"},
                                    {"fm", "CookingMenu", "WL_CookingTop"},
-                                   {"gm", "MechaDevManager", "MenuManager", "UIShopTop"} },
+                                   {"gm", "MechaDevManager", "MenuManager", "UIShopTop"},
+                                   {"st", "ShopTop"} },
     ["Shop_Develop_Dev_C"]     = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelop"} },
     ["Shop_Develop_Result_C"]  = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelopResult"} },
     -- Personalización and Subes de nivel share one host (census 2026-10-21, tester save with a machine).
@@ -360,6 +423,12 @@ local MAP = {
     ["Shop_Top01_C"]           = { {"fm", "ShopTop01"} },
     ["Shop_Training00_C"]      = { {"fm", "ShopTraining00"} },
     ["Shop_Training01_C"]      = { {"fm", "ShopTraining01"} },
+    -- The super training layouts (Whis and the other DLC trainers), AT.hpp:32915-32918.
+    -- Header only, unplayed (2026-11-11).
+    ["Shop_Training02_C"]      = { {"fm", "ShopTraining02"} },
+    ["Shop_Training03_C"]      = { {"fm", "ShopTraining03"} },
+    ["Shop_Training04_C"]      = { {"fm", "ShopTraining04"} },
+    ["Shop_Training05_C"]      = { {"fm", "ShopTraining05"} },
     ["Map_World_C"]            = { {"fm", "MapWorld"} },
     ["Map_M_C"]                = { {"fm", "MapMng", "AreamapIns"} },
     ["AT_UIMiniMapRadar"]      = { {"fm", "MapMng", "MinimapIns"} },
@@ -651,7 +720,8 @@ function Directory.debug_lines()
         end
     end
     for _, d in ipairs({ { "hud", getters.hud }, { "fm", getters.fm }, { "bm", getters.bm },
-                         { "cm", getters.cm }, { "wm", getters.wm }, { "gm", getters.gm } }) do
+                         { "cm", getters.cm }, { "wm", getters.wm }, { "gm", getters.gm },
+                         { "st", getters.st } }) do
         local o = d[2]()
         lines[#lines + 1] = string.format("  root %s = %s", d[1],
             o and class_name_of(o) or "nil")

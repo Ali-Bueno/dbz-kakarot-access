@@ -51,6 +51,7 @@ local FT = OFF.mapWorld
 local FT_HOST_CLASS = "Map_World_C"
 local ft_points = nil      -- ordered { name } by InfoIcon index (list[i+1] = name for index i)
 local ft_balls = nil       -- ft_balls[i] = true when point i carries the world map's Dragon Ball
+local ft_icons = nil       -- ft_icons[i] = address of point i's icon widget (a number, no handle)
                            -- mark. Kept apart from the names, which are matched across rebuilds.
 local ft_sel = nil         -- chosen index (0-based), or nil until the player d-pads
 local ft_prevbtn = 0       -- previous pad bitmask (button edge detection)
@@ -464,7 +465,7 @@ local function ft_build(host)
     end
     local data = Mem.ptr(host, FT.infoIconData)
     local count = Mem.i32(host, FT.infoIconCount) or 0
-    local out, balls = {}, {}
+    local out, balls, icons = {}, {}, {}
     if data and data ~= 0 and count > 0 and count < 256 then
         for i = 0, count - 1 do
             -- read the entry's icon widget pointer (8 bytes LE) and match it by address.
@@ -473,18 +474,40 @@ local function ft_build(host)
             if b and #b == 8 then iconptr = string.unpack("<I8", b) end
             out[i + 1] = (iconptr and byaddr[iconptr]) or (I18n.t("map_point") .. " " .. (i + 1))
             balls[i + 1] = iconptr and ballat[iconptr] or false
+            icons[i + 1] = iconptr or false
         end
     end
-    return out, balls
+    return out, balls, icons
 end
 
--- The spoken label of travel point i (1-based): its name, plus the Dragon Ball noun when the
--- world map marks it. Only ever SPOKEN — ft_points keeps the bare names, because the
--- selection is restored by name and a ball being collected must not break that match.
+-- Does the world map mark point i as holding villainous enemies? The mark is the icon's own
+-- map-icon switch (native_offsets.mapWorldIcon). Read live, at speaking time: the game sets it
+-- only after the map's open animation, later than the list is built.
+local function ft_villain(i)
+    local want = ft_icons and ft_icons[i]
+    if not want then return false end
+    for _, ic in ipairs(Core.peek_all("Map_World_Icon_C")) do
+        if Core.valid(ic) and Mem.addr(ic) == want then
+            local sw = Core.member(ic, "Map_Icon_Switch")
+            if not Core.pane_live(sw, true) then return false end
+            local kind = Mem.u8(sw, OFF.miniMapIcon.switchType)
+            return kind ~= nil and OFF.mapWorldIcon.villainTypes[kind] == true
+        end
+    end
+    return false
+end
+
+-- The spoken label of travel point i (1-based): its name, plus the Dragon Ball noun and the
+-- villainous-enemy mark when the world map shows them. Only ever SPOKEN — ft_points keeps the
+-- bare names, because the selection is restored by name and a ball being collected must not
+-- break that match.
 local function ft_label(i)
     local name = ft_points and ft_points[i]
-    if name and ft_balls and ft_balls[i] then
-        return name .. ", " .. I18n.t("cat_dragonball")
+    if not name then return name end
+    if ft_balls and ft_balls[i] then name = name .. ", " .. I18n.t("cat_dragonball") end
+    if ft_villain(i) then
+        -- The game's own term (its tutorial title), else ours.
+        name = name .. ", " .. (Nav._message_text("Tutorial_Adv_Title_63") or I18n.t("map_villainous"))
     end
     return name
 end
@@ -622,7 +645,7 @@ local function ft_guidance(host)
         local now = os.clock()
         if now - ft_built_at >= FT_BUILD_S then
             ft_built_at = now
-            ft_points, ft_balls = ft_build(host)
+            ft_points, ft_balls, ft_icons = ft_build(host)
         end
         n = ft_points and #ft_points or 0
     end
@@ -803,7 +826,7 @@ function Map.update()
         -- only on success, so the build simply retries on the next 100 ms poll until the game has
         -- the points ready — and stops for good once it does.
         if not dests_said then
-            ft_points, ft_balls = ft_build(host)
+            ft_points, ft_balls, ft_icons = ft_build(host)
             if #ft_points > 0 then
                 dests_said = true
                 -- …and name the info key here, once, where the player is already being told

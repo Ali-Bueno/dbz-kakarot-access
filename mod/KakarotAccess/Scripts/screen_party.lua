@@ -121,7 +121,11 @@ end
 -- Her top menu ALSO stays Visible through the battle that follows, and the party pane is only
 -- parked there (HitTestInvisible, still on_screen — measured live), so the pane must be
 -- genuinely live or it holds the tick for the whole fight.
+-- A super trainer (Whis) does the same from its own component (ui_directory's `st` root,
+-- USuperTrainingComponent.StartPartyMenu, AT.hpp:43620); same liveness rule. Unplayed.
 local function shop_party()
+    local st = require("ui_directory").peek("st", "StartPartyMenu")
+    if st and Core.on_screen(st) and Core.pane_live(st) then return st end
     if not Core.on_screen(Core.peek_all("Shop_Top01_C")[1]) then return nil end
     for _, h in ipairs(Core.cached_all("Start_Party_C", tick) or {}) do
         if Core.on_screen(h) and Core.pane_live(h) then return h end

@@ -1,4 +1,5 @@
--- Screen adapter: the Capsule Corp training room (the researcher next to the training door).
+-- Screen adapter: the training panes — the Capsule Corp training room (the researcher next to the
+-- training door) and the super trainings (Whis and the other DLC trainers).
 --
 -- Her top menu (Shop_Top01_C: Modificar / Entrenar) is a UAT_UIShopTop and is read by
 -- screen_shoplist. This file reads the two panes it opens, both owned by the field manager
@@ -13,9 +14,13 @@
 --     Txt_Lv_E00..02, rewards Txt_Cap00 + Xlist_Bar02_00/01 (Txt_List, Txt_Num), skill taught
 --     Txt_Cap04 + Txt_Name_Skill + Txt_Detail.
 --
--- Widget names are from the F7 census of 2026-10-21 (tester save, Android saga). Every text is
--- on_screen-gated: a battle with fewer enemies or rewards leaves the extra slots collapsed.
--- Notes: reference/dbz-kakarot/notes/dbz-kakarot-develop.md
+--   Shop_Training02..05_C (UAT_UIShopTraining02..05, AT.hpp:35996-36132) — the super training
+--     layouts (fm.ShopTraining02..05). Same list; their texts are native members, read by name.
+--
+-- Widget names for 00/01 are from the F7 census of 2026-10-21 (tester save, Android saga); 02..05
+-- are from the header only, unplayed. Every text is on_screen-gated: a battle with fewer enemies
+-- or rewards leaves the extra slots collapsed.
+-- Notes: reference/dbz-kakarot/notes/dbz-kakarot-develop.md, dbz-kakarot-super-training.md
 
 local Core = require("ui_core")
 local A = require("ui_archetypes")
@@ -61,38 +66,86 @@ local function remodel_detail()
     return #parts > 0 and table.concat(parts, ", ") or nil
 end
 
-local function battle_detail()
+-- "Derrota a todos los enemigos, 0/1, Megamasa, 3" from one challenge row (UAT_UIXlistBar06).
+local function challenge_parts(spec)
+    local parts = {}
+    local lay = Core.member(host, spec.list)
+    if not Core.on_screen(lay) then return parts end
+    for i = 0, spec.rows - 1 do
+        local row = Core.member(lay, string.format("Xlist_Bar06_%02d", i))
+        if Core.on_screen(row) then
+            push(parts, Core.phrase(shown_text(row, "Txt_Challenge"), shown_text(row, "Txt_Progress"),
+                shown_text(row, "Txt_Item"), shown_text(row, "Txt_Num")))
+        end
+    end
+    if #parts > 0 then table.insert(parts, 1, shown_text(host, spec.cap)) end
+    return parts
+end
+
+-- The detail of a battle pane, from its layout: which of the shared blocks the class declares.
+-- Every member named through a layout is declared by that pane's class, so nothing is probed.
+local function battle_detail(lay)
     local parts = {}
     local rec, lv = shown_text(host, "Txt_Recommend"), shown_text(host, "Txt_Num_Lv")
     push(parts, rec and lv and (rec .. " " .. lv) or lv)
-    for i = 0, 2 do push(parts, shown_text(host, string.format("Txt_Task_Detail%02d", i))) end
-    for i = 0, 2 do
+    for i = 0, lay.tasks - 1 do push(parts, shown_text(host, string.format("Txt_Task_Detail%02d", i))) end
+    for i = 0, lay.enemies - 1 do
         local s = string.format("%02d", i)
         push(parts, Core.phrase(shown_text(host, "Txt_Name_E" .. s), shown_text(host, "Txt_Lv_E" .. s)))
     end
-    local rewards = {}
-    for i = 0, 1 do
-        local bar = Core.member(host, string.format("Xlist_Bar02_%02d", i))
-        if Core.on_screen(bar) then
-            push(rewards, Core.phrase(shown_text(bar, "Txt_List"), shown_text(bar, "Txt_Num")))
+    if lay.score then
+        push(parts, shown_text(host, "Txt_Title"))
+        push(parts, Core.phrase(shown_text(host, "Txt_Best"), shown_text(host, "Txt_Score")))
+    end
+    if lay.rewards then
+        local rewards = {}
+        for i = 0, lay.rewards - 1 do
+            local bar = Core.member(host, string.format("Xlist_Bar02_%02d", i))
+            if Core.on_screen(bar) then
+                push(rewards, Core.phrase(shown_text(bar, "Txt_List"), shown_text(bar, "Txt_Num")))
+            end
+        end
+        if #rewards > 0 then
+            push(parts, shown_text(host, "Txt_Cap00"))
+            for _, p in ipairs(rewards) do parts[#parts + 1] = p end
         end
     end
-    if #rewards > 0 then
-        push(parts, shown_text(host, "Txt_Cap00"))
-        for _, p in ipairs(rewards) do parts[#parts + 1] = p end
+    if lay.skill then
+        push(parts, Core.phrase(shown_text(host, lay.skill[1]),
+            lay.skill[2] and shown_text(host, lay.skill[2]) or nil))
     end
-    push(parts, Core.phrase(shown_text(host, "Txt_Cap04"), shown_text(host, "Txt_Name_Skill")))
-    push(parts, shown_text(host, "Txt_Detail"))
+    for _, spec in ipairs(lay.challenges or {}) do
+        for _, p in ipairs(challenge_parts(spec)) do parts[#parts + 1] = p end
+    end
+    if lay.text then push(parts, shown_text(host, "Txt_Detail")) end
     return #parts > 0 and table.concat(parts, ", ") or nil
 end
 
+-- The two challenge lists the score layouts share (UAT_UIXlist_Bar06_Lay10 / _Lay3).
+local CHALLENGES = {
+    { cap = "Txt_Cap01", list = "Xlist_Bar06_Lay10", rows = 10 },
+    { cap = "Txt_Cap02", list = "Xlist_Bar06_Lay3", rows = 3 },
+}
+
+local LIST = "Xlist_List05_Lay7"
 local PANES = {
     remodel = { cls = "Shop_Training00_C", list = "Xlist_List04_Lay9", name = "Txt_Cap00",
                 detail = remodel_detail },
-    battle  = { cls = "Shop_Training01_C", list = "Xlist_List05_Lay7", name = "Txt_Cap03",
-                tab = "Txt_Cap01", detail = battle_detail },
+    battle  = { cls = "Shop_Training01_C", list = LIST, name = "Txt_Cap03", tab = "Txt_Cap01",
+                detail = battle_detail, tasks = 3, enemies = 3, rewards = 2,
+                skill = { "Txt_Cap04", "Txt_Name_Skill" }, text = true },
+    super02 = { cls = "Shop_Training02_C", list = LIST, name = "Txt_Cap03",
+                detail = battle_detail, tasks = 1, enemies = 3, rewards = 5, text = true },
+    super03 = { cls = "Shop_Training03_C", list = LIST, name = "Txt_Cap00",
+                detail = battle_detail, tasks = 3, enemies = 1, score = true,
+                challenges = CHALLENGES },
+    super04 = { cls = "Shop_Training04_C", list = LIST, name = "Txt_Cap03",
+                detail = battle_detail, tasks = 3, enemies = 3, rewards = 5,
+                skill = { "Txt_Skill00" }, text = true },
+    super05 = { cls = "Shop_Training05_C", list = LIST, name = "Txt_Cap00",
+                detail = battle_detail, tasks = 3, enemies = 1, challenges = CHALLENGES },
 }
-local ORDER = { "remodel", "battle" }
+local ORDER = { "remodel", "battle", "super02", "super03", "super04", "super05" }
 
 local function item_list() return Core.member(host, PANES[kind].list) end
 
@@ -129,7 +182,7 @@ function TrainRoom.update()
     local list = item_list()
     -- The selection index and the requirement counts join the signature: two rows can share a
     -- name across character tabs, and a remodel changes what is left.
-    local detail = pane.detail
+    local detail = function() return pane.detail(pane) end
     local sig = Core.phrase(kind, tostring(A.list_select_index(list)), name)
     if sig ~= last_sig then
         if last_sig ~= nil then ann:invalidate() end

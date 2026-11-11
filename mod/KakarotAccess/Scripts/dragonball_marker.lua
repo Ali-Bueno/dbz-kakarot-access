@@ -19,9 +19,9 @@ local Marker = {}
 Marker.ICON_TYPE = Off.dragonBallType
 local icon_class -- native UClass only; never a per-world actor/widget handle
 
--- Returns the live pickup, or nil. The second result is false only when native
+-- The EMapIcon of an occupied marker, or nil. The second result is false only when native
 -- state was unreadable, so a transient read failure need not end an active pick.
-function Marker.actor(icon, minimap)
+local function slot_kind(icon)
     if not Core.valid(icon) then return nil, true end
     -- Validate the native base before private reads. A reflected pointer array
     -- may contain subclasses, which retain this layout; an exact name check
@@ -42,13 +42,15 @@ function Marker.actor(icon, minimap)
     -- The EMapIcon type lives on the icon SWITCH, not on the pooled icon: the game's own
     -- type getter returns this byte, and its removal paths match on it. Its visibility and
     -- colour are deliberately not read — they mean "inside the circle" and "flashing".
-    -- Read before the owner hop so the many non-ball icons are rejected cheaply: the
-    -- tracker walks the whole pool every 100 ms while a ball is selected.
     local switch = Core.member(icon, "WL_Icon_ImgSw")
     if not Core.valid(switch) then return nil, false end
     local kind = Mem.u8(switch, Off.switchType)
     if kind == nil then return nil, false end
-    if kind ~= Off.dragonBallType then return nil, true end
+    return kind, true
+end
+
+-- The marker's target actor when the marker belongs to THIS minimap. Same result pair.
+local function slot_actor(icon, minimap)
     local owner = Core.member(icon, "WL_Owner")
     if not Core.valid(owner) then return nil, false end
     local owner_addr, map_addr = Mem.raw_addr(owner), Mem.raw_addr(minimap)
@@ -56,16 +58,39 @@ function Marker.actor(icon, minimap)
     if owner_addr ~= map_addr then return nil, true end
     local actor = Core.member(icon, "TargetActor")
     if not Core.valid(actor) then return nil, true end
+    return actor, true
+end
+
+-- Returns the live pickup, or nil, plus the readable flag. The type is tested before the
+-- owner hop so the many non-ball icons are rejected cheaply: the tracker walks the whole
+-- pool every 100 ms while a ball is selected.
+function Marker.actor(icon, minimap)
+    local kind, readable = slot_kind(icon)
+    if kind == nil then return nil, readable end
+    if kind ~= Off.dragonBallType then return nil, true end
+    local actor, ok = slot_actor(icon, minimap)
+    if not actor then return nil, ok end
     local hidden = Core.member(actor, "bHidden")
     if hidden == true or hidden == 1 then return nil, true end
     return actor, true
 end
 
+-- Villainous-enemy markers are registered natively too, on the spawned enemy itself (see
+-- native_offsets.miniMapIcon.villainTypes). Returns the marker's actor and its EMapIcon, or
+-- nil, plus the readable flag. No hidden test: the marker is the game's own statement.
+function Marker.villain(icon, minimap)
+    local kind, readable = slot_kind(icon)
+    if kind == nil then return nil, nil, readable end
+    if not Off.villainTypes[kind] then return nil, nil, true end
+    local actor, ok = slot_actor(icon, minimap)
+    return actor, actor and kind or nil, ok
+end
+
 -- Revalidate a pick against the CURRENT marker list, not a sweep snapshot that
 -- can outlive collection. nil means the map/read is unavailable; false is a
--- complete readable list with no matching ball. The caller already owns the
+-- complete readable list with no matching marker. The caller already owns the
 -- free-roam/transition gate. Handles are never kept between calls.
-function Marker.contains(minimap, actor)
+local function holds(minimap, actor, reader)
     if not Core.valid(minimap) or not Core.on_screen(minimap) then return nil end
     if not Core.valid(actor) then return false end
     local wanted = Mem.raw_addr(actor)
@@ -74,12 +99,24 @@ function Marker.contains(minimap, actor)
     if not arr or not n then return nil end
     local complete = true
     for i = 1, n do
-        local candidate, readable = Marker.actor(arr[i], minimap)
+        local candidate, readable = reader(arr[i], minimap)
         if candidate and Mem.raw_addr(candidate) == wanted then return true end
         if not readable then complete = false end
     end
     if complete then return false end
     return nil
+end
+
+function Marker.contains(minimap, actor)
+    return holds(minimap, actor, Marker.actor)
+end
+
+-- Same question for a villainous-enemy marker: false once the enemy is beaten.
+function Marker.contains_villain(minimap, actor)
+    return holds(minimap, actor, function(icon, mm)
+        local a, _, readable = Marker.villain(icon, mm)
+        return a, readable
+    end)
 end
 
 return Marker

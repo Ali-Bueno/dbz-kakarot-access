@@ -22,6 +22,12 @@ return {
         shown = 0x89,           -- u8 on the icon: 1 = inside the minimap circle (unused)
         switchType = 0x398,     -- u8 on WL_Icon_ImgSw (UAT_MapIconSwitchBase tail): EMapIcon
         dragonBallType = 28,    -- EMapIcon::DRAGON_BALL, AT_enums.hpp
+        -- Villainous ("Atrocious") enemy markers, registered natively at spawn on the enemy
+        -- itself (FUN_140f39dd0 -> AddEventIcon FUN_14153bbb0; type from FUN_140d29110: phase
+        -- 0/1/2 = 30/31/34, 35 in Area16_P). Ghidra 2026-11-11,
+        -- code/decompiled/_villain_supertraining_findings.txt. 52/50 are phases 0/1 in DLC5.
+        villainTypes = { [30] = true, [31] = true, [34] = true, [35] = true,
+                         [50] = true, [52] = true },
     },
 
     -- UAT_UIMapWorldIcon (BP Map_World_Icon_C), size 0x410. Ghidra 2026-10-06 (Q8 in
@@ -31,6 +37,11 @@ return {
     -- it, so it is exactly what the world map DRAWS — stale wherever the drawing is stale.
     mapWorldIcon = {
         dragonBall = 0x3F4,     -- u8: 1 = the orange Dragon Ball mark is shown
+        -- Map_Icon_Switch (0x3B8) is used ONLY for the villainous-enemy mark: FUN_1415ca6f0
+        -- makes it Visible with one of these types at switch+0x398 (miniMapIcon.switchType),
+        -- Collapsed otherwise. 50/52 are the same phases in DLC5. Nothing collapses it again.
+        villainTypes = { [30] = true, [31] = true, [34] = true, [35] = true,
+                         [50] = true, [52] = true },
     },
 
     -- Field / overworld Start menu: UAT_UIStartTop.
