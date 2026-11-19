@@ -158,14 +158,30 @@ local function selected_name()
     return row and clean(row.name) or nil
 end
 
+-- A pane on screen that the gates refuse is logged once per pane and reason: the DLC tough
+-- training (ShopTraining03, every ClearTraining mode) was reported silent and never seen live.
+local refused = {}
+local function log_refusal(k, why)
+    if refused[k] == why then return end
+    refused[k] = why
+    print(string.format("[KakarotAccess] trainroom: %s on screen but refused (%s)\n", k, why))
+end
+
 function TrainRoom.is_active()
     tick = tick + 1
     for _, k in ipairs(ORDER) do
         local h = Core.cached_live(PANES[k].cls, tick)
-        if Core.on_screen(h) and Core.pane_live(h) then
-            host, kind = h, k
-            -- Claim only with something to say (CLAUDE.md §8: readable text, never a live handle).
-            if selected_name() then return true end
+        if Core.on_screen(h) then
+            if Core.pane_live(h) then
+                host, kind = h, k
+                -- Claim only with something to say (CLAUDE.md §8: readable text, never a live handle).
+                if selected_name() then refused[k] = nil return true end
+                log_refusal(k, "no selected name")
+            else
+                log_refusal(k, "pane not live")
+            end
+        else
+            refused[k] = nil
         end
     end
     host, kind = nil, nil

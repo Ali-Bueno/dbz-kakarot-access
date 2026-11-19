@@ -50,3 +50,18 @@ switches on a menu type 0–4:
 
 If it is still silent, ask the tester for `UE4SS.log` and grep `screen -> screen_trainroom`,
 `screen -> screen_shoplist` and `super training component found`.
+
+## Tough training grounds (player report 2026-11-19: silent)
+
+Ghidra (`code/decompiled/_tough_training_findings.txt`, probe `code/ghidra/tough_probe.java`):
+`ATrainingPointActor::OpenMenu` (thunk `0x141910dd0` → `FUN_1411e8b70`) switches on `OpenMode`
+@0x7B0. Mode 0 opens `fm.ShopTraining` (`Shop_Training_C`); **CrowdTraining and every
+ClearTraining / MainStoryEx mode open `fm.ShopTraining03`** (`Shop_Training03_C`), writing a
+sub-mode byte at widget+0x590. That pane is already mapped and read by `screen_trainroom`
+(`super03`), never seen live. Selection: unreflected int32 at `Xlist_List05_Lay7+0x490`; the
+game rewrites `Txt_Cap00` / `Txt_Num_Lv` natively on every cursor move (`FUN_14166f500`).
+
+Why it is silent is not settled offline. `screen_trainroom` now logs
+`trainroom: super03 on screen but refused (pane not live | no selected name)`. If that line
+never appears, grep `screen -> ` to see which adapter holds the tick (`screen_training`, registered
+first, is the suspect if a parked `Shop_Training_C` stays on screen); if nothing, take a census.

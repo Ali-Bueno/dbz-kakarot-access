@@ -217,6 +217,8 @@ local ICON_NOUN = {
     [19] = "cat_timemachine", [25] = "cat_trainroom", [27] = "cat_turtleschool",
     [43] = "cat_submarine", [45] = "cat_medical", [46] = "cat_replay",
     [62] = "cat_skyplatform", [64] = "cat_bonfire",
+    [39] = "cat_practice_group", [44] = "cat_saiyan_hangout", [48] = "cat_practice_tough",
+    [57] = "cat_return_main", [67] = "cat_floating_island",
     -- enemies
     [49] = "cat_enemy",
     [30] = "cat_villainous", [34] = "cat_villainous",
@@ -1222,7 +1224,9 @@ local function chain_step(px, py, pz)
         local hidden, st = false, nil
         -- chain_wait.actor was captured on an earlier tick: streaming can free it.
         -- A villainous marker may sit on an invisible volume: its marker is the authority.
-        if not villain then pcall(function() hidden = Core.member(a, "bHidden") end) end
+        if not villain and not chain_wait.hidden0 then
+            pcall(function() hidden = Core.member(a, "bHidden") end)
+        end
         if chain_wait.stateful then
             pcall(function() st = tonumber(Core.member(a, "InteractState")) end)
         end
@@ -2088,7 +2092,9 @@ local function step()
     -- despawns MID-APPROACH (grabbed before the arrival radius fires, or the game
     -- removed it): mark it visited and go straight to the next one — this is the
     -- "pick it up -> the radar marks the next nearest by itself" flow.
-    local function chain_over()
+    local function chain_over(why)
+        print(string.format("[KakarotAccess] nav sweep advance (%s) grp=%s hidden0=%s\n",
+            why, tostring(target.grp), tostring(target.hidden0)))
         chain_seen[target.key] = true
         local grp = target.grp
         drop_target()
@@ -2110,7 +2116,7 @@ local function step()
         if target.actor == nil then
             remember_pick()
             drop_target()
-        elseif sweeping then chain_over() else drop_target() end
+        elseif sweeping then chain_over("invalid") else drop_target() end
         return
     end
     -- A MISSED SCAN IS THE ONE MOMENT NOT TO TOUCH THE HANDLE. `target_missing > 0` means the
@@ -2125,23 +2131,25 @@ local function step()
     local coasting = target_missing > 0 and target.lx ~= nil
     if sweeping and not coasting then
         if target.grp == "dragonball" and Nav._dragonball_available(target.actor) == false then
-            chain_over()
+            chain_over("dragonball")
             return
         end
         local villain = target.grp == "villainous" and Nav.villain_marked[target.key]
         if villain and Nav._villain_available(target.actor) == false then
-            chain_over()
+            chain_over("villain-marker")
             return
         end
         local hidden, st = false, nil
         -- target.actor is a handle picked minutes ago; the actor can be freed under it.
         -- A villainous marker may sit on an invisible volume: its marker is the authority.
-        if not villain then pcall(function() hidden = Core.member(target.actor, "bHidden") end) end
+        if not villain and not target.hidden0 then
+            pcall(function() hidden = Core.member(target.actor, "bHidden") end)
+        end
         if target.stateful then
             pcall(function() st = tonumber(Core.member(target.actor, "InteractState")) end)
         end
         if (hidden == true or hidden == 1) or st == STATE_TAKEN then
-            chain_over()
+            chain_over("hidden-or-taken")
             return
         end
     end
@@ -2156,7 +2164,7 @@ local function step()
         if tx then target.lx, target.ly, target.lz = tx, ty, tz end
     end
     if not tx then
-        if sweeping then chain_over() else drop_target() end
+        if sweeping then chain_over("no-position") else drop_target() end
         return
     end
 
@@ -2210,7 +2218,8 @@ local function step()
                 if chainable(target.grp) then
                     chain_seen[target.key] = true
                     chain_wait = { actor = target.actor, key = target.key,
-                                   grp = target.grp, stateful = target.stateful }
+                                   grp = target.grp, stateful = target.stateful,
+                                   hidden0 = target.hidden0 }
                 end
                 drop_target()
                 auto_suppressed = true
@@ -3146,6 +3155,43 @@ end
 -- on AActor, so it needs no per-class gate. Unreadable counts as NOT hidden (fail open).
 -- World box of a quest trigger volume (TriggerBase family: TriggerStaticActor, TriggerSphere,
 -- TriggerBox), or nil for any other actor. Read once per target: GetActorBounds is a UFunction.
+function Nav._class_has(a, pat)
+    local cn = ""
+    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+    return type(cn) == "string" and cn:find(pat, 1, true) ~= nil
+end
+
+-- What kind of training a training point opens (ATrainingPointActor.OpenMode, ETrainingMenuType
+-- AT_enums.hpp:9610): the DLC "ClearTraining" modes are the hard post-story fights.
+Nav.TRAINING_MODE_NOUN = {
+    [1] = "cat_practice_group", [2] = "cat_practice_tough", [3] = "cat_practice_tough",
+    [4] = "cat_practice_tough", [5] = "cat_practice_extra", [6] = "cat_practice_tough",
+    [7] = "cat_practice_tough",
+}
+-- Longer than this, a travel-window title is a question, not a place name.
+Nav.SITE_NAME_MAX = 40
+
+-- A site's own kind or words: (noun, name), either nil. A training point by its menu mode; when
+-- `generic` (the icon type gave no noun), a level navigator by its travel window's title
+-- (ALevelNavigator, AT.hpp:15815 — the DLC story-replay and return points are navigators).
+-- STRICT fetches: the owner of a site icon can be any class.
+function Nav._site_name(a, generic)
+    if Nav._class_has(a, "TrainingPoint") then
+        local mode
+        pcall(function() mode = tonumber(Core.member(a, "OpenMode", true)) end)
+        local noun = mode and Nav.TRAINING_MODE_NOUN[mode]
+        if noun then return noun, nil end
+    end
+    if not generic then return nil, nil end
+    for _, field in ipairs({ "SelectableWindowTitleId", "NotifyMessageId" }) do
+        local id
+        pcall(function() id = Core.name_str(Core.member(a, field, true)) end)
+        local txt = id and id ~= "None" and Nav._message_text(id)
+        if txt and (utf8.len(txt) or #txt) <= Nav.SITE_NAME_MAX then return nil, txt end
+    end
+    return nil, nil
+end
+
 function Nav._trigger_volume(a)
     if Nav.trigger_cls == nil then
         Nav.trigger_cls = false
@@ -3879,7 +3925,8 @@ function Nav.list_targets(boxed)
         -- distance, and a pickup marker the game registered is never a parked preload actor.
         -- Villainous enemies likewise, but only through their MAP MARKER (src "villain"): a
         -- villainous character found by the enemy scan keeps that scan's tight cap.
-        if grp ~= "quests" and grp ~= "dragonball" and src ~= "villain"
+        -- Sites likewise (player request 2026-11-19): level facilities, never a parked pool.
+        if grp ~= "quests" and grp ~= "dragonball" and grp ~= "sites" and src ~= "villain"
             and src ~= "mobteacher" and src ~= "drone" and src ~= "dmedal" then
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
@@ -3948,19 +3995,28 @@ function Nav.list_targets(boxed)
         end
         local grp = ICON_GROUP[t] or "other"
         local noun = noun_override or ICON_NOUN[t] or ("radar_cat_" .. grp)
+        -- An Android Assault area: drones spawn only near one, so the area is what can be listed
+        -- from afar, and it is what arms the drone scan (section 5a).
+        if (ICON_GROUP[t] == nil or grp == "drones" or grp == "enemies")
+            and Nav._class_has(actor, "AndroidAssaultArea") then
+            Nav.SW.drone_hint = true
+            add_target(actor, "drones", "cat_drone_area", nil, "drone")
+            return
+        end
         if grp == "drones" then Nav.SW.drone_hint = true end
-        -- Patrol hordes (player report 2026-11-19): an enemy-group marker on an ATROCIOUS enemy
-        -- is a villainous one, as the world map already says; only the attribute tells them apart.
-        -- STRICT probe first: a group marker may sit on an actor that is no character at all.
-        if Nav._dragonball_marker.GROUP_VILLAIN_TYPES[t]
-            and Core.member(actor, "AttributeComponent", true) ~= nil
-            and select(2, Nav._char_side(actor)) then
+        -- Patrol hordes (player report 2026-11-19): an enemy-group marker is villainous when the
+        -- game registered it as an EVENT icon (no map-icon component, the atrocious spawn path)
+        -- or when it sits on an atrocious enemy. STRICT probe: it may be no character at all.
+        local group_mark = Nav._dragonball_marker.GROUP_VILLAIN_TYPES[t]
+        local is_char = group_mark and Core.member(actor, "AttributeComponent", true) ~= nil
+        if group_mark and (src == "eventicon" or (is_char and select(2, Nav._char_side(actor)))) then
             grp = "villainous"
         end
         if grp == "villainous" then
             -- The marker sits on the spawned enemy itself (native_offsets.miniMapIcon), so it
             -- is named like any enemy. The side test guards the character-only reads.
-            local _, vile = Nav._char_side(actor)
+            local vile
+            if not group_mark or is_char then vile = select(2, Nav._char_side(actor)) end
             local who = vile and enemy_display_name and enemy_display_name(actor) or nil
             local lvl = vile and enemy_level(actor) or nil
             if lvl then
@@ -3991,6 +4047,11 @@ function Nav.list_targets(boxed)
         -- undeclared member is the uncatchable abort rather than a nil.
         local name = stateful
             and Nav._drop_item_name(actor, true, want_req, nil, grp == "mining") or nil
+        -- A site named only by its group ("Sitios"): the site's own words when it has them.
+        if grp == "sites" and not name then
+            local own_noun, own_name = Nav._site_name(actor, noun == "radar_cat_sites")
+            noun, name = own_noun or noun, own_name
+        end
         add_target(actor, grp, noun, range, src, name, stateful)
     end
 
@@ -4038,7 +4099,11 @@ function Nav.list_targets(boxed)
                             -- Villainous enemies are registered the same native way, so the
                             -- marker's own type outranks a component the actor may not have.
                             local _, vkind = Nav._dragonball_marker.villain(icon, mm)
-                            add_icon(ta, vkind or (icon_info(ta)), "mapicon")
+                            -- An enemy-group type with no map-icon component behind it was
+                            -- registered as an event icon: the atrocious spawn path.
+                            local event = vkind and Nav._dragonball_marker.GROUP_VILLAIN_TYPES[vkind]
+                                and map_icon_type_any(ta) == nil
+                            add_icon(ta, vkind or (icon_info(ta)), event and "eventicon" or "mapicon")
                         end
                     end
                 end
@@ -4355,6 +4420,9 @@ function Nav.list_targets(boxed)
                         for _, m in ipairs(ACTION_POINT) do
                             if cn:find(m.pat, 1, true) then grp, noun = m.grp, m.noun break end
                         end
+                        if grp == "sites" then
+                            noun = Nav._site_name(a, false) or noun
+                        end
                     end
                     local mining = (grp == "mining")
                     local name = (c.action and action_name(a))
@@ -4371,7 +4439,8 @@ function Nav.list_targets(boxed)
                     -- in an empty clearing.
                     -- A deposit is level geometry, never a parked preload actor, so it takes
                     -- the wide map cap (and the empty-group rescue) instead of the tight one.
-                    local src = mining and "mine" or (grp == "dmedals" and "dmedal") or "collectible"
+                    local src = mining and "mine" or (grp == "dmedals" and "dmedal")
+                        or (grp == "sites" and "site") or "collectible"
                     add_target(a, grp, noun, nil, src, name, c.state)
                 end
             end
@@ -4465,15 +4534,16 @@ function Nav.list_targets(boxed)
             e.disp or e.name)
     end
     -- 5a) ANDROID ASSAULT DRONES (Trunks DLC, player report 2026-11-19): plain APawns, so the
-    -- character scan never sees them. Scanned only where the event runs: a drone commander's
-    -- marker in this sweep, or the event's alarm gauge on screen. Level-placed, no distance cap.
+    -- character scan never sees them. Scanned only where the event runs: an assault area's or a
+    -- drone commander's marker in this sweep, or the alarm gauge on screen. No distance cap, and
+    -- hidden ones count: a drone stays hidden beyond its VisibleDistance (AT.hpp:14907).
     do
         -- Only if the screen directory is already up (it always is in game): no load-order tie.
         local dir = package.loaded["ui_directory"]
         local gauge = type(dir) == "table" and dir.peek("fm", "AssaultEvent_Gauge") or nil
         if Nav.SW.drone_hint or (Core.valid(gauge) and Core.on_screen(gauge)) then
             for _, a in pairs(Nav.SW.class_list("AndroidAssaultDroneBase")) do
-                if Core.valid(a) and not Nav._actor_hidden(a) then
+                if Core.valid(a) then
                     local cn = ""
                     pcall(function() cn = a:GetClass():GetFName():ToString() end)
                     local noun = "cat_drone"
@@ -4880,9 +4950,11 @@ function Nav.set_manual_target(actor, key, label, grp, stateful, keep_sweep)
         preempt.stash = nil                    -- a player pick replaces the stashed one
         preempt.scans, preempt.pri = 0, nil    -- and disarms a pending fresh signal
     end
+    -- A far map marker can sit on a hidden actor (an animal or horde spawner): for one that
+    -- was hidden when picked, bHidden says nothing about it being collected or beaten.
     target = { actor = actor, key = key or tostring(actor:GetAddress()),
                pri = PRI_OTHER, label = label, manual = true,
-               grp = grp, stateful = stateful }
+               grp = grp, stateful = stateful, hidden0 = Nav._actor_hidden(actor) }
     arrived, target_missing = false, 0
     route, route_idx = nil, 0
     local pawn = player_pawn()

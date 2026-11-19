@@ -62,6 +62,7 @@ local anchor_x, anchor_y = nil, nil   -- where the movement direction was last m
 local move_fx, move_fy = nil, nil     -- the racer's ground-plane direction of travel
 local heading_src = nil       -- which heading the beacon used last (logged on change)
 local seen_obstacle, seen_ring = false, false   -- log edges (tuning aid), not every tick
+local boost_ring = nil        -- index of the ring the beacon is steering to, if any
 local obstacle_streak = 0     -- consecutive scans with a hit
 local obstacle_since, obstacle_min = 0, 0       -- current obstacle episode, for its log line
 local warned = {}
@@ -233,7 +234,7 @@ local function reset_race()
     live_at, last_count, low_warned = nil, nil, false
     prev_x, prev_y, prev_t, speed = nil, nil, nil, 0
     anchor_x, anchor_y, move_fx, move_fy, heading_src = nil, nil, nil, nil, nil
-    seen_obstacle, seen_ring, obstacle_streak = false, false, 0
+    seen_obstacle, seen_ring, obstacle_streak, boost_ring = false, false, 0, nil
     Rings.reset()
     Sensor.new_race()
 end
@@ -293,13 +294,32 @@ local function step()
     track_motion(px, py)
     local fx, fy = racer_forward(pc, pawn, px, py, pz)
     if not fx then warn_once("heading", "no racer heading, the beacon stays centred") end
+    -- A boost ring on the way to the checkpoint takes over the beacon, with the ring's own sound,
+    -- until the racer is through it; then the beacon returns to the checkpoint.
+    Rings.refresh(now)
+    local bx, by, bz, bdist, bi = Rings.on_route(px, py, pz, tx, ty, tz)
+    if bi ~= boost_ring then
+        boost_ring = bi
+        if bi then
+            Speech.say(I18n.t("race_booster"), false)
+            print(string.format("[KakarotAccess] race booster -> %.0f m (ring %d of %d)\n",
+                bdist / M, bi, Rings.count()))
+        end
+    end
     local dx, dy, dz = tx - px, ty - py, tz - pz
+    if bx then dx, dy, dz = bx - px, by - py, bz - pz end
     local pan, fb = Beacon.cam_rel(dx, dy, fx, fy)
-    local vol, interval = Beacon.cadence(math.sqrt(dx * dx + dy * dy + dz * dz))
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    local vol, interval
+    if bx then vol, interval = Rings.cadence(dist) else vol, interval = Beacon.cadence(dist) end
     local ms = tick * TICK_MS
     if ms - last_ping_ms >= interval then
         last_ping_ms = ms
-        Audio.ping(pan, vol * BEACON_GAIN, Beacon.behind_pitch(fb))
+        if bx then
+            Audio.cue(RING_CUE, pan, vol * RING_GAIN, Beacon.behind_pitch(fb))
+        else
+            Audio.ping(pan, vol * BEACON_GAIN, Beacon.behind_pitch(fb))
+        end
     end
 
     -- Obstacles: the nearest wall-like hit ahead, heard from its own direction. A hit must hold
@@ -321,9 +341,10 @@ local function step()
     end
     if opan and odist < obstacle_min then obstacle_min = odist end
 
-    -- Boost rings: the nearest one ahead, not while an obstacle is close.
-    Rings.refresh(now)
+    -- Other boost rings: the nearest one ahead, not while an obstacle is close, and not while the
+    -- beacon is already steering to one.
     local rpan, rdist = Rings.pick(px, py, pz, fx, fy)
+    if bx then rpan = nil end
     if (rpan ~= nil) ~= seen_ring then
         seen_ring = rpan ~= nil
         if rpan then

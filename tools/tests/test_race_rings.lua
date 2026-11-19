@@ -80,6 +80,24 @@ do
     check(v1 > v2 and i1 < i2, "a nearer ring cues louder and faster")
 end
 
+do
+    -- Checkpoint 100 m straight ahead (+x). Rings: on the line 30 m out, 10 m to the side 20 m out,
+    -- 30 m to the side, and one behind.
+    Rings._set({ { 3000, 0, 0 }, { 2000, 1000, 0 }, { 2500, 3000, 0 }, { -1000, 0, 0 } })
+    local x, y, z, d, i = Rings.on_route(0, 0, 0, 10000, 0, 0)
+    check(i == 2 and math.abs(d - math.sqrt(2000 ^ 2 + 1000 ^ 2)) < 1,
+        "on route: the nearest ring near the line to the checkpoint, not one far to the side")
+    Rings._set({ { 3000, 2500, 0 } })
+    check(Rings.on_route(0, 0, 0, 10000, 0, 0) == nil, "25 m off the line is not on the way")
+    Rings._set({ { 3000, 1500, 0 } })
+    check(Rings.on_route(0, 0, 0, 10000, 0, 0) ~= nil, "15 m off the line is on the way")
+    check(select(5, Rings.on_route(0, 0, 0, 10000, -2500, 0)) == 1,
+        "the ring being steered to keeps a wider margin")
+    check(Rings.on_route(3100, 1500, 0, 10000, 0, 0) == nil, "once passed, it drops out")
+    Rings._set({ { 3000, 0, 0 } })
+    check(Rings.on_route(0, 0, 0, 2000, 0, 0) == nil, "a ring beyond the checkpoint waits for the next leg")
+end
+
 if fails > 0 then
     io.write(fails .. " failure(s)\n")
     os.exit(1)

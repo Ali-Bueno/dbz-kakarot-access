@@ -116,6 +116,9 @@ Registry.register(require("screen_trainroom"), "screen_trainroom")
 --   Shop_Info_C — the information store (map-location intel: fishing/hunting/... spots).
 Registry.register(require("screen_shopcmn"), "screen_shopcmn")
 Registry.register(require("screen_shopinfo"), "screen_shopinfo")
+-- Quest Retry (time machine) episode list: opens OVER/after the chapter picker (a Shop_Top that
+-- screen_shoplist reads), so it must precede the shop group.
+Registry.register(require("screen_questretry"), "screen_questretry")
 Registry.register(require("screen_shoplist"), "screen_shoplist")
 Registry.register(require("screen_cooking"), "screen_cooking")
 Registry.register(require("screen_shop"), "screen_shop")

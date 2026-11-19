@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-11-19 (player report: D medals and drones radar groups, alarm HUD, patrol hordes as villainous, robot-race heading, all unplayed; trigger-volume arrival verified live; released as v0.1.15). Before that: 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
+**Last updated:** 2026-11-19 evening (second player report, coded without the game: far hidden markers, patrol hordes, drone areas, area-map medal counter, race boosters, time machine reader, DLC site names; released as v0.1.16). Before that: 2026-11-19 (player report: D medals and drones radar groups, alarm HUD, patrol hordes as villainous, robot-race heading, all unplayed; trigger-volume arrival verified live; released as v0.1.15). Before that: 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -42,6 +42,17 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-11. **Second player report 2026-11-19 — all coded and UNPLAYED (game not run), released as v0.1.16.**
+   Lint clean, 18 offline test files green (new hidden-marker case fails on the old code).
+   - *Far prey / DLC enemies → "no items left":* a hidden marker actor read as collected; fixed
+     with `hidden0`. Log `nav sweep advance (<reason>)`. [Far markers](reference/dbz-kakarot/notes/dbz-kakarot-radar-far-markers.md).
+   - *Patrol hordes:* 50/52 event icons (no map-icon component) join *Enemigos supervillanos*.
+   - *Drones:* assault AREAS listed from afar and arm the drone scan. [Android Assault](reference/dbz-kakarot/notes/dbz-kakarot-android-assault.md).
+   - *Area map D medals:* BP twins + retries, log `map counters ->`. [D medals](reference/dbz-kakarot/notes/dbz-kakarot-dmedals.md).
+   - *Race boosters:* beacon steers to a ring on the way. [Race](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md), last section.
+   - *Time machine:* new `screen_questretry` + chapter picker mapped (`gm.QuestRetryManager`).
+   - *DLC sites:* named, `sites` uncapped. *Tough training screen:* see the training note.
 
 -10. **Player report 2026-11-19 — four items, all coded and UNPLAYED (the game was not run).**
    Lint clean, 18 offline test files green. Released in v0.1.15 (2026-11-19). Tester save: `Downloads\851850.zip`
@@ -325,6 +336,7 @@ written and lint-clean but never seen working in game. The full derivation of ev
 | Cooking menu | done | `screen_cooking.lua`; entry menu via the second `Shop_Top_C`. CAVEAT: the ghost pane reads `vis=0 opacity=1.0`, so `pane_live` does NOT discriminate it — the shadowing is killed by the yields plus spoken-key suppression. `LATCH_DEBUG` on. Verified 2026-07-15. |
 | Bulma's I+D (build list, result sheet, Personalización, Subes de nivel) | done | `screen_develop.lua`; the I+D `Shop_Top_C` and all panes resolve through the `gm` root (GameMode → `MechaDevManager.MenuManager`). Build list verified 2026-10-18; Personalización / Subes de nivel (one host, `Shop_Develop_Custom_C`) and the quantity window (`screen_numberwin.lua`) verified 2026-10-21. Chip slot cursor unverified (one slot, no chips). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
 | Training room (Capsule Corp) | done | Researcher NPC `Cpl073_Training`. Top menu `Shop_Top01_C` (`fm.ShopTop01`, `screen_shoplist`), remodel and battle panes `Shop_Training00/01_C` (`fm`, `screen_trainroom.lua`), pre-battle party = the NPC's `ShopComponent.StartPartyMenu` (`screen_party` gated fallback). Verified end to end 2026-10-21. `Icon_Clear` not spoken; `ShopTraining02..05` unmapped (no census). [Note](reference/dbz-kakarot/notes/dbz-kakarot-develop.md). |
+| Time machine / story replay (Quest Retry) | done (unverified) | `screen_questretry.lua` reads `UAT_UIQuestRetry` via `gm.QuestRetryManager.MenuManager.UIEpisodeMenu`; chapter picker `UIChapterMenu` mapped under `Shop_Top_C`. Row from `GetSelectValue`, pane text as a second signal. |
 | Super training panes (Whis, DLC trainers) | done (unverified) | `screen_trainroom` layouts for `Shop_Training02..05_C` (`fm.ShopTraining02..05`); the flow uses 03 and 04. `st` directory root = the trainer's `USuperTrainingComponent`. [Note](reference/dbz-kakarot/notes/dbz-kakarot-super-training.md). |
 | Radar: villainous enemies + world-map mark | done (unverified) | Group `villainous` from native minimap slots (types 30/31/34/35 on the spawned enemy); `screen_map.ft_villain` reads `Map_Icon_Switch`. [Note](reference/dbz-kakarot/notes/dbz-kakarot-villainous-mining.md). |
 | Radar: mining | done (unverified) | Group `mining`: ORE markers and `MineralMiningPoint*`, named by every ore they yield. Same note. |

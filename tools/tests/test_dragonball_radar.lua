@@ -425,6 +425,18 @@ mm.MapIconList = { icon }
 tick_once()
 check(speech[#speech] == "radar_chain_done",
     "retrying next-ball acceptance preserves the sweep's visited keys")
+-- A far map marker on a HIDDEN actor (a hunting-area spawner, a horde): picking it must not read
+-- bHidden as collected and end the sweep at once (player report 2026-11-19).
+local prey = object("AnimalSpawnPoint_C", { x = 200000, bHidden = true })
+local said_before = #speech
+check(Nav.set_manual_target(prey, tostring(prey.addr), "prey", "hunt", false) == true,
+    "a hidden far marker can be picked")
+for _ = 1, 5 do tick_once() end
+local ended = false
+for i = said_before + 1, #speech do if speech[i] == "radar_chain_done" then ended = true end end
+Nav.where()
+check(not ended and speech[#speech]:find("meters", 1, true) ~= nil,
+    "a far marker on a hidden actor keeps tracking instead of ending the sweep")
 check(#nav_errors == 0, "the real navigation and explore ticks raise no harness errors")
 
 if fails > 0 then print(fails .. " check(s) FAILED"); os.exit(1) end

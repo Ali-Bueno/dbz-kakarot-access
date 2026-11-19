@@ -30,3 +30,12 @@ collected", and list them from far away like quest items. Coded **unplayed**. Na
 3. If the radar total is smaller than the area map's, the medals stream after all: build the
    static table from the save tables above (a generator was written and dropped on 2026-11-19
    because nothing needed it yet).
+
+## Second report, 2026-11-19: the area map said nothing
+
+The radar group works (player), but the area map spoke no count. The reader asked only the
+NATIVE pointers (`WL_Pnl_Medal`, `WL_Text_Count`), required them on screen, and gave up after one
+poll. The Blueprint twins exist (`Map_M.hpp`: `Pnl_Medal` @0x1190, `Pnl_Treasurebox` @0x1198;
+`Map_M_Count.hpp`: `Txt_Count` @0x3F0), so it now tries native then BP through the strict gate,
+drops the on-screen test, retries for ten polls and logs `map counters -> …` with what it read.
+If that line shows `nil` for both, take a census with the area map open.

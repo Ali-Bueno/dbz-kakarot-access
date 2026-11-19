@@ -38,3 +38,22 @@ pak name tables only, **unplayed** (Ghidra was not needed and not run).
 - Checklist: in the Trunks DLC, go back with the time machine to a drone area. R3 → *Drones* must
   list them with kind and distance; destroy one, the next must chain; the parts must show in
   *Coleccionables*; entering the area and getting caught must be spoken.
+
+## Second report, 2026-11-19: "they only appear once they spot me"
+
+The v0.1.15 gate scanned drones only when a commander's marker or the alarm gauge was up, and
+the gauge appears only once the alarm is raised. And the drones are not level-placed:
+`AAndroidAssaultArea` (AT.hpp:14891) spawns them from `SpawnPattern` / `DroneClassTbl` once the
+player is within `SpawnDistanceMin/Max`, and each drone hides itself beyond its own
+`VisibleDistance` (`AAndroidAssaultDroneBase` @0x3E4). So nothing is there to list from far away.
+
+Now (unplayed):
+
+- The **area** is listed in *Drones* as "zona de drones", any distance. It has its own
+  `MapIconComponent` (@0x358), so the icon scans reach it; it is matched by class name
+  (`AndroidAssaultArea`) on any icon type the radar does not already group, because its
+  `MapIconType` is not in the Blueprint defaults (`BP_AndroidAssaultArea.uasset` strings, pak).
+- An area marker also arms the drone scan, so drones are listed as soon as they spawn, alarm or
+  not. Hidden drones are listed too (beyond `VisibleDistance`).
+- To check: does the area show from afar, and is its type in the log's sweep diagnostics; do
+  drones appear before the alarm.

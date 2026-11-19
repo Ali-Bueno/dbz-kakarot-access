@@ -39,6 +39,7 @@ local muted = false
 local pings, said, cues = {}, {}, {}
 local obstacle = nil          -- what the fake sensor reports: {pan, dist}
 local ring = nil              -- what the fake ring picker reports: {pan, dist}
+local boost = nil             -- what the fake on-route picker reports: {x, y, z, dist, index}
 local tick_fn
 
 module("ui_core", {
@@ -64,6 +65,8 @@ end })
 module("race_rings", {
     reset = function() end, refresh = function() end,
     pick = function() if ring then return ring[1], ring[2] end end,
+    on_route = function() if boost then return boost[1], boost[2], boost[3], boost[4], boost[5] end end,
+    count = function() return 1 end,
     cadence = function() return 1.0, 300 end,
 })
 module("obstacle_sensor", {
@@ -332,6 +335,23 @@ do
     check(Race.format_count("03/08") == "3 of 8", "a zero-padded counter is read as numbers")
     check(Race.format_count("05") == "5", "a lone zero-padded number loses its zeros")
     check(Race.format_count("10") == "10", "a real zero is kept")
+end
+
+do
+    -- A ring on the way: the beacon steers to it with the ring sound, says so once, then returns.
+    hud.next = { X = 1000, Y = 11000, Z = 0 }
+    pings, cues, said = {}, {}, {}
+    boost = { 1000, 4000, 0, 3000, 2 }
+    run(10)
+    local items, boosted = 0, 0
+    for _, c in ipairs(cues) do if c.name == "item" then items = items + 1 end end
+    for _, l in ipairs(said) do if l.text == "race_booster" then boosted = boosted + 1 end end
+    check(items >= 2 and #pings == 0, "a ring on the way replaces the beacon with the ring sound")
+    check(boosted == 1, "the booster is announced once per ring")
+    boost = nil
+    pings, cues = {}, {}
+    run(10)
+    check(#pings >= 1, "past the ring, the beacon returns to the checkpoint")
 end
 
 if fails > 0 then

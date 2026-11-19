@@ -211,3 +211,17 @@ says `race heading -> pawn|movement|camera (pawn <class>, N m from racer)` on ev
 first robot race's line settles the hypothesis. If it says `pawn` and steering still fails, the
 robot's actor yaw is not its travel direction: try the movement heading for it too.
 
+## Boosters on the way (player report 2026-11-19, unplayed)
+
+"I can't reach the boosters to go faster to reach the checkpoints." The robot race uses the same
+boost actor as the car race (`BP_BoostPoint_C` < `ABoostPointActor`, both names in the TwinFoot
+umap's name table; trigger `UBoostPointComponent : UBoxComponent` overlap, no button), so
+`race_rings` already found them. The cue was the problem: a quieter sound in the gaps of a beacon
+that kept pointing at the checkpoint.
+
+Now `Rings.on_route` picks the nearest ring ahead along the racer→checkpoint line, nearer than the
+checkpoint and within 20 m of the line (30 m once picked); the **beacon itself** steers to it with
+the ring sound and says "Propulsor" once, then returns to the checkpoint when the ring is behind.
+The line is measured from positions only, so it does not depend on the robot's heading. Log:
+`race booster -> N m (ring i of n)`. Tuning: `Rings.ON_ROUTE`. Not known: whether the boost box is
+sized for the robot, and the boost's effect (no reflected speed state).

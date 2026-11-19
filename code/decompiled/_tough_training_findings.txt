@@ -1,0 +1,48 @@
+TOUGH TRAINING GROUNDS (ATrainingPointActor::OpenMenu) - native RE findings (2026-11-19)
+Probe: code/ghidra/tough_probe.java (copy of villain_probe), runner code/ghidra/run_tough.ps1 (quotes the
+path with spaces; the bash/cmd invocation fails: "Bad argument: kakarot"), cmd files tough_cmds1..6.txt(.out).
+
+OpenMenu UFunction (name@0x1443b52d8, table 0x1443b7ee0) exec 0x141910dd0 -> FUN_1411e8a70 -> FUN_1411e8b70 [PROVEN]
+  (the other OpenMenu row, 0x1442e96d0, is a virtual-dispatch thunk of another class). FUN_1411e8a70 only gates on
+  FUN_140d2fd50 / fm FUN_1415457e0 (= fm+0x6A0, ShopTraining) and defers the call; it does not choose a pane.
+FUN_1411e8b70 switch on actor+0x7B0 (OpenMode)  [PROVEN]:
+  0 Training      -> fm.ShopTraining (0x6A0, Shop_Training_C, skill shop): FUN_14163e4c0 opens it
+                     (gated by pTrainingDataTableAccessor(0x438)+0x11C != 0). Adapter: screen_training.
+  1 CrowdTraining -> FUN_1411e6830 : fm.ShopTraining03 (0x6C0) via FUN_14165b2e0 (->FUN_1415457c0), lists from
+                     DAT_14595c308 (accessor) FUN_1411b0ca0, set by FUN_14165cac0, opened by FUN_14166d4e0
+                     which writes widget+0x590 = 2.
+  2..7            -> FUN_1411e6430 : the SAME fm.ShopTraining03, lists FUN_14165ca80, opened by FUN_14166d2d0
+                     which writes widget+0x590 (mode byte) = 3 (mode2 DLC4Clear), 4 (DLC5Clear), 5 (DLC6Clear),
+                     6 (MainStoryEx), 7 (DLC7Clear), 9 (DLC8Clear).
+  Both paths first call CmnFadeBlur In (FUN_1416f2d90), the open sets CmnHeader SetFontType(0x22).
+  => every tough/clear/crowd/main-story-ex training uses ONE widget: UAT_UIShopTraining03 (BP Shop_Training03_C),
+     owner fm.ShopTraining03 @0x6C0. Nothing is stored on the actor (StartParty/SkillCustomize/SkillTree
+     0x440..0x450 are for other flows, not this switch).
+Widget members (AT.hpp:36033, size 0x688) [PROVEN header]: Xlist_List05_Lay7 0x5E0 (UAT_UIXlistList05Lay7, adds nothing to
+  UAT_UIMenuListBase00), Txt_Cap00 0x5E8 (selected name), Txt_Recommend 0x5F0, Txt_Num_Lv 0x5F8, Txt_Name_E00 0x610,
+  Txt_Lv_E00 0x618, Txt_Best 0x620, Txt_Title 0x628, Txt_Score 0x630, Txt_Task_Detail00..02 0x638-0x648, Txt_Cap01 0x650,
+  Xlist_Bar06_Lay10 0x658, Txt_Cap02 0x660, Xlist_Bar06_Lay3 0x668, Txt_Task_Details TArray 0x678.
+Selection / row data [PROVEN]: FUN_14166f500 (widget detail refresh, called at open from FUN_14166d2d0/14166db70/
+  141667620 and from several cursor handlers FUN_14165e030/e240/e7f0/e9c0, FUN_141655cf0) reads
+  row = *(rowsTArray at widget+0x4E0)[ *(int*)(Xlist_List05_Lay7 + 0x490) ] (count at widget+0x4E8) and
+  WRITES the texts natively: Txt_Cap00 (0x5E8) <- name from row, Txt_Num_Lv (0x5F8) <- row+0x30 level.
+  So the selected index is the hidden int32 at list+0x490 (unreflected, in the 0x4B0-sized list past
+  MenuListBase00's reflected tail 0x448), plus the reflected GetSelectValue. The detail texts are native-written
+  and follow the cursor (no Blueprint DetailUpdate dependency) [PROVEN code path, not observed live].
+  Row struct: row+0x8 id (int32), row+0x30 level.
+Hidden state: widget+0x590 u8 mode (3..9 above, 2 crowd); widget+0x591 flag; +0x4E0/+0x4E8 row array.
+
+MOD CROSS-CHECK
+  ui_directory.lua:431 Shop_Training03_C = fm.ShopTraining03 (mapped, comment says "header only, unplayed").
+  screen_trainroom.lua super03 layout (list Xlist_List05_Lay7, name Txt_Cap00) already covers this widget;
+  is_active needs Core.cached_live + on_screen + pane_live AND a non-empty selected_name() (Txt_Cap00 on_screen
+  text, fallback A.list_selected_row).
+  => the widget is mapped and has an adapter; silence is NOT a missing mapping. Candidates (UNVERIFIED, need a live
+  capture): (a) Txt_Cap00 / list rows not on_screen at the instant checked (open runs InAnimation; texts written by
+  FUN_14166f500 after FUN_14166ccf0/141657d90 set the list), (b) pane_live (visibility Visible + opacity) false
+  while the pane fades in, (c) A.list_selected_row empty because the list rows use a different row class,
+  (d) screen_shoplist / another adapter higher in the registry claiming the tick first
+  (grep log: "screen -> screen_trainroom"), (e) Core.cached_live not re-scanning because fm.ShopTraining03 pointer
+  read happens only via the directory (ok) - check "faulted in is_active".
+  Not-in-text: cleared / locked state of a row; mode-specific extras (mode 9 DLC8 and 6 MainStoryEx take other
+  branches in FUN_14166f500 lines ~224/553: widget+0x590 in 3..9 and ==9).

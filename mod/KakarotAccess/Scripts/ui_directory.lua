@@ -409,7 +409,14 @@ local MAP = {
     ["Shop_Top_C"]             = { {"fm", "ShopTop"},
                                    {"fm", "CookingMenu", "WL_CookingTop"},
                                    {"gm", "MechaDevManager", "MenuManager", "UIShopTop"},
+                                   -- Quest Retry (time machine) CHAPTER picker: a plain UAT_UIShopTop on
+                                   -- AATGameMode.QuestRetryManager @0x4A8 -> MenuManager @0x348 ->
+                                   -- UIChapterMenu @0x88 (AT.hpp:13225/14021/29265). Header only, unplayed.
+                                   {"gm", "QuestRetryManager", "MenuManager", "UIChapterMenu"},
                                    {"st", "ShopTop"} },
+    -- Quest Retry EPISODE list: same manager, UIEpisodeMenu @0x90 (AT.hpp:29266). Keyed on the NATIVE
+    -- class because the Quest_Retry blueprint was never visited (no BP header); screen_questretry.
+    ["AT_UIQuestRetry"]        = { {"gm", "QuestRetryManager", "MenuManager", "UIEpisodeMenu"} },
     ["Shop_Develop_Dev_C"]     = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelop"} },
     ["Shop_Develop_Result_C"]  = { {"gm", "MechaDevManager", "MenuManager", "UIShopDevelopResult"} },
     -- Personalización and Subes de nivel share one host (census 2026-10-21, tester save with a machine).

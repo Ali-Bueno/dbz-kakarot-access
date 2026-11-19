@@ -47,8 +47,15 @@ Limits:
   were not in the villainous group although the world map called them villainous (player report).
   Now a 50 / 52 marker whose actor carries the atrocious attribute joins *Enemigos supervillanos*,
   no cap (`native_offsets.miniMapIcon.groupVillainTypes`); one on a non-atrocious actor (e.g. a
-  Trunks-DLC enemy group) stays where it was. Unplayed: check that the horde shows in the group
-  from afar and whether its marker sits on an enemy or on something else.
+  Trunks-DLC enemy group) stays where it was.
+- Second report the same day: the hordes still never reached the group, and tracking a far
+  "grupo enemigo" said "no items left" at once. Both fit a marker on a HIDDEN, non-character
+  actor (a horde spawner): the atrocious test needs `AttributeComponent`, and the sweep read
+  `bHidden` as "beaten". Now a 50 / 52 minimap slot whose actor has **no map-icon component** is
+  treated as the atrocious event icon (`AddEventIcon` registers no component, unlike the
+  component-based icons) and joins the group; and a target hidden when picked is never advanced
+  on `bHidden` (see [far markers](dbz-kakarot-radar-far-markers.md)). Unplayed. Risk: if a
+  Trunks-DLC group also has no component, it is now called villainous too.
 
 Live checklist:
 

@@ -39,6 +39,7 @@ local OBJ_READ_DELAY = 3   -- polls after opening before the quest objective is 
                            -- of talking over it (user 2026-07-24)
 local obj_read_at = nil    -- tick to fire the deferred objective re-read (nil = done/disarmed)
 local counts_at = nil      -- poll on which the area map's collection counters are read
+local counts_tries = 0     -- polls spent waiting for their text
 
 -- World-map fast travel via the game's OWN selection machine (UAT_UIMapWorld, Ghidra 2026-07-09,
 -- native_offsets.mapWorld): d-pad up/down picks a destination by its native InfoIcon INDEX, we
@@ -780,29 +781,46 @@ function Map.reset()
     -- reviews the goal again. DEFERRED (not spoken here): armed for OBJ_READ_DELAY polls so
     -- update() reads it AFTER the map's own entry readout, queued, not talking over it.
     obj_read_at = tick + OBJ_READ_DELAY
-    counts_at = tick + OBJ_READ_DELAY
+    counts_at, counts_tries = tick + OBJ_READ_DELAY, 0
 end
 
 -- The area map's own collection counters (UAT_UIMapM, AT.hpp:34065): D medals and chests found
--- in this area, computed by the game for the whole area, read once per opening.
+-- in this area, computed by the game for the whole area, read once per opening. Native pointer
+-- first, then its Blueprint twin (Map_M.hpp `Pnl_Medal` / `Pnl_Treasurebox`, Map_M_Count.hpp
+-- `Txt_Count`): the native one may never be assigned. STRICT multi-candidate
+-- fetches, so a name the class lacks is skipped. Not gated on on_screen: the counter sits in a
+-- header that animates in after the map, and the game rebuilds it for this area on opening.
 local AREA_COUNTERS = {
-    { member = "WL_Pnl_Medal", label = "cat_dmedal_plural" },
-    { member = "WL_Pnl_Chest", label = "cat_chest_plural" },
+    { members = { "WL_Pnl_Medal", "Pnl_Medal" }, label = "cat_dmedal_plural" },
+    { members = { "WL_Pnl_Chest", "Pnl_Treasurebox" }, label = "cat_chest_plural" },
 }
+local COUNT_TEXT = { "WL_Text_Count", "Txt_Count" }
+local COUNTS_TRIES = 10    -- polls to wait for the counters' text after the first attempt
+local function first_text(o, names)
+    for _, n in ipairs(names) do
+        local node = Core.member(o, n, true)
+        local t = Core.valid(node) and node_text(node) or nil
+        if t and t ~= "" then return t end
+    end
+    return nil
+end
 local function area_counts(host)
-    local parts = {}
+    local parts, seen = {}, {}
     for _, c in ipairs(AREA_COUNTERS) do
-        local panel = Core.member(host, c.member)
-        if Core.valid(panel) and Core.on_screen(panel) then
-            local t = node_text(Core.member(panel, "WL_Text_Count"))
-            if t and t ~= "" then
-                local a, b = t:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
-                parts[#parts + 1] = a and string.format(I18n.t("map_count_of"), I18n.t(c.label),
-                    tonumber(a), tonumber(b)) or Core.phrase(I18n.t(c.label), t)
-            end
+        local t
+        for _, m in ipairs(c.members) do
+            local panel = Core.member(host, m, true)
+            t = Core.valid(panel) and first_text(panel, COUNT_TEXT) or nil
+            if t then break end
+        end
+        seen[#seen + 1] = string.format("%s=%s", c.label, tostring(t))
+        if t then
+            local a, b = t:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
+            parts[#parts + 1] = a and string.format(I18n.t("map_count_of"), I18n.t(c.label),
+                tonumber(a), tonumber(b)) or Core.phrase(I18n.t(c.label), t)
         end
     end
-    return #parts > 0 and table.concat(parts, ", ") or nil
+    return #parts > 0 and table.concat(parts, ", ") or nil, table.concat(seen, " ")
 end
 
 -- Wall-clock floor between two on-demand objective re-reads (see Map.update).
@@ -831,9 +849,13 @@ function Map.update()
         pcall(function() require("quest_objective").reannounce(false) end)
     end
     if counts_at and tick >= counts_at and not s.world and s.host then
-        counts_at = nil
-        local line = area_counts(s.host)
-        if line then Speech.say(line, false) end
+        local line, seen = area_counts(s.host)
+        counts_tries = counts_tries + 1
+        if line or counts_tries > COUNTS_TRIES then
+            counts_at, counts_tries = nil, 0
+            print(string.format("[KakarotAccess] map counters -> %s\n", seen))
+            if line then Speech.say(line, false) end
+        end
     end
     if s.world then
         local host = ft_host()

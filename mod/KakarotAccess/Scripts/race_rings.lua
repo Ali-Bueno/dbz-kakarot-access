@@ -20,14 +20,21 @@ Rings.AHEAD = 0.5             -- ...and within 60 degrees of the heading (cam_re
 local NEAR = 5 * M            -- fastest cue at this distance
 local MIN_MS, MAX_MS = 150, 600
 local MIN_VOL = 0.6
+-- A ring counts as ON THE WAY to the checkpoint while it lies ahead along the racer->checkpoint
+-- line, nearer than the checkpoint and at most this far to either side of that line (a tuning
+-- value: courses are a few tens of metres wide). The ring already being steered to keeps a wider
+-- margin, so steering towards it does not drop it.
+Rings.ON_ROUTE = 20 * M
+local KEEP = 1.5
 local RETRY_S = 3             -- the course has not loaded yet: scan again this often
 local MAX_TRIES = 10          -- per race; each try is one or two ~65 ms scans
 
 local rings = nil             -- { {x, y, z}, ... } for the current race
 local tries, next_try = 0, 0
+local locked = nil            -- index of the ring on_route returned last
 
 function Rings.reset()
-    rings, tries, next_try = nil, 0, 0
+    rings, tries, next_try, locked = nil, 0, 0, nil
 end
 
 local function position(a)
@@ -81,6 +88,33 @@ function Rings.pick(px, py, pz, fx, fy)
         end
     end
     return best_pan, best
+end
+
+-- The ring to steer through on the way to the checkpoint (player report 2026-11-19: the robot
+-- race cannot be won without boosts, and a side cue was not enough to reach them). Returns its
+-- x, y, z, 3D distance and index, or nil. A ring the racer has passed is behind the racer along
+-- the line and drops out on its own.
+function Rings.on_route(px, py, pz, tx, ty, tz)
+    local cx, cy = tx - px, ty - py
+    local cd = math.sqrt(cx * cx + cy * cy)
+    if cd < 1 then locked = nil return nil end
+    cx, cy = cx / cd, cy / cd
+    local best, best_d
+    for i, r in ipairs(rings or {}) do
+        local dx, dy, dz = r[1] - px, r[2] - py, r[3] - pz
+        local along = dx * cx + dy * cy
+        local side = math.abs(dx * cy - dy * cx)
+        local d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        local margin = (i == locked) and Rings.ON_ROUTE * KEEP or Rings.ON_ROUTE
+        if along > 0 and along < cd and side <= margin and d <= Rings.RANGE
+            and (not best_d or d < best_d) then
+            best, best_d = i, d
+        end
+    end
+    locked = best
+    if not best then return nil end
+    local r = rings[best]
+    return r[1], r[2], r[3], best_d, best
 end
 
 -- Volume and period of the ring cue: louder and faster as the ring nears.

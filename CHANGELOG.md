@@ -2,6 +2,28 @@
 
 ---
 
+## v0.1.16 - November 19, 2026
+
+**Fixes from the second player report of November 19.** Nothing here has been played yet.
+
+- **Tracking from far away** no longer gives up at once. Picking a far prey in *Hunt*, or a far
+  enemy group (the 23rd World Tournament ones), used to say "Tracking…" twice and then "No items
+  left in this category". The radar mistook the hidden marker for something already collected.
+- **Patrol event hordes** (23rd World Tournament) should now show in *Villainous enemies*.
+- **Drones**: the Android Assault areas are listed in *Drones* from any distance, and the drones
+  are listed as soon as they appear, before any alarm.
+- **Area map**: the D medal and chest counters are read again; the first version never found them.
+- **Robot race (and car race) boosters**: when a booster lies on the way to the next checkpoint,
+  the beacon guides you to it with the booster sound and says "Booster", then returns to the
+  checkpoint once you are through.
+- **Time machine / story replay**: the episode list is read (selected episode, story text, its
+  episodes and battles), and the chapter list is read like the other shop lists.
+- **Sites**: DLC sites have names now (tough, group and extra training grounds, return to the main
+  story, Saiyan hangout, floating island, or the game's own name for a travel point), and every
+  site is listed from any distance.
+- **Tough training grounds** are still silent. This version writes the reason to the log, so
+  sending `UE4SS.log` after opening that menu lets us fix it.
+
 ## v0.1.15 - November 19, 2026
 
 **Five fixes from player reports.** Only the objective behind an invisible wall has been
