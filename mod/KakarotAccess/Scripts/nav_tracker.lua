@@ -138,8 +138,8 @@ local PRI_MAIN, PRI_SUB, PRI_OTHER = 3, 2, 1
 -- over the outdoors too. Inside a building this costs nothing anyway: nearly every other group is
 -- empty there and empty groups are skipped when cycling.
 local GROUP_ORDER = {
-    "quests", "exit", "collectibles", "npc", "courses", "companions", "enemies", "villainous",
-    "hunt", "sites", "fishing", "gathering", "mining", "shops", "minigames", "dragonball", "other",
+    "quests", "exit", "collectibles", "dmedals", "npc", "courses", "companions", "enemies", "villainous",
+    "drones", "hunt", "sites", "fishing", "gathering", "mining", "shops", "minigames", "dragonball", "other",
 }
 -- Message-table ids of the category names the game states itself (localized by the game).
 local GROUP_MESSAGE = { villainous = "Tutorial_Adv_Title_63" }
@@ -148,7 +148,9 @@ local ICON_GROUP = {
     [24] = "quests", [71] = "quests", [26] = "quests", [40] = "quests",
     [47] = "quests", [53] = "quests", [59] = "quests", [72] = "quests",
     -- story / community NPCs
-    [4] = "npc", [42] = "npc", [56] = "npc", [61] = "npc", [41] = "npc",
+    [4] = "npc", [42] = "npc", [56] = "npc", [61] = "npc",
+    -- DRONE_COMMANDER: the one Android Assault drone with a map marker (Trunks DLC).
+    [41] = "drones",
     -- INFORMATION_STORE is a shop (sells map intel), not a character (was
     -- miscategorized under npc — Area02 dump 2026-07-06)
     [10] = "shops",
@@ -221,6 +223,7 @@ local ICON_NOUN = {
     [31] = "cat_villainous_boss", [35] = "cat_villainous_boss",
     [32] = "cat_enemy_base", [36] = "cat_enemy_airship",
     [50] = "cat_enemy_group", [52] = "cat_enemy_group",
+    [41] = "cat_drone_commander",
 }
 -- EMapIcon types that are field enemies (for the proximity alert): derived from
 -- ICON_GROUP so the two can never drift apart.
@@ -2182,7 +2185,13 @@ local function step()
         and target.grp ~= "gathering" and target.homegrp ~= "gathering" and not hunted
         and not marker)
         and ARRIVE_DIST_MANUAL or ARRIVE_DIST
-    if d3 <= arrive_r then
+    -- A quest TRIGGER VOLUME arrives when the player is inside it: its centre can sit behind an
+    -- invisible wall the volume reaches past (Area03's fishing spot, live 2026-11-19).
+    if target.vol == nil then target.vol = Nav._trigger_volume(target.actor) or false end
+    local v = target.vol
+    local inside = v and math.abs(px - v.x) <= v.ex and math.abs(py - v.y) <= v.ey
+        and math.abs(pz - v.z) <= v.ez
+    if d3 <= arrive_r or inside then
         if not arrived then
             arrived = true
             Audio.arrival()
@@ -2209,7 +2218,11 @@ local function step()
         end
         return
     end
-    if arrived and d3 > REARM_DIST then arrived = false end
+    -- A volume re-arms only once the player is clear of it by the same margin as a point target.
+    local pad = REARM_DIST - ARRIVE_DIST
+    local near_vol = v and math.abs(px - v.x) <= v.ex + pad and math.abs(py - v.y) <= v.ey + pad
+        and math.abs(pz - v.z) <= v.ez + pad
+    if arrived and d3 > REARM_DIST and not near_vol then arrived = false end
 
     refresh_route(pawn, px, py, pz, tx, ty, tz, false)
     local gx, gy, gz = guidance_point(pawn, px, py, pz, tx, ty, tz)
@@ -2282,7 +2295,8 @@ local function step()
     -- camera yaw centers on it (|pan| within the reticle slack) inside Ki-blast
     -- range, say "on target" (interrupting — the shot window is short); re-arms
     -- when the aim drifts off. pan/fb here are already camera-relative.
-    if target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous" then
+    if target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous"
+        or target.grp == "drones" then
         local on_target = fb > 0 and math.abs(pan) <= AIM_ALIGN_PAN and d3 <= AIM_RANGE
         if on_target and not was_on_target then
             Speech.say(I18n.t("nav_on_target"), true)
@@ -2296,8 +2310,8 @@ local function step()
     -- player is on whenever that zone changes — "behind" = safe approach, "in front"
     -- = it can see you. K2_GetActorRotation is the reflected sibling of the
     -- K2_GetActorLocation call the whole tracker already relies on.
-    if (target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous")
-        and not coasting then
+    if (target.grp == "enemies" or target.grp == "hunt" or target.grp == "villainous"
+        or target.grp == "drones") and not coasting then
         local rot
         -- Method call on the long-lived target handle: re-check the actor first. Skipped while
         -- coasting for the same reason as the position read above — an enemy that a scan just
@@ -3130,6 +3144,29 @@ end
 -- Is this actor hidden? The same question `visible_actor` asks inside the sweep, available to the
 -- election, which has to re-ask it about a point it is already guiding to. `bHidden` is declared
 -- on AActor, so it needs no per-class gate. Unreadable counts as NOT hidden (fail open).
+-- World box of a quest trigger volume (TriggerBase family: TriggerStaticActor, TriggerSphere,
+-- TriggerBox), or nil for any other actor. Read once per target: GetActorBounds is a UFunction.
+function Nav._trigger_volume(a)
+    if Nav.trigger_cls == nil then
+        Nav.trigger_cls = false
+        pcall(function() Nav.trigger_cls = StaticFindObject("/Script/Engine.TriggerBase") or false end)
+    end
+    if not Nav.trigger_cls or not Core.valid(a) then return nil end
+    local is_trigger = false
+    pcall(function() is_trigger = a:IsA(Nav.trigger_cls) end)
+    if not is_trigger then return nil end
+    local o, e = {}, {}
+    local ok = pcall(function() a:GetActorBounds(true, o, e) end)
+    if not (ok and tonumber(e.X) and e.X > 0) then return nil end
+    local key = tostring(Mem.raw_addr(a))
+    if Nav.vol_logged ~= key then
+        Nav.vol_logged = key
+        print(string.format("[KakarotAccess] nav target is a trigger volume: extent %.0f %.0f %.0f m\n",
+            e.X / M, e.Y / M, e.Z / M))
+    end
+    return { x = o.X, y = o.Y, z = o.Z, ex = e.X, ey = e.Y, ez = e.Z }
+end
+
 function Nav._actor_hidden(a)
     local hidden
     pcall(function() hidden = Core.member(a, "bHidden") end)
@@ -3636,6 +3673,16 @@ Nav.SW = {
     -- produced the stall. At ~65 ms a scan this admits one or two classes per tick, so a cold
     -- build settles over a handful of ticks instead of blocking for 1.2 s in one go.
     BUDGET_S = TICK_MS / 1000,
+    -- Android Assault drone kind by Blueprint name (BP_AndroidAssaultDrone<Kind>_C); the
+    -- Chaser Blueprint implements the native Supporter class.
+    DRONE_NOUN = {
+        { pat = "Commander", noun = "cat_drone_commander" },
+        { pat = "Searcher",  noun = "cat_drone_searcher" },
+        { pat = "Chaser",    noun = "cat_drone_chaser" },
+        { pat = "Supporter", noun = "cat_drone_chaser" },
+    },
+    drone_hint = false,
+    dmedals = { total = 0, taken = 0 },
 }
 
 function Nav.SW.manager_list(cls)
@@ -3741,6 +3788,8 @@ function Nav.list_targets(boxed)
     local want_req = Nav._quest_req()
 
     local seen = {}
+    Nav.SW.drone_hint = false   -- set by a drone commander's marker (section 5a)
+    Nav.SW.dmedals = { total = 0, taken = 0 }   -- this area's loaded D medals (section 4)
     local groups = {}
     local dropped = {}   -- per-group candidates cut by the distance cap (rescue below)
     local diag = RADAR_DEBUG and {} or nil
@@ -3831,7 +3880,7 @@ function Nav.list_targets(boxed)
         -- Villainous enemies likewise, but only through their MAP MARKER (src "villain"): a
         -- villainous character found by the enemy scan keeps that scan's tight cap.
         if grp ~= "quests" and grp ~= "dragonball" and src ~= "villain"
-            and src ~= "mobteacher" then
+            and src ~= "mobteacher" and src ~= "drone" and src ~= "dmedal" then
             -- Direct actor scans (NPCs, collectibles) are capped tight (drops the far
             -- parked pool / collectibles across the map); minimap icons get the wide cap
             -- (the game curated them for the sighted player, often km away).
@@ -3899,6 +3948,15 @@ function Nav.list_targets(boxed)
         end
         local grp = ICON_GROUP[t] or "other"
         local noun = noun_override or ICON_NOUN[t] or ("radar_cat_" .. grp)
+        if grp == "drones" then Nav.SW.drone_hint = true end
+        -- Patrol hordes (player report 2026-11-19): an enemy-group marker on an ATROCIOUS enemy
+        -- is a villainous one, as the world map already says; only the attribute tells them apart.
+        -- STRICT probe first: a group marker may sit on an actor that is no character at all.
+        if Nav._dragonball_marker.GROUP_VILLAIN_TYPES[t]
+            and Core.member(actor, "AttributeComponent", true) ~= nil
+            and select(2, Nav._char_side(actor)) then
+            grp = "villainous"
+        end
         if grp == "villainous" then
             -- The marker sits on the spawned enemy itself (native_offsets.miniMapIcon), so it
             -- is named like any enemy. The side test guards the character-only reads.
@@ -4157,7 +4215,10 @@ function Nav.list_targets(boxed)
         local COLLECTIBLE_NOUN = {
             { pat = "Memories", noun = "cat_memory" },
             { pat = "Memory",   noun = "cat_memory" },
-            { pat = "DMedal",   noun = "cat_dmedal" },
+            -- Own group, no distance cap (player request 2026-11-19): sighted players find them by
+            -- ki sensing from afar.
+            { pat = "DMedal",   noun = "cat_dmedal", grp = "dmedals" },
+            { pat = "AndroidAssaultDropItem", noun = "cat_drone_part" },
             { pat = "Treasure", noun = "cat_treasure" },
             -- Gathering points reached through this scan rather than through their map icon.
             -- Observed live 2026-08-18: MineralMiningPointNormal_BP_C and
@@ -4258,6 +4319,16 @@ function Nav.list_targets(boxed)
             { cls = "AccessPointItemBase", state = true, item = true, strict_item = true },
         }) do
             for _, a in pairs(Nav.SW.class_list(c.cls)) do
+                -- Collected D medals still spawn with TreasureState Taken (ATreasureAccessPoint
+                -- BeginPlay, FUN_1410cb580), so the loaded ones count the whole area.
+                if c.cls == "AccessPointItemBase" and Core.valid(a) then
+                    local cn = ""
+                    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                    if cn:find("DMedal", 1, true) then
+                        Nav.SW.dmedals.total = Nav.SW.dmedals.total + 1
+                        if point_taken(a) then Nav.SW.dmedals.taken = Nav.SW.dmedals.taken + 1 end
+                    end
+                end
                 if Core.valid(a) and visible_actor(a)
                     and (not c.state or not point_taken(a)) then
                     local cn = "?"
@@ -4300,8 +4371,8 @@ function Nav.list_targets(boxed)
                     -- in an empty clearing.
                     -- A deposit is level geometry, never a parked preload actor, so it takes
                     -- the wide map cap (and the empty-group rescue) instead of the tight one.
-                    add_target(a, grp, noun, nil, mining and "mine" or "collectible", name,
-                        c.state)
+                    local src = mining and "mine" or (grp == "dmedals" and "dmedal") or "collectible"
+                    add_target(a, grp, noun, nil, src, name, c.state)
                 end
             end
         end
@@ -4392,6 +4463,27 @@ function Nav.list_targets(boxed)
     for _, e in ipairs(enemies_list()) do
         add_target(e.actor, e.vile and "villainous" or "enemies", e.noun, nil, "enemy",
             e.disp or e.name)
+    end
+    -- 5a) ANDROID ASSAULT DRONES (Trunks DLC, player report 2026-11-19): plain APawns, so the
+    -- character scan never sees them. Scanned only where the event runs: a drone commander's
+    -- marker in this sweep, or the event's alarm gauge on screen. Level-placed, no distance cap.
+    do
+        -- Only if the screen directory is already up (it always is in game): no load-order tie.
+        local dir = package.loaded["ui_directory"]
+        local gauge = type(dir) == "table" and dir.peek("fm", "AssaultEvent_Gauge") or nil
+        if Nav.SW.drone_hint or (Core.valid(gauge) and Core.on_screen(gauge)) then
+            for _, a in pairs(Nav.SW.class_list("AndroidAssaultDroneBase")) do
+                if Core.valid(a) and not Nav._actor_hidden(a) then
+                    local cn = ""
+                    pcall(function() cn = a:GetClass():GetFName():ToString() end)
+                    local noun = "cat_drone"
+                    for _, m in ipairs(Nav.SW.DRONE_NOUN) do
+                        if cn:find(m.pat, 1, true) then noun = m.noun break end
+                    end
+                    add_target(a, "drones", noun, nil, "drone")
+                end
+            end
+        end
     end
     -- 5b) wild field animals (deer, wolves, dinosaurs, dragons…): the AT_MobAnimalBase subtree of
     -- AT_MobBase — a SEPARATE class tree from AT_Character (lineage probe 2026-07-06:
@@ -4607,7 +4699,12 @@ function Nav.list_targets(boxed)
             table.sort(g.items, function(a, b) return a.dist < b.dist end)
             -- The game's own words where it has them (its tutorial title for villainous enemies).
             local own = GROUP_MESSAGE[gk] and Nav._message_text(GROUP_MESSAGE[gk])
-            out[#out + 1] = { key = gk, name = own or I18n.t("radar_cat_" .. gk), items = g.items }
+            local name = own or I18n.t("radar_cat_" .. gk)
+            if gk == "dmedals" and Nav.SW.dmedals.total > 0 then
+                name = string.format(I18n.t("radar_cat_dmedals_count"), name,
+                    Nav.SW.dmedals.taken, Nav.SW.dmedals.total)
+            end
+            out[#out + 1] = { key = gk, name = name, items = g.items }
         end
     end
     return out

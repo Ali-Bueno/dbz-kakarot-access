@@ -258,3 +258,25 @@ the deferral/memo/hold state machine and the nav-facing API) — plus ~30 lines 
 - **Not covered, on purpose:** the routed target uses the WIDE auto arrival radius (`ARRIVE_DIST`,
   8 m) like any quests-group target, so "objective reached" fires 8 m out. If the fishing spot
   needs the tight radius, add `target.qroute` to the `arrive_r` condition in `nav_tracker.lua`.
+
+## Trigger-volume arrival (live, 2026-11-19, Area03 prologue)
+
+Player report: "the fishing objective sits next to a limit Goku cannot pass". Reproduced on a new
+game, quest `C01_EVT_MAIN_01002`, objective "¡Mantén a Gohan cerca tuyo y dirígete al lugar de
+pesca!". The navi target is `C01_01002_200_Arrival`, a `TriggerStaticActor_BP_C` whose collision is
+a **SphereComponent of 25.6 m** (`GetActorBounds`, new dev command `bounds`). Its centre is about
+9 m past an **invisible wall** on the river bank: walking toward it, Goku does not move at all, so
+the radar said "12 metros" forever and never said arrived (8 m radius to the centre).
+
+- The Visibility-channel `LineTraceSingle` sees nothing there: invisible walls block Pawn, not
+  Visibility, so a ray sensor cannot find them on that channel.
+- Area03 has no usable NavMesh either (`navmesh probe: no path`, same as Area02/Area04).
+- Fix: a target in the `TriggerBase` family (TriggerStaticActor, TriggerSphere, TriggerBox) arrives
+  when the player is inside its world box (`Nav._trigger_volume`, read once per target), and
+  re-arms only once the player is clear of it by the point-target margin. VERIFIED LIVE: "Objetivo
+  alcanzado" once, at 27 m from the centre, on entering the sphere.
+- Not settled: the step did not advance in our run even with Gohan 11-12 m away inside the zone.
+  Our teleports may have broken the step's script; a normal walk-in should be checked by a player.
+  Gohan's scripted points (`MoveTarget_Cpl002_02..06`) and a `SupportCrossTalkTrigger` sit nearby.
+- Prologue save for retesting: `Downloads\Kakarot save backup 2026-11-19 (prologue Area03 fishing)`.
+

@@ -42,7 +42,13 @@ Limits:
 - The world-map mark can be stale, like the Dragon Ball one. If players report it, the save has
   the truth: `SaveGame+0xDE760`, `PhaseComplete` int32[32] (2 = cleared), or the static
   `UEventBlueprintFunctionLibrary:IsCompletedAtrociousPhase(FName, uint8)`.
-- DLC5 markers (50 / 52) are read natively too but stay in *Enemigos* as "grupo enemigo".
+- DLC5 markers (50 / 52) are read natively too. Until 2026-11-19 they stayed in *Enemigos* as
+  "grupo enemigo" with the 1 km map cap, so the 23rd World Tournament's **patrol-event hordes**
+  were not in the villainous group although the world map called them villainous (player report).
+  Now a 50 / 52 marker whose actor carries the atrocious attribute joins *Enemigos supervillanos*,
+  no cap (`native_offsets.miniMapIcon.groupVillainTypes`); one on a non-atrocious actor (e.g. a
+  Trunks-DLC enemy group) stays where it was. Unplayed: check that the horde shows in the group
+  from afar and whether its marker sits on an enemy or on something else.
 
 Live checklist:
 

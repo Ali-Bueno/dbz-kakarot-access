@@ -28,6 +28,9 @@ return {
         -- code/decompiled/_villain_supertraining_findings.txt. 52/50 are phases 0/1 in DLC5.
         villainTypes = { [30] = true, [31] = true, [34] = true, [35] = true,
                          [50] = true, [52] = true },
+        -- The DLC5 pair is EMapIcon GRD_SuperEnemyGroup / GRD_EnemyGroup, which the radar
+        -- otherwise files as plain enemy groups; on an atrocious enemy they are villainous.
+        groupVillainTypes = { [50] = true, [52] = true },
     },
 
     -- UAT_UIMapWorldIcon (BP Map_World_Icon_C), size 0x410. Ghidra 2026-10-06 (Q8 in

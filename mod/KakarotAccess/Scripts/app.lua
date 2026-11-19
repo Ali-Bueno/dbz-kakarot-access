@@ -82,6 +82,8 @@ Registry.register(require("screen_questcard"), "screen_questcard")
 -- Cinematic character-introduction cards ("Gohan — hijo de Goku"): same banner
 -- family — below dialogue, speaks once per appearance, queued.
 Registry.register(require("screen_infoname"), "screen_infoname")
+-- Android Assault alarm HUD (Trunks DLC): same banner family, speaks once per change, queued.
+Registry.register(require("screen_assault"), "screen_assault")
 Registry.register(require("screen_tips"), "screen_tips")
 Registry.register(require("screen_loading"), "screen_loading")
 local Tutorial = require("screen_tutorial")

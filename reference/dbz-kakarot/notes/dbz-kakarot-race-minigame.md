@@ -193,3 +193,21 @@ build.
 7. Camera vs. car heading. During the countdown the camera cuts around the car, so pans are
    meaningless for those ~3 s. If chase-cam lag hurts while steering, switch the guide to the pawn's
    yaw.
+
+## Walking robot race (player report 2026-11-19, unplayed)
+
+"The radar beeps and ring sounds play during the robot race, but following them doesn't do
+anything." Static findings: the robot race is the SAME minigame (`URaceGameManager`, mode
+`MiniGameRaceMode::BIPEDWALKINGROBOT` = 0, AT_enums.hpp:11536), same `BP_CheckPoint_C` and HUD
+getters, on its own maps (`Maps/AreaNN/MiniGame/AreaNN_RaceGame_TwinFoot.umap`, 6-7 checkpoints).
+The robot is `ATwinFoot` (`TwinFootBP_C`, AT.hpp:18402) with its own `ATwinFootController`.
+
+So the checkpoint position is right and the HEADING is the suspect: the guide panned against
+`HUD.PlayerOwner.Pawn`'s yaw, and that pawn has been seen as a TwinFoot parked at the origin
+(dbz-kakarot-crash-bug.md). A frozen yaw makes the pan meaningless while the distance cadence still
+sounds plausible. Fix: the pawn's yaw is used only while the pawn is within 10 m of the racer's HUD
+position; otherwise the direction of travel (re-measured every metre), then the camera. The log
+says `race heading -> pawn|movement|camera (pawn <class>, N m from racer)` on every change — the
+first robot race's line settles the hypothesis. If it says `pawn` and steering still fails, the
+robot's actor yaw is not its travel direction: try the movement heading for it too.
+

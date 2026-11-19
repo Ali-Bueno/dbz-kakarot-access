@@ -78,6 +78,7 @@ function C.help()
         "enemyhp [value]       list enemy HP; with a value, set it (testing: get past a story fight)",
         "tp <Class>|@<group>  put the player 1.5 m in front of a class instance / radar target (testing)",
         "tpxyz <x> <y> <z>     put the player at world coordinates in cm (testing)",
+        "bounds <Class> [name] world bounds of one actor's colliding components (testing)",
         "memdiff               F4 runtime memory diff -> Scripts/dev_probe.txt",
         "charnames             character name-field probe -> Scripts/dumps/dump_char_names.txt",
         "questdump             live quest phases + find-list ids -> Scripts/dumps/dump_quest_state.txt",
@@ -355,6 +356,32 @@ function C.tp(cls, name_part)
     pawn:K2_SetActorRotation({ Pitch = 0, Yaw = math.deg(yaw) + 180, Roll = 0 }, true)
     out(string.format("tp -> %.0f %.0f %.0f (target %.0f %.0f %.0f)", dest.X, dest.Y, dest.Z,
         loc.X, loc.Y, loc.Z))
+end
+
+-- World bounds of one actor (colliding components only), plus its collision component's class:
+-- "how far does this trigger reach, and is its edge reachable?".
+function C.bounds(cls, name_part)
+    if not cls then return out("usage: bounds <Class> [name substring]") end
+    local Core = require("ui_core")
+    local target
+    for _, o in ipairs(FindAllOf(cls) or {}) do
+        if Core.valid(o) and (not name_part or tostring(o:GetFullName()):find(name_part, 1, true)) then
+            target = o break
+        end
+    end
+    if not Core.valid(target) then return out("no live " .. cls) end
+    out("target: " .. tostring(target:GetFullName()))
+    local origin, extent = {}, {}
+    local ok, err = pcall(function() target:GetActorBounds(true, origin, extent) end)
+    out(string.format("bounds ok=%s origin=%.0f,%.0f,%.0f extent=%.0f,%.0f,%.0f %s", tostring(ok),
+        origin.X or 0, origin.Y or 0, origin.Z or 0, extent.X or 0, extent.Y or 0, extent.Z or 0,
+        ok and "" or tostring(err)))
+    local comp = Core.member(target, "CollisionComponent", true)
+    if Core.valid(comp) then
+        local cn = "?"
+        pcall(function() cn = comp:GetClass():GetFName():ToString() end)
+        out("collision component: " .. cn)
+    end
 end
 
 -- Put the player at raw world coordinates (cm), e.g. a door's playerStart from the nav dump.

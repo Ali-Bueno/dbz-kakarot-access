@@ -2,6 +2,26 @@
 
 ---
 
+## v0.1.15 - November 19, 2026
+
+**Five fixes from player reports.** Only the objective behind an invisible wall has been
+checked in game; the rest have not been played yet.
+
+- New radar category: **D Medals**. It lists the medals still to collect in the area, from any
+  distance, and its name says how many of the area's medals you already have. Opening the area
+  map also reads the game's own D medal and chest counters.
+- New radar category: **Drones**, for the Android Assault in Trunks's story. It lists the
+  search, commander and chaser drones with their distance; tracking one says "on target" and
+  whether you are in front of it or behind it. Entering a drone area, getting caught and the
+  drone counter are spoken. Drone parts show up under Collectibles.
+- The **patrol event hordes** from the 23rd World Tournament are now in the Villainous enemies
+  category, from any distance, as the world map already said.
+- **Objectives behind an invisible wall**, like Gohan's fishing spot at the start of the game:
+  the radar used to keep saying "12 meters" while Goku could not get any closer. It now says the
+  objective is reached as soon as you are inside the area the game checks.
+- **Walking robot race:** the beacon now follows the direction you are moving in when the game
+  does not report the robot's own heading, so steering toward it should lead to the checkpoint.
+
 ## v0.1.14 - November 11, 2026
 
 **Four things from one player report.** None of them has been checked in game yet.

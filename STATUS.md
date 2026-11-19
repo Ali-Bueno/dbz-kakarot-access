@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
+**Last updated:** 2026-11-19 (player report: D medals and drones radar groups, alarm HUD, patrol hordes as villainous, robot-race heading, all unplayed; trigger-volume arrival verified live; released as v0.1.15). Before that: 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -42,6 +42,21 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-10. **Player report 2026-11-19 — four items, all coded and UNPLAYED (the game was not run).**
+   Lint clean, 18 offline test files green. Released in v0.1.15 (2026-11-19). Tester save: `Downloads\851850.zip`
+   (Trunks DLC and 23rd World Tournament done; not installed in the Steam slot yet).
+   - *D medals:* new R3 group *Medallas D*, no cap, named "N de M recogidas" for the area; the
+     area map speaks its own medal and chest counters. [D medals](reference/dbz-kakarot/notes/dbz-kakarot-dmedals.md).
+   - *Android Assault (Trunks DLC):* new R3 group *Drones* and an alarm HUD reader
+     (`screen_assault`). [Android Assault](reference/dbz-kakarot/notes/dbz-kakarot-android-assault.md).
+   - *Patrol hordes (23rd World Tournament):* group markers 50/52 on atrocious enemies now join
+     *Enemigos supervillanos*. [Villainous](reference/dbz-kakarot/notes/dbz-kakarot-villainous-mining.md).
+   - *Walking robot race:* the beacon pans against the direction of travel when the HUD's pawn is
+     not the racer; one log line names the heading source. [Race](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md), last section.
+   - *Quest target behind an invisible wall (Area03 fishing) — VERIFIED LIVE:* trigger-volume
+     targets now arrive on entering the volume. The step itself did not advance in our run
+     (teleports suspected). [Routing](reference/dbz-kakarot/notes/dbz-kakarot-quest-objective-routing.md), last section.
 
 -9. **Player report 2026-11-11 — four items, all coded and UNPLAYED (the game was not run).**
    Lint clean, 18 offline test files green. Released in v0.1.14 (2026-11-11). Needs a full

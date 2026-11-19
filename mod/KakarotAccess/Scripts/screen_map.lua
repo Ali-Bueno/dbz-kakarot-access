@@ -38,6 +38,7 @@ local OBJ_READ_DELAY = 3   -- polls after opening before the quest objective is 
                            -- it QUEUES after the map's own area/help/travel readout instead
                            -- of talking over it (user 2026-07-24)
 local obj_read_at = nil    -- tick to fire the deferred objective re-read (nil = done/disarmed)
+local counts_at = nil      -- poll on which the area map's collection counters are read
 
 -- World-map fast travel via the game's OWN selection machine (UAT_UIMapWorld, Ghidra 2026-07-09,
 -- native_offsets.mapWorld): d-pad up/down picks a destination by its native InfoIcon INDEX, we
@@ -779,6 +780,29 @@ function Map.reset()
     -- reviews the goal again. DEFERRED (not spoken here): armed for OBJ_READ_DELAY polls so
     -- update() reads it AFTER the map's own entry readout, queued, not talking over it.
     obj_read_at = tick + OBJ_READ_DELAY
+    counts_at = tick + OBJ_READ_DELAY
+end
+
+-- The area map's own collection counters (UAT_UIMapM, AT.hpp:34065): D medals and chests found
+-- in this area, computed by the game for the whole area, read once per opening.
+local AREA_COUNTERS = {
+    { member = "WL_Pnl_Medal", label = "cat_dmedal_plural" },
+    { member = "WL_Pnl_Chest", label = "cat_chest_plural" },
+}
+local function area_counts(host)
+    local parts = {}
+    for _, c in ipairs(AREA_COUNTERS) do
+        local panel = Core.member(host, c.member)
+        if Core.valid(panel) and Core.on_screen(panel) then
+            local t = node_text(Core.member(panel, "WL_Text_Count"))
+            if t and t ~= "" then
+                local a, b = t:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
+                parts[#parts + 1] = a and string.format(I18n.t("map_count_of"), I18n.t(c.label),
+                    tonumber(a), tonumber(b)) or Core.phrase(I18n.t(c.label), t)
+            end
+        end
+    end
+    return #parts > 0 and table.concat(parts, ", ") or nil
 end
 
 -- Wall-clock floor between two on-demand objective re-reads (see Map.update).
@@ -805,6 +829,11 @@ function Map.update()
         obj_read_at = nil
         obj_said_at = os.clock()
         pcall(function() require("quest_objective").reannounce(false) end)
+    end
+    if counts_at and tick >= counts_at and not s.world and s.host then
+        counts_at = nil
+        local line = area_counts(s.host)
+        if line then Speech.say(line, false) end
     end
     if s.world then
         local host = ft_host()

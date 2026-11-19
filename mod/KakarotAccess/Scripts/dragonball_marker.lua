@@ -17,6 +17,8 @@ local Marker = {}
 -- EMapIcon::DRAGON_BALL (AT_enums.hpp) via native_offsets — the one place the value is named;
 -- nav_tracker reads it from here rather than carrying its own literal.
 Marker.ICON_TYPE = Off.dragonBallType
+-- Enemy-group marker types that the 23rd World Tournament's patrol hordes reuse (DLC5 phases).
+Marker.GROUP_VILLAIN_TYPES = Off.groupVillainTypes
 local icon_class -- native UClass only; never a per-world actor/widget handle
 
 -- The EMapIcon of an occupied marker, or nil. The second result is false only when native

@@ -44,6 +44,10 @@ local OBSTACLE_CONFIRM = 2      -- scans in a row before an obstacle is cued
 local SLOT_AFTER_MS = 200
 local SLOT_BEFORE_MS = 100
 local SECONDARY_GAP_MS = 200
+-- The HUD's pawn is trusted as the racer only this close to the racer's position: in the walking
+-- robot race it can be a parked TwinFoot pawn (seen at the origin), whose yaw never turns.
+local PAWN_NEAR = 10 * M
+local MOVE_STEP = 1 * M       -- travel needed before the movement direction is re-measured
 
 local running = false
 local tick = 0
@@ -54,6 +58,9 @@ local low_warned = false      -- the low-time warning for the current segment wa
 local last_ring_ms, last_obstacle_ms, last_secondary_ms = 0, 0, 0
 local prev_x, prev_y, prev_t = nil, nil, nil
 local speed = 0               -- racer ground speed, uu/s, smoothed
+local anchor_x, anchor_y = nil, nil   -- where the movement direction was last measured from
+local move_fx, move_fy = nil, nil     -- the racer's ground-plane direction of travel
+local heading_src = nil       -- which heading the beacon used last (logged on change)
 local seen_obstacle, seen_ring = false, false   -- log edges (tuning aid), not every tick
 local obstacle_streak = 0     -- consecutive scans with a hit
 local obstacle_since, obstacle_min = 0, 0       -- current obstacle episode, for its log line
@@ -118,6 +125,46 @@ local function heading_forward(pc, pawn)
     if not ok or not rot then return nil end
     local yaw = math.rad(rot.Yaw or 0)
     return math.cos(yaw), math.sin(yaw)
+end
+
+-- The racer's direction of travel, re-measured after every MOVE_STEP of ground distance.
+local function track_motion(px, py)
+    if not anchor_x then anchor_x, anchor_y = px, py return end
+    local dx, dy = px - anchor_x, py - anchor_y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d < MOVE_STEP then return end
+    move_fx, move_fy = dx / d, dy / d
+    anchor_x, anchor_y = px, py
+end
+
+-- Distance from the pawn to the racer's position; nil when the pawn has no location.
+local function pawn_offset(pawn, px, py, pz)
+    if not Core.valid(pawn) then return nil end
+    local ok, loc = pcall(function() return pawn:K2_GetActorLocation() end)
+    local x, y, z = xyz(ok and loc)
+    if not x then return nil end
+    return math.sqrt((x - px) ^ 2 + (y - py) ^ 2 + (z - pz) ^ 2)
+end
+
+-- The beacon's forward vector: the pawn's heading while the pawn IS the racer (the car race),
+-- else the direction of travel, else the camera. Logs which one whenever it changes.
+local function racer_forward(pc, pawn, px, py, pz)
+    local off = pawn_offset(pawn, px, py, pz)
+    local fx, fy, src
+    if off and off <= PAWN_NEAR then
+        fx, fy = heading_forward(pc, pawn)
+        src = "pawn"
+    end
+    if not fx and move_fx then fx, fy, src = move_fx, move_fy, "movement" end
+    if not fx then fx, fy = heading_forward(pc, nil) src = "camera" end
+    if src ~= heading_src then
+        heading_src = src
+        local cls = "?"
+        pcall(function() cls = pawn:GetClass():GetFName():ToString() end)
+        print(string.format("[KakarotAccess] race heading -> %s (pawn %s, %s m from racer)\n",
+            tostring(src), cls, off and string.format("%.0f", off / M) or "?"))
+    end
+    return fx, fy
 end
 
 -- "03/08" -> "3 of 8" (localized); anything else is spoken as shown, minus leading zeros.
@@ -185,6 +232,7 @@ end
 local function reset_race()
     live_at, last_count, low_warned = nil, nil, false
     prev_x, prev_y, prev_t, speed = nil, nil, nil, 0
+    anchor_x, anchor_y, move_fx, move_fy, heading_src = nil, nil, nil, nil, nil
     seen_obstacle, seen_ring, obstacle_streak = false, false, 0
     Rings.reset()
     Sensor.new_race()
@@ -242,7 +290,8 @@ local function step()
     if not tx then return end
     if not px then return warn_once("pos", "no racer position (HUD getter and pawn both failed)") end
     local pawn = Core.member(pc, "Pawn")
-    local fx, fy = heading_forward(pc, pawn)
+    track_motion(px, py)
+    local fx, fy = racer_forward(pc, pawn, px, py, pz)
     if not fx then warn_once("heading", "no racer heading, the beacon stays centred") end
     local dx, dy, dz = tx - px, ty - py, tz - pz
     local pan, fb = Beacon.cam_rel(dx, dy, fx, fy)

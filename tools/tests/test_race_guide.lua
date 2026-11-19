@@ -209,6 +209,7 @@ end
 do
     local pawn = { valid = true }
     function pawn:K2_GetActorRotation() return { Yaw = 90 } end
+    function pawn:K2_GetActorLocation() return hud.player end
     pc.Pawn = pawn
     pings = {}
     run(10)
@@ -216,6 +217,26 @@ do
     check(p and math.abs(p.pan) < 1e-6 and p.pitch == 1.0,
         "the racer's own heading wins over the camera: facing +Y puts the checkpoint ahead")
     pc.Pawn = nil
+end
+
+do
+    -- The walking-robot race: the HUD's pawn is a parked TwinFoot far from the racer, facing +X.
+    local parked = { valid = true }
+    function parked:K2_GetActorRotation() return { Yaw = 0 } end
+    function parked:K2_GetActorLocation() return { X = 0, Y = 0, Z = 0 } end
+    pc.Pawn = parked
+    local start = hud.player
+    for i = 1, 5 do   -- the racer walks toward +Y, 2 m per tick
+        hud.player = { X = start.X, Y = start.Y + i * 200, Z = start.Z }
+        run(1)
+    end
+    hud.next = { X = start.X, Y = start.Y + 10000, Z = 0 }
+    pings = {}
+    run(10)
+    local p = pings[#pings]
+    check(p and math.abs(p.pan) < 1e-6 and p.pitch == 1.0,
+        "a parked pawn far from the racer yields to the direction of travel")
+    hud.player, pc.Pawn = start, nil
 end
 
 do
