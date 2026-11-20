@@ -75,6 +75,12 @@ function C.help()
         "objective             F10: objective read, the race status while racing (spoken and echoed)",
         "ray [m] [ch] [dz_m]   one LineTraceSingle ahead of the pawn (testing: is a trace safe?)",
         "drive [ms]            race test driver: steer by the beacon pan, hold RT for ms (testing)",
+        "autodrive [rt|stick|both|off] race autopilot on the guide's own pan, every tick (testing)",
+        "survey x0 y0 x1 y1 step name [ch] [ztop]  downward traces -> dumps/survey_<name>.txt (race paths)",
+        "msurvey x0 y0 x1 y1 step name [layers]  multi-layer surfaces + headroom -> dumps/msurvey_<name>.txt",
+        "racelevel [filter]   race level actors, race-only meshes, splines -> dumps/dump_race_level.txt",
+        "course | volgeom [cls] [part] | views | rmove  race course, volume hulls, race cameras, robot limits",
+        "robot x y z [yaw] | rtrack secs [sx sy jump] | pos | walkto x y [ms]  robot/pawn tests (metres)",
         "enemyhp [value]       list enemy HP; with a value, set it (testing: get past a story fight)",
         "tp <Class>|@<group>  put the player 1.5 m in front of a class instance / radar target (testing)",
         "tpxyz <x> <y> <z>     put the player at world coordinates in cm (testing)",
@@ -258,14 +264,583 @@ function C.drive(ms)
     local yaw = Core.valid(pawn) and pawn:K2_GetActorRotation().Yaw or 0
     local dx, dy, dz = n.X - p.X, n.Y - p.Y, n.Z - p.Z
     local pan, fb = Beacon.cam_rel(dx, dy, math.cos(math.rad(yaw)), math.sin(math.rad(yaw)))
+    -- Prefer what the guide is playing right now (booster or checkpoint, its own heading source),
+    -- so the driver tests exactly what the player hears.
+    local aim = require("race_guide")._aim
+    local src = "own"
+    if aim and os.clock() - aim.at < 1 then pan, fb, src = aim.pan, aim.fb, aim.ring and ("ring " .. aim.ring) or "cp" end
     local steer = math.max(-1, math.min(1, pan * 1.6))
     if fb < 0 then steer = pan >= 0 and 1 or -1 end
     Input.vpad_plug(VPAD_PLUG_MS)
     Input.vpad_stick(steer, 0, ms)
     Input.vpad_trigger(0, 1, ms)
-    out(string.format("cp=%s dh=%.0fm dz=%.0fm pan=%.2f fb=%.2f steer=%.2f yaw=%.0f pos=%.0f,%.0f,%.0f",
-        tostring(Core.read_text(Core.member(host, "WL_Txt_Num_Cp"))), math.sqrt(dx * dx + dy * dy) / 100,
+    out(string.format("cp=%s aim=%s dh=%.0fm dz=%.0fm pan=%.2f fb=%.2f steer=%.2f yaw=%.0f pos=%.0f,%.0f,%.0f",
+        tostring(Core.read_text(Core.member(host, "WL_Txt_Num_Cp"))), src, math.sqrt(dx * dx + dy * dy) / 100,
         dz / 100, pan, fb, steer, yaw, p.X, p.Y, p.Z))
+end
+
+-- Boost rings of the current race (positions in m, used flag) and the racer's position.
+function C.rings()
+    local rings, used = require("race_rings")._dump()
+    if not rings then return out("no rings") end
+    for i, r in ipairs(rings) do
+        out(string.format("ring %d: %.0f %.0f %.0f%s", i, r[1] / 100, r[2] / 100, r[3] / 100,
+            used and used[i] and " used" or ""))
+    end
+    local aim = require("race_guide")._aim
+    if aim then out(string.format("aim pan=%.2f fb=%.2f ring=%s", aim.pan, aim.fb, tostring(aim.ring))) end
+end
+
+-- Race heading probe: robot actor yaw, player pawn yaw, camera yaw and the racer's HUD position.
+function C.racedbg()
+    local Core = require("ui_core")
+    local function yaw_of(o)
+        local y
+        pcall(function() y = o:K2_GetActorRotation().Yaw end)
+        return y
+    end
+    local robot
+    for _, a in ipairs(FindAllOf("TwinFootBP_C") or {}) do
+        if Core.valid(a) and not tostring(a:GetFullName()):find("Default__", 1, true) then robot = a end
+    end
+    local pc = require("ui_directory").peek("hud", "PlayerOwner")
+    local pawn = Core.valid(pc) and Core.member(pc, "Pawn")
+    local cam = Core.valid(pc) and Core.member(pc, "PlayerCameraManager")
+    local cyaw
+    pcall(function() cyaw = cam:GetCameraRotation().Yaw end)
+    local host
+    for _, w in ipairs(Core.peek_all("AT_UIMiniGameRace")) do if Core.valid(w) then host = w end end
+    local p
+    pcall(function() p = host:GetPlayerLocation() end)
+    local rl
+    pcall(function() rl = robot:K2_GetActorLocation() end)
+    out(string.format("robot yaw=%s at %s | pawn %s yaw=%s | cam yaw=%s | racer %s",
+        tostring(robot and yaw_of(robot)), rl and string.format("%.0f,%.0f", rl.X, rl.Y) or "-",
+        pawn and tostring(pawn:GetClass():GetFName():ToString()) or "-", tostring(pawn and yaw_of(pawn)),
+        tostring(cyaw), p and string.format("%.0f,%.0f,%.0f", p.X, p.Y, p.Z) or "-"))
+end
+
+-- Race course dump: every course arrow (StaticMeshActor STM_mg_racing_Arrow*), checkpoint, boost
+-- point, restart point and water volume, with position (cm) and yaw, to dumps/dump_race_course.txt.
+function C.course()
+    local Core = require("ui_core")
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\dump_race_course.txt", "w")
+    if not f then return out("cannot write") end
+    local n = 0
+    local function put(kind, a)
+        local loc, rot, name
+        pcall(function() loc = a:K2_GetActorLocation() end)
+        pcall(function() rot = a:K2_GetActorRotation() end)
+        pcall(function() name = a:GetFName():ToString() end)
+        if loc then
+            f:write(string.format("%s %s %.0f %.0f %.0f %.1f\n", kind, tostring(name), loc.X, loc.Y, loc.Z,
+                rot and rot.Yaw or 0))
+            n = n + 1
+        end
+    end
+    for _, a in ipairs(FindAllOf("StaticMeshActor") or {}) do
+        local name = ""
+        pcall(function() name = a:GetFName():ToString() end)
+        if name:find("racing_Arrow", 1, true) then put("arrow", a) end
+    end
+    for _, cls in ipairs({ "BP_CheckPoint_C", "BP_BoostPoint_C", "TargetPoint", "UnderWaterRestartVolume" }) do
+        for _, a in ipairs(FindAllOf(cls) or {}) do
+            if Core.valid(a) then
+                local full = ""
+                pcall(function() full = a:GetFullName() end)
+                if full:find("RaceGame", 1, true) then put(cls, a) end
+            end
+        end
+    end
+    f:close()
+    out("course dump: " .. n .. " actors")
+end
+
+-- Everything the race level places (full name containing `filter`, default "RaceGame"): class
+-- counts, then every non-mesh actor with its location, then every spline component in the world
+-- with its owner and point count -> dumps/dump_race_level.txt. Looks for the course's own route
+-- data (a guide spline, AI path, restart points). Written line by line: a breadcrumb trail.
+function C.racelevel(filter)
+    filter = filter or "RaceGame"
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local path = dir .. "\\dumps\\dump_race_level.txt"
+    local f = io.open(path, "w")
+    if not f then return out("cannot write") end
+    local function w(s) f:write(s, "\n"); f:flush() end
+    local counts, n = {}, 0
+    w("step: actors")
+    for _, a in ipairs(FindAllOf("Actor") or {}) do
+        local full = ""
+        pcall(function() full = a:GetFullName() end)
+        if full:find(filter, 1, true) then
+            local cls = full:match("^(%S+)") or "?"
+            counts[cls] = (counts[cls] or 0) + 1
+            n = n + 1
+            local loc
+            pcall(function() loc = a:K2_GetActorLocation() end)
+            local where = loc and string.format("%.0f %.0f %.0f", loc.X, loc.Y, loc.Z) or "?"
+            if cls ~= "StaticMeshActor" then
+                w(string.format("actor %s %s", full, where))
+            elseif not full:find("racing_Arrow", 1, true) then
+                local mesh, rot, o, e = "?", nil, {}, {}
+                pcall(function() mesh = a.StaticMeshComponent.StaticMesh:GetFName():ToString() end)
+                pcall(function() rot = a:K2_GetActorRotation() end)
+                pcall(function() a:GetActorBounds(false, o, e) end)
+                w(string.format("mesh %s %s at %s yaw %.0f bounds %.0f %.0f %.0f ext %.0f %.0f %.0f",
+                    full:match("([^%.:]+)$") or full, mesh, where, rot and rot.Yaw or 0,
+                    o.X or 0, o.Y or 0, o.Z or 0, e.X or 0, e.Y or 0, e.Z or 0))
+            end
+        end
+    end
+    w("step: counts")
+    for cls, c in pairs(counts) do w(string.format("count %s %d", cls, c)) end
+    w("step: splines")
+    for _, s in ipairs(FindAllOf("SplineComponent") or {}) do
+        local full, pts = "", -1
+        pcall(function() full = s:GetFullName() end)
+        if not full:find("Default__", 1, true) then
+            pcall(function() pts = s:GetNumberOfSplinePoints() end)
+            local l0, l1
+            pcall(function() l0 = s:GetLocationAtSplinePoint(0, 1) end)
+            pcall(function() l1 = s:GetLocationAtSplinePoint(pts - 1, 1) end)
+            w(string.format("spline %s pts %d from %s to %s", full, pts,
+                l0 and string.format("%.0f,%.0f,%.0f", l0.X, l0.Y, l0.Z) or "?",
+                l1 and string.format("%.0f,%.0f,%.0f", l1.X, l1.Y, l1.Z) or "?"))
+        end
+    end
+    w("step: done")
+    f:close()
+    out("race level: " .. n .. " actors -> " .. path)
+end
+
+-- Race NavMesh probe: register the robot as a navigation invoker (radius gen_m), then ask the
+-- Human mesh for a path from the robot to the next checkpoint (or to x y z in metres). Prints
+-- every corner. Run it twice: tiles take a few frames to build after the first registration.
+function C.racepath(gen_m, x, y, z, pawn_ctx)
+    local Core = require("ui_core")
+    local robot
+    for _, a in ipairs(FindAllOf("TwinFootBP_C") or {}) do
+        if Core.valid(a) and not tostring(a:GetFullName()):find("Default__", 1, true) then robot = a end
+    end
+    if not robot then return out("no robot") end
+    local p = robot:K2_GetActorLocation()
+    local tx, ty, tz
+    if x then
+        tx, ty, tz = tonumber(x) * 100, tonumber(y) * 100, tonumber(z) * 100
+    else
+        for _, w in ipairs(Core.peek_all("AT_UIMiniGameRace")) do
+            if Core.valid(w) then
+                pcall(function() local v = w:GetNextCheckPointLocation() tx, ty, tz = v.X, v.Y, v.Z end)
+            end
+        end
+    end
+    if not tx then return out("no target") end
+    local cdo = StaticFindObject("/Script/NavigationSystem.Default__NavigationSystemV1")
+    local nav
+    pcall(function() nav = cdo:GetNavigationSystem(robot) end)
+    if not Core.valid(nav) then return out("no nav system") end
+    local gen = (tonumber(gen_m) or 150) * 100
+    pcall(function() nav:RegisterNavigationInvoker(robot, gen, gen + 2000) end)
+    local meshes = {}
+    for _, a in pairs(Core.findall("RecastNavMesh")) do
+        if Core.valid(a) then meshes[#meshes + 1] = a end
+    end
+    out(string.format("robot %.0f,%.0f,%.0f -> target %.0f,%.0f,%.0f (%d meshes)", p.X / 100, p.Y / 100,
+        p.Z / 100, tx / 100, ty / 100, tz / 100, #meshes))
+    for _, mesh in ipairs(meshes) do
+        local mname = mesh:GetFName():ToString()
+        local function proj(px, py, pz)
+            local r
+            pcall(function()
+                local q = nav:ProjectPointToNavigation(robot, { X = px, Y = py, Z = pz }, mesh, nil,
+                    { X = 500, Y = 500, Z = 2000 })
+                if q and not (q.X == 0 and q.Y == 0 and q.Z == 0) then r = q end
+            end)
+            return r
+        end
+        local s, e = proj(p.X, p.Y, p.Z), proj(tx, ty, tz)
+        out(string.format("%s: start %s end %s", mname, s and "on mesh" or "off", e and "on mesh" or "off"))
+        local path
+        local pc = require("ui_directory").peek("hud", "PlayerOwner")
+        local querier = (pawn_ctx == "pawn" and Core.valid(pc)) and Core.member(pc, "Pawn") or robot
+        local okc, err = pcall(function()
+            path = nav:FindPathToLocationSynchronously(querier, s and { X = s.X, Y = s.Y, Z = s.Z } or p,
+                e and { X = e.X, Y = e.Y, Z = e.Z } or { X = tx, Y = ty, Z = tz }, mesh, nil)
+        end)
+        if not okc then out("  findpath error: " .. tostring(err)) end
+        out("  path object valid=" .. tostring(Core.valid(path)))
+        local arr, n = Core.array_of(path, "PathPoints")
+        local partial
+        pcall(function() partial = path:IsPartial() end)
+        out(string.format("  path %d points, partial=%s", n or 0, tostring(partial)))
+        for i = 1, math.min(n or 0, 60) do
+            local q = arr[i]
+            if Core.valid_ref(q) then
+                out(string.format("  %d: %.0f %.0f %.0f", i, q.X / 100, q.Y / 100, q.Z / 100))
+            end
+        end
+    end
+end
+
+-- Terrain survey for race paths: a downward Visibility trace every `step` metres over the box
+-- (x0,y0)-(x1,y1) in metres, from 250 m down to -50 m. Appends "x y z nz water" lines (cm, normal Z,
+-- 1 when the ground point lies inside the race's UnderWaterRestartVolume) to dumps/race_survey.txt.
+-- Run it while the race map is loaded (a race paused under the pause menu).
+-- Multi-layer terrain survey (metres in, cm out): per cell, every surface a downward trace meets
+-- from the sky, then from 0.5 m under each surface found (a trace that starts inside a solid
+-- passes through its back faces, so it meets the next surface down), up to `layers`; and for each
+-- lower surface, the headroom up to whatever is above it (an upward trace). Line format:
+-- "x y z normalZ layer headroom" (headroom -1 = open sky). Built after a single top-down survey
+-- read dinosaur bones and rock-arch decks as the only ground (live 2026-11-20).
+function C.msurvey(x0, y0, x1, y1, step, name, layers)
+    local Core = require("ui_core")
+    local Ray = require("raycast")
+    x0, y0, x1, y1 = tonumber(x0) * 100, tonumber(y0) * 100, tonumber(x1) * 100, tonumber(y1) * 100
+    step = (tonumber(step) or 2) * 100
+    layers = tonumber(layers) or 3
+    local ctx
+    for _, a in ipairs(FindAllOf("TwinFootBP_C") or {}) do
+        if Core.valid(a) and not tostring(a:GetFullName()):find("Default__", 1, true) then ctx = a end
+    end
+    if not ctx then
+        local pc = FindFirstOf("PlayerController")
+        ctx = Core.valid(pc) and Core.member(pc, "Pawn") or nil
+    end
+    if not Core.valid(ctx) then return out("no world context") end
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\msurvey_" .. (name or "race") .. ".txt", "a")
+    if not f then return out("cannot write") end
+    local t0, n, surf = os.clock(), 0, 0
+    local y = y0
+    while y <= y1 do
+        local x = x0
+        while x <= x1 do
+            n = n + 1
+            local start, above = 25000, nil
+            for layer = 1, layers do
+                local hit, dist, nz = Ray.probe_surface(ctx, x, y, start, x, y, -5000, 0)
+                if not hit or not dist then break end
+                local z = start - dist
+                local head = -1
+                if above then
+                    local uh, ud = Ray.probe_surface(ctx, x, y, z + 20, x, y, above + 100, 0)
+                    head = (uh and ud) and (ud + 20) or (above - z)
+                end
+                f:write(string.format("%.0f %.0f %.0f %.2f %d %.0f\n", x, y, z, nz or -1, layer, head))
+                surf = surf + 1
+                above, start = z, z - 50
+                if start < -4000 then break end
+            end
+            x = x + step
+        end
+        y = y + step
+    end
+    f:close()
+    out(string.format("msurvey: %d cells, %d surfaces, %.2f s", n, surf, os.clock() - t0))
+end
+
+function C.survey(x0, y0, x1, y1, step, name, ch, ztop)
+    local Core = require("ui_core")
+    -- ztop (metres): start the traces there instead of the sky, just above the racer, so what
+    -- arches over the ground (rib cages, rock arches) is passed and only what is at body height
+    -- is hit (live 2026-11-20: the top-down survey read dinosaur bones as ground).
+    local zt = tonumber(ztop) and tonumber(ztop) * 100 or 25000
+    local Ray = require("raycast")
+    x0, y0, x1, y1 = tonumber(x0) * 100, tonumber(y0) * 100, tonumber(x1) * 100, tonumber(y1) * 100
+    step = (tonumber(step) or 3) * 100
+    local ctx
+    for _, a in ipairs(FindAllOf("TwinFootBP_C") or {}) do
+        if Core.valid(a) and not tostring(a:GetFullName()):find("Default__", 1, true) then ctx = a end
+    end
+    if not ctx then
+        local pc = FindFirstOf("PlayerController")
+        ctx = Core.valid(pc) and Core.member(pc, "Pawn") or nil
+    end
+    if not Core.valid(ctx) then return out("no world context") end
+    local vol = nil
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local dir = src:match("^(.*)[/\\]") or "."
+    local f = io.open(dir .. "\\dumps\\survey_" .. (name or "race") .. ".txt", "a")
+    if not f then return out("cannot write") end
+    local t0, n, hits, wet = os.clock(), 0, 0, 0
+    local y = y0
+    while y <= y1 do
+        local x = x0
+        while x <= x1 do
+            n = n + 1
+            local hit, dist, nz = Ray.probe_surface(ctx, x, y, zt, x, y, -5000, tonumber(ch) or 0)
+            if hit then
+                hits = hits + 1
+                local gz = zt - (dist or 0)
+                -- AVolume.EncompassesPoint aborts through pcall here (its float& out-param), so
+                -- water is judged offline from the heights instead.
+                local w = 0
+                f:write(string.format("%.0f %.0f %.0f %.2f %d\n", x, y, gz, nz or -1, w))
+            end
+            x = x + step
+        end
+        y = y + step
+    end
+    f:close()
+    out(string.format("survey: %d traces, %d hits, %d in water, %.2f s, volume %s", n, hits, wet,
+        os.clock() - t0, vol and "found" or "missing"))
+end
+
+-- Race experiments with the walking robot: `robot x y z [yaw]` (metres) teleports it; `rtrack secs
+-- [fwd] [jump]` logs its position every guide tick for `secs`, pushing the stick forward when fwd=1
+-- and pressing A once at the start when jump=1 (to learn jump height and what a booster does).
+local function race_robot()
+    local Core = require("ui_core")
+    for _, a in ipairs(FindAllOf("TwinFootBP_C") or {}) do
+        if Core.valid(a) and not tostring(a:GetFullName()):find("Default__", 1, true) then return a end
+    end
+end
+
+function C.pos()
+    local Core = require("ui_core")
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    if not Core.valid(pawn) then return out("no player pawn") end
+    local l = pawn:K2_GetActorLocation()
+    out(string.format("pawn %.1f %.1f %.1f", l.X / 100, l.Y / 100, l.Z / 100))
+end
+
+-- The race's water restart volume: transform and bounds, to solve its true box offline.
+function C.vol()
+    local Core = require("ui_core")
+    for _, a in ipairs(FindAllOf("UnderWaterRestartVolume") or {}) do
+        if Core.valid(a) and tostring(a:GetFullName()):find("TwinFoot", 1, true) then
+            local l, r, s = a:K2_GetActorLocation(), a:K2_GetActorRotation(), a:GetActorScale3D()
+            local o, e = {}, {}
+            a:GetActorBounds(false, o, e)
+            out(string.format("loc %.0f %.0f %.0f rot P%.2f Y%.2f R%.2f scale %.3f %.3f %.3f",
+                l.X, l.Y, l.Z, r.Pitch, r.Yaw, r.Roll, s.X, s.Y, s.Z))
+            out(string.format("bounds origin %.0f %.0f %.0f extent %.0f %.0f %.0f",
+                o.X or 0, o.Y or 0, o.Z or 0, e.X or 0, e.Y or 0, e.Z or 0))
+            return
+        end
+    end
+    out("no race volume")
+end
+
+-- The volume's collision hull: BrushComponent.BrushBodySetup.AggGeom.ConvexElems[].VertexData
+-- (local space, cm), written to dumps/race_volume.txt one "elem x y z" line per vertex.
+function C.volgeom(cls, part)
+    local Core = require("ui_core")
+    cls, part = cls or "UnderWaterRestartVolume", part or "TwinFoot"
+    local src = debug.getinfo(1, "S").source:sub(2)
+    local f = io.open((src:match("^(.*)[/\\]") or ".") .. "\\dumps\\volumes_" .. cls .. ".txt", "w")
+    local nvol = 0
+    for _, vol in ipairs(FindAllOf(cls) or {}) do
+        local full = ""
+        pcall(function() full = vol:GetFullName() end)
+        if Core.valid(vol) and full:find(part, 1, true) and not full:find("Default__", 1, true) then
+            local l, r, sc = vol:K2_GetActorLocation(), vol:K2_GetActorRotation(), vol:GetActorScale3D()
+            f:write(string.format("vol %s loc %.0f %.0f %.0f rot %.2f %.2f %.2f scale %.3f %.3f %.3f\n",
+                full:match("([^%.]+)$") or full, l.X, l.Y, l.Z, r.Pitch, r.Yaw, r.Roll, sc.X, sc.Y, sc.Z))
+            nvol = nvol + 1
+            local bc = Core.member(vol, "BrushComponent")
+            local bs = Core.valid(bc) and Core.member(bc, "BrushBodySetup")
+            local agg = Core.valid(bs) and bs.AggGeom
+            if agg and Core.valid_ref(agg) then
+                local elems, n = Core.array_of(agg, "ConvexElems")
+                for i = 1, n or 0 do
+                    local e = elems[i]
+                    if Core.valid_ref(e) then
+                        local verts, vn = Core.array_of(e, "VertexData")
+                        for k = 1, vn or 0 do
+                            local v = verts[k]
+                            if Core.valid_ref(v) then
+                                f:write(string.format("v %d %.0f %.0f %.0f\n", i, v.X, v.Y, v.Z))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    f:close()
+    out("volumes: " .. nvol)
+end
+
+-- The robot's movement limits: step height, walkable slope, jump speed, gravity, speeds, air control.
+function C.rmove()
+    local Core = require("ui_core")
+    local rb = race_robot()
+    if not rb then return out("no robot") end
+    local cm = Core.member(rb, "CharacterMovement")
+    if not Core.valid(cm) then return out("no movement component") end
+    for _, k in ipairs({ "MaxStepHeight", "WalkableFloorAngle", "WalkableFloorZ", "JumpZVelocity",
+        "GravityScale", "MaxWalkSpeed", "MaxAcceleration", "AirControl", "RotationRate" }) do
+        local v
+        pcall(function() v = cm[k] end)
+        if type(v) == "userdata" or type(v) == "table" then
+            pcall(function() v = string.format("P%.0f Y%.0f R%.0f", v.Pitch, v.Yaw, v.Roll) end)
+        end
+        out(k .. " = " .. tostring(v))
+    end
+    local cap = Core.member(rb, "CapsuleComponent")
+    if Core.valid(cap) then
+        pcall(function() out(string.format("capsule r=%.0f half=%.0f", cap:GetScaledCapsuleRadius(),
+            cap:GetScaledCapsuleHalfHeight())) end)
+    end
+    pcall(function() out("JumpMaxHoldTime = " .. tostring(rb.JumpMaxHoldTime) .. " JumpMaxCount = " .. tostring(rb.JumpMaxCount)) end)
+end
+
+-- Walk the player towards (x, y) in metres for ms: the stick is camera-relative, so the direction
+-- is turned into the camera's frame first (talk zones only open on a walk-in, not a teleport).
+function C.walkto(x, y, ms)
+    local Core = require("ui_core")
+    local mm = Core.peek_all("AT_UIMiniMapRadar")[1]
+    local pawn = Core.valid(mm) and Core.member(mm, "PlayerIns")
+    local ctrl = Core.valid(pawn) and Core.member(pawn, "Controller")
+    if not (Core.valid(pawn) and Core.valid(ctrl)) then return out("no pawn or controller") end
+    local l = pawn:K2_GetActorLocation()
+    local yaw = math.rad(ctrl:GetControlRotation().Yaw)
+    local dx, dy = tonumber(x) * 100 - l.X, tonumber(y) * 100 - l.Y
+    local d = math.sqrt(dx * dx + dy * dy)
+    if d < 1 then return out("already there") end
+    dx, dy = dx / d, dy / d
+    local fwd = dx * math.cos(yaw) + dy * math.sin(yaw)
+    local right = -dx * math.sin(yaw) + dy * math.cos(yaw)
+    C.stick(string.format("%.2f", right), string.format("%.2f", fwd), ms or 500)
+    out(string.format("walkto: %.1f m away, stick %.2f %.2f", d / 100, right, fwd))
+end
+
+-- The race's placed cameras (ViewActorRaceGame_N): location and camera yaw, to find the live one.
+function C.views()
+    local Core = require("ui_core")
+    local n = 0
+    for _, a in ipairs(FindAllOf("CameraComponent") or {}) do
+        local full = ""
+        pcall(function() full = a:GetFullName() end)
+        if Core.valid(a) and full:find("ViewActorRaceGame", 1, true) then
+            local l, r
+            pcall(function() l = a:K2_GetComponentLocation() r = a:K2_GetComponentRotation() end)
+            local active = "?"
+            pcall(function() active = tostring(a:IsActive()) end)
+            if l then
+                n = n + 1
+                out(string.format("%s at %.0f,%.0f,%.0f yaw %.1f pitch %.1f active %s",
+                    full:match("(ViewActorRaceGame_%d+)") or "?", l.X / 100, l.Y / 100, l.Z / 100, r.Yaw, r.Pitch, active))
+            end
+        end
+    end
+    out(n .. " race cameras")
+end
+
+function C.robot(x, y, z, yaw)
+    local rb = race_robot()
+    if not rb then return out("no robot") end
+    rb:K2_SetActorLocation({ X = tonumber(x) * 100, Y = tonumber(y) * 100, Z = tonumber(z) * 100 }, false, {}, true)
+    if yaw then rb:K2_SetActorRotation({ Pitch = 0, Yaw = tonumber(yaw), Roll = 0 }, true) end
+    local l, r = rb:K2_GetActorLocation(), rb:K2_GetActorRotation()
+    out(string.format("robot -> %.1f %.1f %.1f yaw %.0f", l.X / 100, l.Y / 100, l.Z / 100, r.Yaw))
+end
+
+function C.rtrack(secs, sx, sy, jump)
+    local Race, Input = require("race_guide"), require("input")
+    local Core = require("ui_core")
+    local until_t = os.clock() + (tonumber(secs) or 4)
+    local t0 = os.clock()
+    sx, sy = tonumber(sx) or 0, tonumber(sy) or 0
+    if jump == "1" then C.press("A", 250) end
+    Race._autodrive = function()
+        if os.clock() > until_t then
+            Race._autodrive = nil
+            print("[KakarotDev] rtrack done\n")
+            return
+        end
+        local rb = race_robot()
+        if not rb then return end
+        local l, r = rb:K2_GetActorLocation(), rb:K2_GetActorRotation()
+        local cy = "?"
+        pcall(function() cy = string.format("%.0f", Core.member(rb, "Controller"):GetControlRotation().Yaw) end)
+        pcall(function()
+            local pc = require("ui_directory").peek("hud", "PlayerOwner")
+            cy = cy .. string.format(" cam %.0f", Core.member(pc, "PlayerCameraManager"):GetCameraRotation().Yaw)
+        end)
+        pcall(function()
+            local gs = StaticFindObject("/Script/Engine.Default__GameplayStatics")
+            local cm = gs:GetPlayerCameraManager(rb, 0)
+            cy = cy .. string.format(" cam0 %.0f", cm:GetCameraRotation().Yaw)
+        end)
+        print(string.format("[KakarotDev] rtrack t=%.1f %.1f %.1f %.1f yaw %.0f view %s\n", os.clock() - t0,
+            l.X / 100, l.Y / 100, l.Z / 100, r.Yaw, cy))
+        if sx ~= 0 or sy ~= 0 then
+            Input.vpad_plug(VPAD_PLUG_MS)
+            Input.vpad_stick(sx, sy, 300)
+        end
+    end
+    out("tracking")
+end
+
+-- Race autopilot for testing: on every race-guide tick, steer by the pan the guide is playing
+-- (booster or checkpoint) and push forward. Mode "rt" holds RT (car), "stick" pushes the left
+-- stick forward (walking robot), "both" does both. `autodrive off` stops it.
+function C.autodrive(mode)
+    local Race, Input = require("race_guide"), require("input")
+    if mode == "off" then
+        Race._autodrive = nil
+        return out("autodrive off")
+    end
+    mode = mode or "both"
+    local last_log = 0
+    Race._cam, Race._stick_angle = nil, nil
+    Race._autodrive = function(pan, fb)
+        local a = Race._aim
+        if a and a.px and os.clock() - last_log >= 2 then
+            last_log = os.clock()
+            print(string.format("[KakarotDev] autodrive racer %.0f,%.0f z=%.0f | ring %s%s | wp %s | pan %.2f fb %.2f\n",
+                a.px / 100, a.py / 100, a.pz / 100, tostring(a.ring),
+                a.bx and string.format(" at %.0f,%.0f z=%.0f (%.0f m)", a.bx / 100, a.by / 100, a.bz / 100,
+                    math.sqrt((a.bx - a.px) ^ 2 + (a.by - a.py) ^ 2) / 100) or "",
+                tostring(a.wp), pan, fb))
+        end
+        Input.vpad_plug(VPAD_PLUG_MS)
+        if mode == "stick" then
+            -- Walking robot: the stick is read against a follow camera nobody can read. The body
+            -- turns to (camera + stick angle) within ~0.2 s, so the camera is estimated as
+            -- body yaw minus the stick angle applied last, smoothed; then the stick is pushed at
+            -- the aim's world bearing in that frame.
+            local rb = race_robot()
+            local ryaw
+            pcall(function() ryaw = rb:K2_GetActorRotation().Yaw end)
+            if a and a.stop then
+                Input.vpad_stick(0, 0, 300)   -- "stop" at a launch point, then the jump
+            elseif ryaw and a and a.dx then
+                local function wrap(d) return (d + 540) % 360 - 180 end
+                local est = ryaw - (Race._stick_angle or 0)
+                -- In the air the body cannot turn to the stick, so the estimate would drift and
+                -- the robot landed steering off the ridge (live 2026-11-20): hold it while airborne.
+                local vz = 0
+                pcall(function() vz = rb:GetVelocity().Z end)
+                if not Race._cam or math.abs(tonumber(vz) or 0) < 200 then
+                    Race._cam = Race._cam and Race._cam + 0.35 * wrap(est - Race._cam) or est
+                end
+                local bearing = math.deg(math.atan(a.dy, a.dx))
+                local rel = math.rad(wrap(bearing - Race._cam))
+                Race._stick_angle = math.deg(rel)
+                Input.vpad_stick(math.sin(rel), math.cos(rel), 300)
+            else
+                Input.vpad_stick(pan, 1, 300)
+            end
+        else
+            local steer = math.max(-1, math.min(1, pan * 1.6))
+            if fb < 0 then steer = pan >= 0 and 1 or -1 end
+            Input.vpad_stick(steer, (mode == "rt") and 0 or 1, 300)
+        end
+        if a and a.jump then
+            print("[KakarotDev] autodrive jump\n")
+            C.press("A", 250)
+        end
+        if mode ~= "stick" then Input.vpad_trigger(0, 1, 300) end
+    end
+    out("autodrive on (" .. mode .. ")")
 end
 
 -- One LineTraceSingle (channel overload) straight ahead of the pawn, to settle whether a

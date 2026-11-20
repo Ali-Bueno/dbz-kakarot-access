@@ -2,6 +2,35 @@
 
 ---
 
+## Unreleased
+
+**Third player report of November 19.** Far tracking, drones and patrol hordes (listed as enemy
+groups) are confirmed working. The area map and tough training were checked in the game; the rest
+has not been played yet.
+
+- **Race receptionist**: her menu is read now (hover car or walking robot, then play, records or
+  rewards, with your best rank and time and the fee).
+- **Robot race**: the beacon now follows the robot's own direction (it used Goku's, who stays at
+  the start), follows the course arrows, reaches boosters up to 200 m away and keeps guiding you to
+  a booster until you are inside it.
+- **Robot race can be finished**: the guide follows a route for every leg, says "Jump" where the
+  route crosses a crack, and at the booster below checkpoint 2 says "Stop" and then "Jump" (a
+  standing jump into it throws the robot onto checkpoint 2's rock). If you get stuck, or make no
+  progress for a few seconds, it puts the robot back on the route a little further on and says
+  "Back on the route", the way the game does when you fall in the water. Finished start to end
+  twice in testing.
+- **Races**: when you push forward and do not move, the guide says "Jump".
+- **Boosters on a route** now sound together with the route beacon, each from its own direction,
+  so you can follow the route and take the booster. Before, they took turns.
+- **Race results** are read: this run's time, your best time and "New record" when you beat it.
+- **Area map** now says how many D medals of the area you have collected ("D Medals: 7 of 40"),
+  right after opening it. The game hides its own counter, so the mod counts them itself.
+- **Tough training grounds** checked in the game: the battle list, challenges and rewards are read.
+- **Close to a target**, when it is above or below you (a D medal on a roof, say), the radar says
+  "up" or "down" and how many metres, every time that number changes.
+
+---
+
 ## v0.1.16 - November 19, 2026
 
 **Fixes from the second player report of November 19.** Nothing here has been played yet.

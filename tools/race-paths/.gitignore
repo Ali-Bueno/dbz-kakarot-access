@@ -1,0 +1,5 @@
+legs.json
+*.png
+__pycache__/
+mlegs.json
+legs_test.json

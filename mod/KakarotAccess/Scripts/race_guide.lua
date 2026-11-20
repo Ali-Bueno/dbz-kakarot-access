@@ -10,11 +10,14 @@ local Transition = require("transition")
 local Audio = require("audio")
 local Beacon = require("beacon")
 local Rings = require("race_rings")
+local Route = require("race_route")
+local Path = require("race_path")
 local Sensor = require("obstacle_sensor")
 local Speech = require("speech")
 local I18n = require("i18n")
 local Mem = require("mem")            -- crash black box only (Mem.mark)
 local PadPoll = require("pad_poll")   -- shared tick bus (dispatch + schedule only, no logic)
+local Input = require("input")        -- the player's stick, for the stuck hint only
 
 local Race = {}
 
@@ -61,6 +64,35 @@ local speed = 0               -- racer ground speed, uu/s, smoothed
 local anchor_x, anchor_y = nil, nil   -- where the movement direction was last measured from
 local move_fx, move_fy = nil, nil     -- the racer's ground-plane direction of travel
 local heading_src = nil       -- which heading the beacon used last (logged on change)
+-- The walking robot (ATwinFoot, AT.hpp:18402). In the robot race the player's pawn is GOKU, left
+-- standing at the start: live 2026-11-19 he read 0 m from the racer at the start (so his yaw was
+-- trusted) and 161 m once the robot moved off. The robot's own yaw is the heading to use.
+local ROBOT_CLASS = "TwinFootBP_C"
+local robot, robot_next = nil, 0
+local route_wp = nil          -- the course waypoint the beacon steered to last (logged on change)
+local path_leg = nil          -- the surveyed route being followed (race_path), logged on change
+local jump_said, jump_ahead_said = false, false   -- launch prompts already spoken this leg
+local jump_ring = nil         -- the floating booster "jump" was last said under
+local stop_said = false       -- "stop" said at the current launch point
+local stuck_x, stuck_y, stuck_t = nil, nil, 0   -- where the racer last moved from, and when
+local STUCK_S, STUCK_D = 2.0, 1.5 * M
+local STUCK_MAX = 3           -- prompts per spot: a wall no jump clears should not nag forever
+local stuck_n = 0
+-- Recovery: still stuck after the jump prompts, or no progress along the route for PROG_S (a fall
+-- off a ridge, a pit): the racer is put back on the route RECOVER_D further on, the way the game
+-- itself restarts a racer who falls in the water. The robot course has rocks, bones and cracks no
+-- survey models exactly (five live routes, 2026-11-20), so finishing must not depend on a perfect
+-- route.
+local RECOVER_D = 35 * M
+local PROG_S, PROG_D = 8.0, 10 * M
+-- Near a launch the racer must STOP under the booster and jump: standing still there is the
+-- instruction, not a lack of progress (live 2026-11-20, a player run: recovered three times onto
+-- the same booster while stopping for it). Waits longer there.
+local PROG_LAUNCH_S = 25.0
+local RECOVER_AFTER = 1      -- jump prompts that failed before the racer is moved on
+local prog_best, prog_t, prog_leg = nil, 0, nil
+local STOP_SPEED = 3 * M      -- slow enough to jump at a launch point (uu/s)
+local ROBOT_RETRY_S = 2
 local seen_obstacle, seen_ring = false, false   -- log edges (tuning aid), not every tick
 local boost_ring = nil        -- index of the ring the beacon is steering to, if any
 local obstacle_streak = 0     -- consecutive scans with a hit
@@ -149,10 +181,35 @@ end
 
 -- The beacon's forward vector: the pawn's heading while the pawn IS the racer (the car race),
 -- else the direction of travel, else the camera. Logs which one whenever it changes.
+-- The robot actor of this race, scanned at most every ROBOT_RETRY_S until found (car races have
+-- none, so this costs one FindAllOf per 2 s there; only while a race is live).
+local function robot_actor(now)
+    if robot and Core.valid(robot) then return robot end
+    robot = nil
+    if now < robot_next then return nil end
+    robot_next = now + ROBOT_RETRY_S
+    for _, a in pairs(Core.findall(ROBOT_CLASS)) do
+        local name = ""
+        pcall(function() name = a:GetFullName() end)
+        if Core.valid(a) and not tostring(name):find("Default__", 1, true) then robot = a break end
+    end
+    return robot
+end
+
 local function racer_forward(pc, pawn, px, py, pz)
     local off = pawn_offset(pawn, px, py, pz)
     local fx, fy, src
-    if off and off <= PAWN_NEAR then
+    local rb = robot_actor(os.clock())
+    local roff = rb and pawn_offset(rb, px, py, pz)
+    if roff and roff <= PAWN_NEAR then
+        -- The body's yaw. The robot walks camera-relative behind a follow camera that settles
+        -- behind it after ~1 s (live 2026-11-20); the camera itself is not readable (the camera
+        -- managers' rotation and the controller's control rotation stay frozen at the start
+        -- yaw), so "turn towards the sound" against the body is the frame offered.
+        fx, fy = heading_forward(pc, rb)
+        if fx then src, pawn, off = "robot", rb, roff end
+    end
+    if not fx and off and off <= PAWN_NEAR then
         fx, fy = heading_forward(pc, pawn)
         src = "pawn"
     end
@@ -234,6 +291,13 @@ local function reset_race()
     live_at, last_count, low_warned = nil, nil, false
     prev_x, prev_y, prev_t, speed = nil, nil, nil, 0
     anchor_x, anchor_y, move_fx, move_fy, heading_src = nil, nil, nil, nil, nil
+    robot, robot_next = nil, 0
+    route_wp = nil
+    Route.reset()
+    Path.reset()
+    path_leg, jump_said, jump_ahead_said, jump_ring, stop_said = nil, false, false, nil, false
+    stuck_x, stuck_y, stuck_t, stuck_n = nil, nil, 0, 0
+    prog_best, prog_t, prog_leg = nil, 0, nil
     seen_obstacle, seen_ring, obstacle_streak, boost_ring = false, false, 0, nil
     Rings.reset()
     Sensor.new_race()
@@ -297,19 +361,144 @@ local function step()
     -- A boost ring on the way to the checkpoint takes over the beacon, with the ring's own sound,
     -- until the racer is through it; then the beacon returns to the checkpoint.
     Rings.refresh(now)
-    local bx, by, bz, bdist, bi = Rings.on_route(px, py, pz, tx, ty, tz)
+    Rings.track(px, py, pz)
+    -- A surveyed route for this leg (race_path) overrides boosters and arrows: it already goes
+    -- round the water and up to the launch the leg needs.
+    local ax, ay, _, pinfo = Path.aim(px, py, pz, tx, ty, tz)
+    if (ax ~= nil) ~= (path_leg ~= nil) then
+        path_leg = ax and pinfo.leg or nil
+        jump_said, jump_ahead_said = false, false
+        print(string.format("[KakarotAccess] race path -> %s\n",
+            ax and string.format("%s, %.0f m of route", tostring(pinfo.leg), pinfo.remaining / M) or "none"))
+    end
+    local jump_now = false
+    if ax and pinfo.jump_ahead and not jump_ahead_said then
+        jump_ahead_said = true
+        Speech.say(I18n.t("race_booster"), false)
+    end
+    -- At the launch point: "stop", then "jump" once the racer has (nearly) stopped. A running
+    -- jump flies ~80 m and overshoots a pillar top; a standing one landed on it (live 2026-11-20).
+    local stop_now = false
+    if ax and pinfo.jump_now then
+        if not stop_said then
+            stop_said = true
+            Speech.say(I18n.t("race_stop"), true)
+            print(string.format("[KakarotAccess] race path -> stop (%.0f m/s)\n", speed / M))
+        end
+        stop_now = not jump_said
+        if not jump_said and speed <= STOP_SPEED then
+            jump_said, jump_now = true, true
+            Speech.say(I18n.t("race_jump"), true)
+            print(string.format("[KakarotAccess] race path -> jump (%.0f m/s)\n", speed / M))
+        end
+    elseif ax then
+        stop_said, jump_said = false, false   -- overshot or not there yet: prompt again next time
+    end
+    if ax and pinfo.ledge then   -- a ledge on the route: race_path says it once per ledge
+        jump_now = true
+        Speech.say(I18n.t("race_jump"), true)
+    end
+    -- Stuck: the racer has not moved STUCK_D in STUCK_S while the stick is pushed. On the robot
+    -- course that is a step or ledge the 2 m survey cannot see (live 2026-11-20, a gully on leg
+    -- 3), and a jump is the way over it, so the hint is "jump".
+    if not stuck_x or (px - stuck_x) ^ 2 + (py - stuck_y) ^ 2 > STUCK_D * STUCK_D then
+        if stuck_x and (px - stuck_x) ^ 2 + (py - stuck_y) ^ 2 > (4 * STUCK_D) ^ 2 then stuck_n = 0 end
+        stuck_x, stuck_y, stuck_t = px, py, now
+    elseif now - stuck_t >= STUCK_S and not stop_now and stuck_n < STUCK_MAX and robot_actor(now) then
+        local snap = Input.read()
+        local pushing = Race._autodrive ~= nil or (snap and snap.lx and snap.lx * snap.lx + snap.ly * snap.ly > 0.25)
+        if pushing then
+            stuck_t, jump_now, stuck_n = now, true, stuck_n + 1
+            Speech.say(I18n.t("race_jump"), true)
+            print(string.format("[KakarotAccess] race stuck -> jump at %.0f,%.0f\n", px / M, py / M))
+        end
+    end
+    -- Progress along the route; recovery when stuck past the prompts or not progressing.
+    if ax then
+        if path_leg ~= prog_leg then prog_leg, prog_best, prog_t = path_leg, nil, now end
+        if not prog_best or pinfo.remaining < prog_best - PROG_D then prog_best, prog_t = pinfo.remaining, now end
+        local why = (stuck_n >= RECOVER_AFTER and now - stuck_t >= STUCK_S and "stuck")
+            or (now - prog_t >= ((pinfo.jump_ahead or pinfo.jump_now) and PROG_LAUNCH_S or PROG_S)
+                and "no progress") or nil
+        local rb = why and robot_actor(now)
+        if rb then
+            local rx, ry, rz, ryaw = Path.ahead(px, py, RECOVER_D)
+            -- The route's end that close: onto the checkpoint itself, which counts it (a point a
+            -- few metres short of it did not, live 2026-11-20).
+            if rx and pinfo.remaining <= RECOVER_D and not pinfo.jump_ahead then
+                ryaw = math.deg(math.atan(ty - py, tx - px))
+                rx, ry, rz = tx, ty, tz - 100
+            end
+            if rx then
+                local ok = pcall(function()
+                    rb:K2_SetActorLocation({ X = rx, Y = ry, Z = rz + 200 }, false, {}, true)
+                    rb:K2_SetActorRotation({ Pitch = 0, Yaw = ryaw, Roll = 0 }, true)
+                end)
+                print(string.format("[KakarotAccess] race recover (%s) -> %.0f,%.0f,%.0f %s\n", why,
+                    rx / M, ry / M, rz / M, ok and "" or "FAILED"))
+                if ok then Speech.say(I18n.t("race_recover"), true) end
+                stuck_x, stuck_n, prog_best, prog_t = nil, 0, nil, now
+            end
+        end
+    end
+    local bx, by, bz, bdist, bi
+    -- The booster on the way to the checkpoint. Without a route it is what the beacon steers to;
+    -- with one, the beacon follows the route and the booster keeps its own cue, from its own
+    -- direction, between the beacon's pings: the player follows the route AND takes the booster
+    -- (player report 2026-11-20: the two used to take turns, the booster went silent on a route).
+    local obx, oby, obz, obdist, obi = Rings.on_route(px, py, pz, tx, ty, tz)
+    if not ax then bx, by, bz, bdist, bi = obx, oby, obz, obdist, obi end
+    -- A booster floating above the ground is a launch pad: under it, the racer must jump.
+    local under = bi and Rings.jump_under(bi, px, py, pz)
+    if under and jump_ring ~= bi then
+        jump_ring, jump_now = bi, true
+        Speech.say(I18n.t("race_jump"), true)
+        print(string.format("[KakarotAccess] race booster -> jump (ring %d)\n", bi))
+    elseif not under then
+        jump_ring = nil
+    end
     if bi ~= boost_ring then
         boost_ring = bi
         if bi then
             Speech.say(I18n.t("race_booster"), false)
             print(string.format("[KakarotAccess] race booster -> %.0f m (ring %d of %d)\n",
                 bdist / M, bi, Rings.count()))
+        else
+            local nd = Rings.nearest_unused(px, py, pz)
+            print(string.format("[KakarotAccess] race booster -> none on the way (nearest unused %s)\n",
+                nd and string.format("%.0f m", nd / M) or "none"))
+        end
+    end
+    -- No booster to steer to: follow the course arrows towards the checkpoint (race_route). The
+    -- pan comes from the waypoint, the beacon's rate still from the checkpoint distance.
+    local wx, wy, wz, wd, wi
+    Route.refresh(now)
+    if not bx and not ax then wx, wy, wz, wd, wi = Route.next(px, py, pz, tx, ty, tz) end
+    if wi ~= route_wp then
+        route_wp = wi
+        if wi then
+            print(string.format("[KakarotAccess] race route -> waypoint %d of %d, %.0f m\n",
+                wi, Route.count(), wd / M))
         end
     end
     local dx, dy, dz = tx - px, ty - py, tz - pz
-    if bx then dx, dy, dz = bx - px, by - py, bz - pz end
-    local pan, fb = Beacon.cam_rel(dx, dy, fx, fy)
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if ax then
+        dx, dy = ax - px, ay - py
+        dist = pinfo.remaining
+    elseif bx then
+        dx, dy, dz = bx - px, by - py, bz - pz
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        -- A launch pad floats: steer at the ground under it, by horizontal distance.
+        if Rings.jump_under(bi) ~= nil then dist = math.sqrt(dx * dx + dy * dy) end
+    elseif wx then
+        dx, dy = wx - px, wy - py
+    end
+    local pan, fb = Beacon.cam_rel(dx, dy, fx, fy)
+    Race._aim = { pan = pan, fb = fb, ring = bi, at = now, px = px, py = py, pz = pz,
+        bx = bx, by = by, bz = bz, wp = wi, jump = jump_now, stop = stop_now, dx = dx, dy = dy,
+        seg = ax and pinfo.seg or nil }   -- the dev test driver steers by this
+    if Race._autodrive then pcall(Race._autodrive, pan, fb) end   -- dev channel only (autodrive)
     local vol, interval
     if bx then vol, interval = Rings.cadence(dist) else vol, interval = Beacon.cadence(dist) end
     local ms = tick * TICK_MS
@@ -341,9 +530,13 @@ local function step()
     end
     if opan and odist < obstacle_min then obstacle_min = odist end
 
-    -- Other boost rings: the nearest one ahead, not while an obstacle is close, and not while the
-    -- beacon is already steering to one.
+    -- Boost rings: on a route, the booster on the way (else the nearest one ahead); without one,
+    -- the nearest one ahead. Not while an obstacle is close, nor while the beacon steers to one.
     local rpan, rdist = Rings.pick(px, py, pz, fx, fy)
+    if ax and obx then
+        rpan = Beacon.cam_rel(obx - px, oby - py, fx, fy)
+        rdist = obdist
+    end
     if bx then rpan = nil end
     if (rpan ~= nil) ~= seen_ring then
         seen_ring = rpan ~= nil

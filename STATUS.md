@@ -14,7 +14,7 @@
 
 **Architecture — read before changing how UI state is read:** [`reference/UE4ss study/docs/ue4ss-mod-architecture.md`](<reference/UE4ss study/docs/ue4ss-mod-architecture.md>) — *resolve, don't scan*, synthesised across this mod and the Sparking ZERO one: scan cost measured on both (~65 ms here vs ~115 ms there), the decision ladder, and the `RegisterBeginPlayPostHook` acquisition this mod has **not** tried yet (the ini ships with BeginPlay hooking off). Game-specific counterpart: `reference/dbz-kakarot/notes/dbz-kakarot-perf-architecture.md`.
 
-**Last updated:** 2026-11-19 evening (second player report, coded without the game: far hidden markers, patrol hordes, drone areas, area-map medal counter, race boosters, time machine reader, DLC site names; released as v0.1.16). Before that: 2026-11-19 (player report: D medals and drones radar groups, alarm HUD, patrol hordes as villainous, robot-race heading, all unplayed; trigger-volume arrival verified live; released as v0.1.15). Before that: 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
+**Last updated:** 2026-11-19 night (third player report: race booster reach, area-map counter persistence, close-range height cue; unplayed, unreleased). Before that: 2026-11-19 evening (second player report, coded without the game: far hidden markers, patrol hordes, drone areas, area-map medal counter, race boosters, time machine reader, DLC site names; released as v0.1.16). Before that: 2026-11-19 (player report: D medals and drones radar groups, alarm HUD, patrol hordes as villainous, robot-race heading, all unplayed; trigger-volume arrival verified live; released as v0.1.15). Before that: 2026-11-11 (player report worked WITHOUT running the game: full-course teachers fixed at the source, new *Enemigos supervillanos* and *Minería* radar groups, villainous mark on the world map, Whis's training panes mapped; all coded from paks, headers and Ghidra, unplayed; released as v0.1.14). Before that: 2026-11-09 (third tester save: antidote sub-story items now tracked, verified live for the snails; full-course teacher category and rare animals coded, unplayed; Bonyu training silence not reproduced; released as v0.1.13 on 2026-11-10). Before that: 2026-10-21 (training room, Personalización, Subes de nivel and the quantity window made readable and verified live on a second tester save; released as v0.1.12). Before that: 2026-10-18 evening (v0.1.11 released: Bulma's I+D made readable and verified live).
 
 ## Accessibility contribution — gameplay verification status
 
@@ -42,6 +42,31 @@ The earlier upstream backlog includes the following unrun checks:
 ## Next step
 
 **One session with the game running**, in this order, because each item unblocks the next.
+
+-12. **Third player report 2026-11-19 — not released yet; two items verified live, the rest unplayed.** Confirmed working
+   by the player: far tracking, drones from afar, patrol hordes (listed as enemy groups, accepted).
+   Time machine reads (log `questretry: row=…`). Two crashes: both black-box trails end at a TICK
+   BOUNDARY (`race.step`, `quest.read` — the last op of a normal tick), so no mod read is named;
+   ask for `%LOCALAPPDATA%\AT\Saved\Crashes\` dumps to classify them ([crash notes](reference/dbz-kakarot/notes/dbz-kakarot-crash-bug.md), fingerprint table).
+   - *Area map counters still silent:* 13 map openings, no `map counters` line — the player passes
+     through the area map in ~1 s and the reader gave up silently. Now reads while open and logs
+     `map counters still unread -> …` (panel found or not). [D medals](reference/dbz-kakarot/notes/dbz-kakarot-dmedals.md).
+   - *Robot race: tested LIVE, still not finishable by beacon alone.* Fixed: the receptionist menu
+     (`Mgame_Top_C`, was silent), heading from the robot actor, booster reach 200 m + hold until
+     its zone is entered, arrow waypoints (`race_route.lua`). 2026-11-20: recorded routes from an
+     in-race terrain survey (`race_path.lua`, `race_courses.lua`, planner in `tools/race-paths/`);
+     whole race FINISHED twice by autopilot (5/5): routes for all legs (`legs_ship.json`, multi-layer
+     survey + `mplan.py`), stuck hint ("Salta"), route RECOVERY (stuck/no progress -> 35 m on along
+     the route), boosters cued alongside the route, result sheet read (`screen_fishresult`). Next: a
+     player run by ear. [Race](reference/dbz-kakarot/notes/dbz-kakarot-race-minigame.md), last section.
+   - *Medals circled without pickup:* close-range vertical cue (`Nav.CLOSE_H/V`). Unverified that
+     height is the cause; a medal inside a ship may need an entrance.
+   - *Tough training: VERIFIED LIVE, it reads* (tester save in the Steam slot, DLC10 icon-48
+     point; list navigation too). [Super training](reference/dbz-kakarot/notes/dbz-kakarot-super-training.md), last section.
+   - *Area map D medals: VERIFIED LIVE* — the game keeps its counters Collapsed; the map now
+     speaks the world count ("Medallas D: 7 de 40"). Chests not counted.
+   - Steam slot holds tester save `Downloads\851850.zip` (Goku, DLC10 era); the previous slot
+     content is in `Downloads\Kakarot save backup 2026-11-19 (tester Cell saga)`.
 
 -11. **Second player report 2026-11-19 — all coded and UNPLAYED (game not run), released as v0.1.16.**
    Lint clean, 18 offline test files green (new hidden-marker case fails on the old code).

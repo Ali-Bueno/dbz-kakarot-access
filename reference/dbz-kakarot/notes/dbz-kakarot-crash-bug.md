@@ -1259,6 +1259,11 @@ new boot-crash class (#1233). There is no clean "upgrade and the crashes stop" s
 unsafe to hold past the call — checked, we do not hold any) and the **string-intern-pool UAF**, not
 fixed in 3.0.1, which we cannot guard against from Lua.
 
+**Player crashes of 2026-11-19 (v0.1.16, two `crash_trail.bin`).** Both trails end on the LAST op
+of an ordinary tick (`race.step` idle, `quest.read`), with no long gap and no error in the log. A
+trail ending at a tick boundary cannot tell "died inside that op" from "died in the game or UE4SS
+between ticks", and two different last ops point at the latter. Only the dumps below can say which.
+
 **WE HAD 29 CRASH DUMPS ALL ALONG AND NOBODY HAD OPENED THEM.** `%LOCALAPPDATA%\AT\Saved\Crashes\`
 (UE 4.21.2) held 29 `UE4CC-*` reports from 2026-06-30 to 2026-07-25 — on the DEV machine, i.e. the
 same machine whose `UE4SS.log` we had just called "clean". A clean log does not mean no crashes; the

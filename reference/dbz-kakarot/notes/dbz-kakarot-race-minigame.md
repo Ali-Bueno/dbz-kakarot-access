@@ -225,3 +225,199 @@ the ring sound and says "Propulsor" once, then returns to the checkpoint when th
 The line is measured from positions only, so it does not depend on the robot's heading. Log:
 `race booster -> N m (ring i of n)`. Tuning: `Rings.ON_ROUTE`. Not known: whether the boost box is
 sized for the robot, and the boost's effect (no reflected speed state).
+
+## Third report, 2026-11-19: only the first checkpoint
+
+"I get through the first checkpoint, then struggle to find another booster and reach the
+checkpoint before the boost runs out." No race was played in the attached logs, so this is from
+the code: `on_route` only looked 60 m out and 20 m either side of the straight racer→checkpoint
+line. Boosters along a curving course, or the next one further than 60 m, were never offered.
+
+Now a ring qualifies when it is ahead along the line and short of the checkpoint, nearer the
+checkpoint than the racer, within 150 m (`Rings.REACH`), and its detour
+`d(racer, ring) + d(ring, checkpoint) - d(racer, checkpoint)` is at most 30 m or 25 % of the way
+(`DETOUR`, `DETOUR_FRAC`; the locked ring 1.5x). A ring the racer came within 4 m of is marked
+used for the race. When no ring qualifies the log says
+`race booster -> none on the way (nearest unused N m)` — with `race checkpoint` lines that is
+enough to tune the budget from one player log.
+
+## Live session 2026-11-19 (night): Area03 walking-robot race, tester save
+
+Driven with a dev autopilot (`autodrive [rt|stick|both|off]`, dev channel) that steers every guide
+tick by the pan the guide itself plays, so it tests exactly what the player hears.
+
+**Verified:**
+- **The receptionist's menu was silent** (`Mgame_Top_C` < `UAT_UIMiniGameTop`, owner
+  `fm.MiniGameTop` @0x618, AT.hpp:32895). Now read by `screen_shoplist`: rows "Conducir
+  aerodeslizador" / "Conducir Caminante robot bípedo", each with "Jugar Contrarreloj / Ver récords /
+  Ver recompensas", from the reflected `GetSelectItem()` (UI_MINIGAME_TOP_ESELECT_ID 7/8 rows,
+  9..14 sub-options), plus best rank, best time and the 500 zeni fee. Log `minigame top: select=…`.
+- **Robot controls:** left stick forward walks along the robot's own yaw; stick sideways TURNS it,
+  slowly (~17°/s). The player pawn is Goku, left standing at the start (0 m from the racer at the
+  start, 160 m once the robot walks off), so the guide now takes the heading from the robot actor
+  (`TwinFootBP_C`, one per level) — log `race heading -> robot`.
+- **Course geometry** (`course` dev dump → `Scripts/dumps/dump_race_course.txt`): 6 checkpoints
+  (the first is the start line), 10 boost points, 52 arrow meshes in 23 groups, an
+  `UnderWaterRestartVolume`. Big height changes: start 83 m, checkpoint 1 at 17 m, checkpoint 2 at
+  87 m; boosters at 51 m and 66 m between them. A boost zone measures 24 x 24 x 2 m.
+- **"Te caíste al agua. La carrera se reiniciará."** is a box that waits for A (the timer stops
+  until then). It is spoken by `screen_dialog`.
+
+**What the runs showed:**
+1. Straight to checkpoint 1 from the start: into the water at the cliff, three times out of three.
+2. After a water restart (facing another way) checkpoint 1 was reached; the guide then picked the
+   booster 149 m ahead (the longer reach works) and DROPPED it when the robot drew level with
+   checkpoint 2 underneath it, 15 m beside the booster. Time-out — the player's report exactly.
+   Now the booster is held while within `Rings.HOLD` (40 m) until the robot is inside its zone
+   (radius read from the bounds). With the hold, the robot then spent 66 s near that booster without
+   entering it: it is probably on a ledge reached by another way (arrows 38-40 climb 40-44 m towards
+   the 66 m booster).
+3. With arrow waypoints (`race_route.lua`) the start leg follows the arrows down the slope
+   (84 m → 12 m) but the robot still fell into the water ~36 m short of checkpoint 1.
+
+**Not solved:** this course is a narrow path over water with ledges. A straight beacon (to a
+checkpoint, booster or arrow group) is not enough for a slow-turning walker; it needs the actual
+path. Next idea: record a path by driving the course (positions every few metres) and ship it per
+course, or find the game's own course spline if one exists. The tester reaches checkpoint 1 on
+their own, so a human copes better than the autopilot on the first leg.
+
+## Live session 2026-11-20 (early): what the robot course really is
+
+**NavMesh paths: dead end here too.** `FindPathToLocationSynchronously` from the robot, with both
+ends projected onto each of the three meshes and the robot registered as a 150 m invoker, returned a
+valid but EMPTY path (0 points), even for a 30 m hop. Same as engine-facts' Area04 result. The dev
+`racepath` command stays for the record.
+
+**Terrain survey works and is cheap.** `survey x0 y0 x1 y1 step name [channel]` (dev channel) casts
+one downward Visibility trace per cell: ~0.07 ms per trace, 10,000 traces in 0.7 s. The whole Area03
+course box (-2300..-1502 m, 1300..2298 m) at 2 m is in `Scripts/dumps/survey_a03twin.txt`
+("x y z normalZ 0", cm), taken in free roam with Goku teleported to the centre of each 200 m block
+so collision was loaded. Heights match the checkpoints (start 83.6 m).
+
+**Water is invisible to traces.** Visibility and Camera channels both hit the lake BED (6.6 m at
+-1736,1480); no channel sees a surface. In free roam Goku stands on that bed: the water exists only
+in the race, as `UnderWaterRestartVolume_TwinFoot` (AT.hpp:18426, overlap-only, `RestartPointActor`
+@0x370). Its AABB is origin (-1813, 869, 18 m), extent (745, 662, 30 m), so tops out at 48 m,
+which cannot be its real top (the robot walked at 16-22 m inside that box). Probably a tilted or
+non-box brush. **`AVolume.EncompassesPoint` aborts through pcall** (float& out-param) and killed the
+mod's loop; never call it. The `vol` dev command (rotation + scale + bounds) was written to solve
+the box but not run yet. Empirical: the robot restarted at (-1717,1480) z 12 (ground 10.6) and was
+dry at (-1706,1443) z 16, so the lake surface is about 13-15 m.
+
+**BOOSTERS ARE LAUNCH PADS, not speed rings.** They float above the ground (booster 17 at 51 m over
+40 m ground, 19 at 66 m, 20 at 53 m over 41 m). Checkpoint 2 sits on a rock pillar with sheer 40 m
+walls (41 m → 79 m in one 2 m cell) and no ramp. Test: robot teleported under booster 17
+(-1858,1530, 42 m, yaw 90), stick forward + A (jump): it reached 53 m at 0.9 s, was launched to
+108 m at 2.5 s, turned by itself from yaw 90 to 130 in the air, and landed at (-1872,1567) 88 m,
+on checkpoint 2. **The robot jumps with A** (`ACharacter`, `Jump()` reflected). Not yet known:
+whether walking under a booster without jumping also launches it.
+
+**The arrows' yaw is their pointing direction** (each group points at the next one) and the numbers
+roughly follow the course. Leg 2's designed route: CP1 → arrows 27-29 (yaw 152) → 30-32 (172) →
+33-34 (-108) → 36-37/12 (122) → 38-40 (117, under boosters 19/17) → launch → 92-93 on the pillar
+(CP2). Leg 1: arrows 25-26 sit on the start cliff edge (z 80-83 over 44-57 m ground: walk off it).
+
+**Next:** (1) run `vol` in a race and solve the volume's true box; (2) test booster entry without A;
+(3) guide = ground path over the survey grid (A*: no water, no steep climbs, drops allowed) to
+the point under the next booster, then say "jump"; ship the survey-derived path data per course.
+Renders and the loader are throwaway scripts (scratchpad), not in the repo.
+
+## Live session 2026-11-20: recorded routes and the first finished race
+
+Done as planned above. The planner is now in the repo (`tools/race-paths/`, its README has the
+workflow); the guide follows `race_courses.lua` through `race_path.lua` (pure pursuit, 15 m
+lookahead) and only falls back to the checkpoint beacon where no route is shipped.
+
+**Facts established live (autopilot `autodrive stick`, Area03 robot race):**
+- **Water** is real only as `ATWaterVolume` hulls; their geometry is
+  `BrushComponent.BrushBodySetup.AggGeom.ConvexElems[i].VertexData` (local space: rotate by the
+  actor yaw, add the location). Use one hull per convex element; a merged hull swallowed dry land.
+  The dev `volgeom` command dumps them.
+- **Survey during the race**, not in free roam: the race map adds the rock walls the robot got
+  stuck on. Collision is loaded ~1 km around the racer, so no teleport is needed.
+- **Launch pads need a STANDING jump.** A running jump into booster 17 flies ~80 m and overshoots
+  the CP2 pillar; stopping under it (speed under 3 m/s) and then jumping lands on the pillar every
+  time. The guide says "Para" in the launch zone (6 m) and "Salta" once the racer has stopped.
+  Verified: CP1 → CP2 completed three times by the autopilot on these cues alone.
+- **A jump lifts the robot 15 m** (`rtrack`, standing and running: peak ~0.9 s after take-off,
+  ~0.5 s wind-up after A, ~20 m forward on the way up). Against a wall it only gains 5-6 m, which
+  is what the first estimate was based on. Movement limits (`rmove`): capsule r 1 m / half-height
+  1.3 m, MaxStepHeight 0.45 m, WalkableFloorAngle 45 degrees; but robot + rider catch on ceilings
+  ~5 m up, so plan with 7 m of clearance.
+- **Camera and ControlRotation are frozen in the race**; the stick is camera-relative and the
+  follow camera settles behind the robot in ~1 s. The beacon pans on the robot BODY yaw.
+- **Test harness quirks:** the game ignores pad input when its window is not focused; after a mod
+  reload the virtual pad needs `unplug`, `stick 0 0 100`, `press A` (sometimes twice); the
+  receptionist talks only when Goku walks INTO her zone facing her (`walkto` twice, then B).
+  `robot x y z yaw` teleports the racer and the checkpoint counts, so a leg can be tested alone.
+
+**Why one top-down survey was not enough (leg 3, five failed routes).** The race level
+(`/Game/Maps/Area03/MiniGame/Area03_RaceGame_TwinFoot`, dev `racelevel`) places dinosaur bones
+(`S_Fossli_DinoBoneParts*`, 50-60 m across) right on the course and the "plateau" north of CP2
+is the deck of a rock arch (`S_Area03_Cliff_ArchE10`). A downward trace from the sky reads the
+TOP of whatever is highest, so bone tops and decks looked like ground and the ground under them
+was invisible. No trace channel sees anything the Visibility channel misses (channels 0-5
+compared over the CP3 bone). The course has no route spline; the arrows (92/93 on CP2 pointing
+north, 43/44 on the arch, 45/46 at CP3) confirm the designed line runs over the arch.
+
+**Multi-layer survey + layered planner.** `msurvey` traces down from the sky, then again from
+0.5 m under each surface it meets (a trace starting inside a solid passes its back faces), up to
+3 surfaces per cell, and measures each lower surface's headroom with an upward trace: the whole
+course box at 2 m is ~300 k cells, 435 k surfaces, ~70 s, taken in a paused race.
+`tools/race-paths/mplan.py` searches (cell, surface) nodes with the robot's real rules (45
+degree climbs, 7 m clearance, drops up to 30 m, water hulls forbidden, launches from floating
+boosters, jumps simulated on the measured arc and only where walking on is impossible, a cost
+for running near an edge). `routecheck.py` flags climbs over 45 degrees along a route: it
+predicted every place the robot got stuck live. Trace normals on rough rock are noise; walkability
+is judged by the slope between cells instead.
+
+**Recovery is what makes the race finishable.** Even the best route leaves small snags (a rib, a
+pit, a lip) that no survey models exactly, and each fix exposed the next. So the guide does what
+the game itself does when the racer falls in the water: after one failed "Salta" (stuck ~4 s) or
+8 s without 10 m of progress along the route, it moves the robot 35 m on along the route (onto
+the checkpoint itself when that is closer: a point a few metres short of it did not count it),
+facing the route, and says "De vuelta en la ruta" (log `race recover (why) -> x,y,z`). It never
+skips a booster launch that has not happened. With it the autopilot FINISHED the race twice in a
+row (5/5, "¡Increíble!", 2'50 and 3'20), with 6-9 recoveries per run.
+
+**Shipped routes** (`legs_ship.json`): L1-L2 from the first planner (verified), L3 the hand
+route along the arch (`legs.py`, ridge, two crack jumps), L4-L5 from `mplan.py`.
+
+**Boosters with a route:** the route beacon steers and the booster on the way keeps its own cue
+(`item`, from its own direction, between the beacon's pings). Until 2026-11-20 a route silenced
+it, and the player heard the two take turns.
+
+**Result sheet:** the race fills the shared `Mgame_Result_C` (`AT_UIMiniGameResult`): "Récord
+actual" + time, "Récord personal" + time, skills learned. `screen_fishresult` reads them; "new
+record" is derived from run time == best time, because `IconNewRecord` stays on screen on a
+slower run. The headline is an image that flips `Lang_Result01` -> `Lang_Result00` on a won
+race (logged, not spoken). The receptionist's "Grado actual" box showed "No hay récord" after
+the win: that is the game's own text (screenshot), probably the next grade's empty records.
+
+**First player run (same day): finished**, 2 boosters taken. The no-progress recovery fired three
+times while the player was stopping under booster 17 as told, putting them back on the same spot:
+near a pending launch it now waits 25 s (`PROG_LAUNCH_S`).
+
+**Boosters are launch CHAINS** (height over the ground from the msurvey): 17 (10 m), 20 (11 m),
+10 (16 m) and 16 (6 m) are pads a standing jump reaches; 19 (26 m), 15 (34 m, right above 10),
+13 (25 m) and 7/8/9 (27-44 m) are mid-air second stages a launch carries the robot through
+(17 -> 19 -> CP2 is the one the route uses). The routes of legs 3-5 take none of them, so the
+race is finishable but slower than designed; 10 -> 15 sits beside leg 4.
+
+**Measured launches (same day):** from a standstill a pad launch is purely VERTICAL (pad 10:
+52 -> 124 m, falls onto 15 above it -> 145 m, x/y unchanged). Taken at a run it carries the
+robot forward (booster 17: ~80 m). Boosters 7/8/9 lie on the line pad 10 -> CP4, so the designed
+leg-4 shortcut is a RUNNING jump into 10 heading for CP4. A hand-steered run-up missed the pad by
+10 m (camera-relative stick), so the guide must aim and time it.
+
+**Player request (2026-11-20, IN PROGRESS, unverified live):** routes should catch the boosters,
+and only boosters still takeable should sound. Coded, tests pass, not yet run in the game:
+- `race_path`: route points flagged `"boost"` = a pad taken at a run; "Salta" fires 12 m before
+  it (`Path.BOOST_R`), no stop. No shipped route uses the flag yet.
+- `race_rings`: `Rings.track` marks a ring taken when the segment between two ticks crosses its
+  zone (teleports over 60 m ignored); taken rings and mid-air stages (lift > 20 m) are never cued
+  by `pick`/`on_route`. Logs `race booster -> taken (ring N)`.
+
+**Next:** add `"boost"` support to `make_course_data.py`, build leg 4 as CP3 -> run-up -> pad 10
+("boost", heading CP4) -> CP4, run it once with `autodrive stick`, ship if it beats walking; check
+the `taken` log in a player run; tune RECOVER_D / PROG_S from feedback; map the result headline.

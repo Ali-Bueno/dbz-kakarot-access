@@ -428,6 +428,9 @@ local MAP = {
     -- Capsule Corp training room (AT.hpp:32893/32913): the researcher's top menu and its
     -- two panes, remodel (00) and training battles (01). Census 2026-10-21.
     ["Shop_Top01_C"]           = { {"fm", "ShopTop01"} },
+    -- The minigame receptionist's top menu (race: hover car / walking robot, each with play,
+    -- records, rewards). UAT_UIFieldManager.MiniGameTop @0x618 (AT.hpp:32895). Census 2026-11-19.
+    ["Mgame_Top_C"]            = { {"fm", "MiniGameTop"} },
     ["Shop_Training00_C"]      = { {"fm", "ShopTraining00"} },
     ["Shop_Training01_C"]      = { {"fm", "ShopTraining01"} },
     -- The super training layouts (Whis and the other DLC trainers), AT.hpp:32915-32918.

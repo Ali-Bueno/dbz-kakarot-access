@@ -45,6 +45,8 @@ Nav._quest_route = require("quest_route")
 Nav._race = require("race_guide")
 -- NOTE: this file sits AT Lua's 200-upvalue/local limit for the main chunk. A new module-level
 -- `local` fails to compile ("too many local variables"); hang new state off `Nav` instead.
+-- Close-range height cue (see the guidance step): horizontal radius, smallest gap, min spacing.
+Nav.CLOSE_H, Nav.CLOSE_V, Nav.CLOSE_CUE_MS = 6 * 100, 1.5 * 100, 2500
 
 -- AMBIENT CUE CHANNEL -- the beacon's own transient lines, and only those.
 --
@@ -1072,6 +1074,7 @@ local function drop_target(why)
     last_stealth_zone = nil
     was_on_target = false
     last_elev_zone = nil
+    Nav._close_vm = nil
 end
 
 -- Stash the current hand-picked target right before a FORCED drop (world gate closed,
@@ -2291,6 +2294,23 @@ local function step()
             last_dist_ms = ms
             Nav.say_cue(I18n.t("nav_same_level"))
         end
+    end
+    -- CLOSE IN, THE HEIGHT GAP IS THE WHOLE PROBLEM (player report 2026-11-19: "I keep circling
+    -- around a D medal without picking it up", likely on a roof or a ship). Within a few metres
+    -- the angle zone above says little and is throttled to 7 s, and the spoken distance is 3D, so
+    -- a medal 4 m overhead reads as "4 meters" in every direction. Here the vertical gap itself is
+    -- spoken, by sign, whenever its whole metres change.
+    local vgap = tz - pz
+    if thd <= Nav.CLOSE_H and math.abs(vgap) >= Nav.CLOSE_V then
+        local vm = meters(math.abs(vgap))
+        if vm ~= Nav._close_vm and ms - (Nav._close_ms or 0) >= Nav.CLOSE_CUE_MS then
+            Nav._close_vm, Nav._close_ms = vm, ms
+            last_elev_zone, last_elev_ms, last_dist_ms = ez, ms, ms
+            Nav.say_cue(string.format("%s, %s", I18n.t(vgap > 0 and "nav_up" or "nav_down"),
+                string.format(I18n.t("nav_meters"), vm)))
+        end
+    elseif Nav._close_vm and (thd > Nav.CLOSE_H * 1.5 or math.abs(vgap) < Nav.CLOSE_V * 0.5) then
+        Nav._close_vm = nil
     end
     if ms - last_dist_ms >= DIST_CUE_MS then
         last_dist_ms = ms
@@ -3793,6 +3813,26 @@ function Nav.sweep_partial()
     if Nav.SW.partial then return true end
     Nav.SW.lists = nil
     return false
+end
+
+-- The loaded area's D medals, collected and total, counted the way the sweep counts them (a
+-- collected medal still spawns, TreasureState Taken). For the area map, whose own counters the
+-- game keeps Collapsed in the main story (seen live 2026-11-19, Southeast Mountains): one scan
+-- per map opening, never on the poll loop. Returns nil when no medal is loaded.
+function Nav.dmedal_count()
+    local taken, total = 0, 0
+    for _, a in pairs(Core.findall("DMedalTreasure_BP_C")) do
+        if Core.valid(a) then
+            local archetype = false
+            pcall(function() archetype = a:GetFullName():find("Default__", 1, true) ~= nil end)
+            if not archetype then
+                total = total + 1
+                if Nav._point_taken(a, true) then taken = taken + 1 end
+            end
+        end
+    end
+    if total == 0 then return nil end
+    return taken, total
 end
 
 function Nav.list_targets(boxed)

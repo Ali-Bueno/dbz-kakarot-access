@@ -795,7 +795,7 @@ local AREA_COUNTERS = {
     { members = { "WL_Pnl_Chest", "Pnl_Treasurebox" }, label = "cat_chest_plural" },
 }
 local COUNT_TEXT = { "WL_Text_Count", "Txt_Count" }
-local COUNTS_TRIES = 10    -- polls to wait for the counters' text after the first attempt
+local COUNTS_TRIES = 10    -- polls without the counters' text before logging what was found
 local function first_text(o, names)
     for _, n in ipairs(names) do
         local node = Core.member(o, n, true)
@@ -805,23 +805,38 @@ local function first_text(o, names)
     return nil
 end
 local function area_counts(host)
-    local parts, seen = {}, {}
+    local parts, seen, shown = {}, {}, false
     for _, c in ipairs(AREA_COUNTERS) do
-        local t
+        local t, found = nil, nil
         for _, m in ipairs(c.members) do
             local panel = Core.member(host, m, true)
-            t = Core.valid(panel) and first_text(panel, COUNT_TEXT) or nil
+            if Core.valid(panel) then
+                if not found then
+                    local vis
+                    local on = Core.on_screen(panel)
+                    shown = shown or on
+                    pcall(function() vis = panel:GetVisibility() end)
+                    found = string.format("%s(vis=%s,on=%s)", m, tostring(vis), tostring(on))
+                end
+                t = first_text(panel, COUNT_TEXT)
+            end
             if t then break end
         end
-        seen[#seen + 1] = string.format("%s=%s", c.label, tostring(t))
+        seen[#seen + 1] = string.format("%s=%s", c.label,
+            t and string.format("%q", t) or (found and ("no text in " .. found) or "no panel"))
         if t then
             local a, b = t:match("^%s*(%d+)%s*/%s*(%d+)%s*$")
             parts[#parts + 1] = a and string.format(I18n.t("map_count_of"), I18n.t(c.label),
                 tonumber(a), tonumber(b)) or Core.phrase(I18n.t(c.label), t)
         end
     end
-    return #parts > 0 and table.concat(parts, ", ") or nil, table.concat(seen, " ")
+    return #parts > 0 and table.concat(parts, ", ") or nil, table.concat(seen, " "), shown
 end
+
+-- The game keeps its counters Collapsed in the main story (live 2026-11-19, Southeast Mountains:
+-- both panels vis=1), so when they stay hidden the medals are counted from the world instead, the
+-- same count the radar's D medal group carries. Polls to wait before deciding they are hidden:
+local HIDDEN_TRIES = 3
 
 -- Wall-clock floor between two on-demand objective re-reads (see Map.update).
 local OBJ_REPEAT_S = 20
@@ -848,13 +863,28 @@ function Map.update()
         obj_said_at = os.clock()
         pcall(function() require("quest_objective").reannounce(false) end)
     end
+    -- Read until the text shows up, for as long as the area map stays open: the first version
+    -- gave up after ten polls without a word, and the player passes through the area map in about
+    -- a second on the way to the world map (log 2026-11-19: thirteen openings, no counter line).
+    -- What was found is logged once if the wait gets long, and again when the line is spoken.
     if counts_at and tick >= counts_at and not s.world and s.host then
-        local line, seen = area_counts(s.host)
+        local line, seen, shown = area_counts(s.host)
         counts_tries = counts_tries + 1
-        if line or counts_tries > COUNTS_TRIES then
+        if not line and not shown and counts_tries >= HIDDEN_TRIES then
+            local taken, total = Nav.dmedal_count()
+            counts_at, counts_tries = nil, 0
+            print(string.format("[KakarotAccess] map counters hidden by the game -> world count %s/%s (%s)\n",
+                tostring(taken), tostring(total), seen))
+            if total then
+                Speech.say(string.format(I18n.t("map_count_of"), I18n.t("cat_dmedal_plural"),
+                    taken, total), false)
+            end
+        elseif line then
             counts_at, counts_tries = nil, 0
             print(string.format("[KakarotAccess] map counters -> %s\n", seen))
-            if line then Speech.say(line, false) end
+            Speech.say(line, false)
+        elseif counts_tries == COUNTS_TRIES then
+            print(string.format("[KakarotAccess] map counters still unread -> %s\n", seen))
         end
     end
     if s.world then

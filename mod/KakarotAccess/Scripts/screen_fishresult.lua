@@ -25,6 +25,7 @@
 local Core = require("ui_core")
 local A = require("ui_archetypes")
 local Speech = require("speech")
+local I18n = require("i18n")
 
 local FishResult = {}
 
@@ -58,7 +59,7 @@ local function node_text(owner, ...)
         -- The `pcall` around it never protected this.
         local t
         pcall(function()
-            local node = Core.member(owner, m)
+            local node = Core.member(owner, m, true)   -- strict: alternatives (CLAUDE.md §8)
             if Core.valid(node) and Core.is_visible(node) then
                 t = A.markup_to_speech(Core.read_text(node))
             end
@@ -68,9 +69,62 @@ local function node_text(owner, ...)
     return nil
 end
 
+-- The race's half of the sheet (live 2026-11-20, Area03 robot race, census
+-- dump_1795175216_001): the headline is an IMAGE (DmyLangResult, one of TexLangResult00/01), then
+-- "Récord actual" + time (TxtHeadRecord/TxtNumRecord, tree Txt_Cap/Txt_Num_Record), "Récord
+-- personal" + time (TxtHeadBest/TxtNumBest, tree Txt_Best/Txt_Num_Best), the new-record icon, and
+-- "Habilidades adquiridas" (WL_Txt_Cap04) with the skill learned, when there is one.
+local logged_head = nil
+local function headline(host)
+    local img, tex, t0, t1
+    pcall(function() img = Core.member(host, "DmyLangResult", true) end)
+    if not Core.valid(img) then return nil end
+    pcall(function() tex = img.Brush.ResourceObject:GetFName():ToString() end)
+    pcall(function() t0 = Core.member(host, "TexLangResult00", true):GetFName():ToString() end)
+    pcall(function() t1 = Core.member(host, "TexLangResult01", true):GetFName():ToString() end)
+    local key = tostring(tex) .. "|" .. tostring(t0) .. "|" .. tostring(t1)
+    if key ~= logged_head then
+        logged_head = key
+        print(string.format("[KakarotAccess] minigame result headline -> %s (00=%s 01=%s)\n",
+            tostring(tex), tostring(t0), tostring(t1)))
+    end
+    -- Not spoken: live the image flips Lang_Result01 -> Lang_Result00 within 3 s of a WON race
+    -- (an animation, not a verdict), and the times below already say how it went. Logged so a
+    -- failed run can be told apart once one is seen.
+    return nil
+end
+
+local function race_lines(host, out)
+    local Race = require("race_guide")
+    local function timed(heads, nums)
+        local n = node_text(host, table.unpack(nums))
+        if not n then return end
+        local secs = Race.timer_seconds(n)
+        out[#out + 1] = Core.phrase(node_text(host, table.unpack(heads)), secs and Race.format_seconds(secs) or n)
+    end
+    timed({ "TxtHeadRecord", "Txt_Cap" }, { "TxtNumRecord", "Txt_Num_Record" })
+    timed({ "TxtHeadBest", "Txt_Best" }, { "TxtNumBest", "Txt_Num_Best" })
+    -- A new record is this run's time equal to the best. The IconNewRecord widget stays on_screen
+    -- on a slower run too (live: 3'20 against a 2'50 best was announced as a record).
+    local run = node_text(host, "TxtNumRecord", "Txt_Num_Record")
+    if run and run == node_text(host, "TxtNumBest", "Txt_Num_Best") then
+        out[#out + 1] = I18n.t("result_new_record")
+    end
+    local skill = node_text(host, "WL_Txt_Name_Skll")
+    if skill then
+        local who = node_text(host, "WL_Txt_Name_Char")
+        out[#out + 1] = Core.phrase(node_text(host, "WL_Txt_Cap04", "Txt_Cap04"), who and (who .. ", " .. skill) or skill)
+        local detail = node_text(host, "WL_Txt_Detail")
+        if detail then out[#out + 1] = detail end
+    end
+end
+
 -- All currently-readable lines, in on-screen order.
 local function lines(host)
     local out = {}
+    local head = headline(host)
+    if head then out[#out + 1] = head end
+    race_lines(host, out)
     local cap0 = node_text(host, "TxtCap00", "Txt_Cap00")   -- "Peces capturados"
     local name = node_text(host, "TxtName", "Txt_Name")     -- species ("Pescado rojo")
     if name then out[#out + 1] = Core.phrase(cap0, name) end

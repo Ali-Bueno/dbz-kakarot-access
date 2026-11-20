@@ -65,3 +65,14 @@ Why it is silent is not settled offline. `screen_trainroom` now logs
 `trainroom: super03 on screen but refused (pane not live | no selected name)`. If that line
 never appears, grep `screen -> ` to see which adapter holds the tick (`screen_training`, registered
 first, is the suspect if a parked `Shop_Training_C` stays on screen); if nothing, take a census.
+
+**Verified live 2026-11-19 (tester save, v0.1.16 code + unreleased batch), it reads.** At the
+DLC10 point `ChallengeBattlePoint_BP5` (map icon 48, Area03 DLC_05) B opened `Shop_Training03_C`
+and `screen_trainroom` spoke at once: "Zona de entrenamiento (difícil), Contra Píkoro Daimakú:
+Combate de jefe [Principiante], Nvl. recomendado: 40, …, Recompensas de condición de desafío, …".
+DPAD_DOWN read the next battle (Ten Shin Han) with its challenges and rewards. No `refused` line.
+The icon-15 points there (`TrainingPoint_BP3/4`) open `Shop_Training_C` (Super Attack list,
+`screen_training`), also read. So the player's silence was a v0.1.15 state (nothing in the
+trainroom reader changed in v0.1.16 except the refusal log; the likely difference is another
+adapter shadowing it then) or a mode not tried here: CrowdTraining (icon 39) and the other DLCs'
+ClearTraining points are untested. "Récord personal" is spoken without a value when no record exists.

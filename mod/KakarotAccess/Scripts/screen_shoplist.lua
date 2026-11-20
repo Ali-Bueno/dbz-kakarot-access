@@ -71,9 +71,45 @@ end
 -- (fm.ShopTop01: Modificar / Entrenar), with a header the plain shop top does not declare:
 -- Txt_List00 "Sala de entrenamiento", Txt_Cap01 "Nivel de instalación", Txt_Num_Lv "Nvl. 1"
 -- (census 2026-10-21). Returns the host and that header, read only on a Shop_Top01_C.
+-- The minigame receptionist's top menu (Mgame_Top_C < UAT_UIMiniGameTop, AT.hpp, census
+-- 2026-11-19 at the Area03 race officer): rows Xlist_Bar01_00/01 ("Conducir aerodeslizador",
+-- "Conducir Caminante robot bípedo"), each opening Xlist_List03_00..02 (play / records /
+-- rewards). The reflected GetSelectItem() names the highlighted entry
+-- (UI_MINIGAME_TOP_ESELECT_ID): 7/8 the two vehicle rows, 9..14 their three sub-options in
+-- order. Other menu types are read by row state alone.
+local MGAME_ROW = { [7] = 0, [8] = 1 }
+local function mgame_selected(h)
+    local id
+    pcall(function() id = tonumber(h:GetSelectItem()) end)
+    if not id then return nil, nil end
+    local row, sub = MGAME_ROW[id], nil
+    if not row and id >= 9 and id <= 14 then row, sub = (id - 9) // 3, (id - 9) % 3 end
+    if not row then return nil, id end
+    local bar = Core.member(h, string.format("Xlist_Bar01_%02d", row), true)
+    if not Core.valid(bar) then return nil, id end
+    if sub then
+        local choice = Core.member(bar, string.format("Xlist_List03_%02d", sub), true)
+        return Core.valid(choice) and row_label(choice) or nil, id
+    end
+    return row_label(bar), id
+end
+-- Records and fee under the list: "Grado actual, Mejor rango No hay récord, Mejor tiempo …,
+-- Tasa de desafío 500".
+local function mgame_detail(h)
+    local function txt(o, n) return clean(Core.read_text(Core.member(o, n, true))) end
+    local money = Core.member(h, "Shop_Cmn_Money", true)
+    return Core.phrase(txt(h, "Txt_Cap01"),
+        Core.phrase(txt(h, "Txt_List00"), txt(h, "Txt_Num_Runk")),
+        Core.phrase(txt(h, "Txt_List01"), txt(h, "Txt_Num_Pt")),
+        Core.valid(money) and Core.phrase(txt(money, "Txt_Pay"), txt(money, "Txt_Num_Pay")) or nil)
+end
+
 local function acquire()
     for _, h in ipairs(Core.cached_all("Shop_Top_C", tick) or {}) do
         if Core.on_screen(h) and #rows_of(h) > 0 then return h, nil end
+    end
+    for _, h in ipairs(Core.cached_all("Mgame_Top_C", tick) or {}) do
+        if Core.on_screen(h) and #rows_of(h) > 0 then return h, nil, true end
     end
     for _, h in ipairs(Core.cached_all("Shop_Top01_C", tick) or {}) do
         if Core.on_screen(h) and #rows_of(h) > 0 then
@@ -98,7 +134,8 @@ local function dump(rows, sel_label)
     f:close()
 end
 
-local state = nil   -- { labels, sel } computed in is_active, reused by update
+local state = nil   -- { labels, sel, detail } computed in is_active, reused by update
+local logged_mgame = nil
 
 function ShopList.is_active()
     tick = tick + 1
@@ -107,7 +144,8 @@ function ShopList.is_active()
     if Core.free_roam(tick) then state = nil return false end
     -- And yield to the pause RING family (all registered below — see screen_cooking).
     if Core.ring_open(tick) then state = nil return false end
-    host, header = acquire()
+    local mgame
+    host, header, mgame = acquire()
     if not host then state = nil return false end
     local rows = rows_of(host)
     local labels, sel = {}, nil
@@ -119,7 +157,18 @@ function ShopList.is_active()
         end
     end
     if #labels == 0 then state = nil return false end
-    state = { labels = labels, sel = sel }
+    local detail = nil
+    if mgame then
+        local msel, id = mgame_selected(host)
+        sel = msel or sel
+        detail = mgame_detail(host)
+        if id ~= logged_mgame then
+            logged_mgame = id
+            print(string.format("[KakarotAccess] minigame top: select=%s -> %s\n",
+                tostring(id), tostring(msel)))
+        end
+    end
+    state = { labels = labels, sel = sel, detail = detail }
     if DEBUG then
         local sig = (sel or "?") .. "|" .. #labels
         if sig ~= last_sig then last_sig = sig; pcall(dump, rows, sel) end
@@ -143,7 +192,9 @@ function ShopList.update()
     if s.sel then nosel = 0 else nosel = nosel + 1 end
     if not s.sel and nosel < NOSEL_TICKS then return end
     -- Choice-style: speak the highlighted option; re-announced as the cursor moves.
-    ann:focus(header ~= "" and header or nil, nil, s.sel or s.labels[1], nil, nil)
+    local detail = s.detail
+    ann:focus(header ~= "" and header or nil, nil, s.sel or s.labels[1], nil,
+        detail and function() return detail end or nil)
 end
 
 return ShopList

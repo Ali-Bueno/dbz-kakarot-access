@@ -39,3 +39,28 @@ poll. The Blueprint twins exist (`Map_M.hpp`: `Pnl_Medal` @0x1190, `Pnl_Treasure
 `Map_M_Count.hpp`: `Txt_Count` @0x3F0), so it now tries native then BP through the strict gate,
 drops the on-screen test, retries for ten polls and logs `map counters -> …` with what it read.
 If that line shows `nil` for both, take a census with the area map open.
+
+## Third report, 2026-11-19: still silent, and medals circled without pickup
+
+The log had 13 map openings and no `map counters` line at all. The area-map visits lasted about a
+second (the player goes through it to the world map), and the reader stayed silent until ten
+failed polls, so it never logged. It now reads for as long as the area map is open, speaks as soon
+as the text exists, and after ten polls logs `map counters still unread -> …` with, per counter,
+the text, `no text in <member>` or `no panel`. The world map has no medal counter: its area window
+(`UAT_UIMapWorldWin`, AT.hpp:34308) lists materials and soul emblems only.
+
+"The radar guides me but I keep circling a medal without picking it up — on a building or a ship?"
+Within 6 m horizontally the elevation zone (angle-based, 7 s throttle) and the 3D distance hide a
+pure height gap. The guidance now says "up/down, N metres" whenever the whole metres change
+(`Nav.CLOSE_H`, `CLOSE_V`, `CLOSE_CUE_MS`). If the player then hears no height gap and still
+cannot pick it up, the medal sits inside geometry (a ship's hull) and needs a census of its spot.
+
+**Live 2026-11-19 (tester save, Southeast Mountains, main story): the game HIDES its counters.**
+`WL_Pnl_Medal` and `WL_Pnl_Chest` are valid with `GetVisibility() == 1` (Collapsed), `Txt_Count`
+empty, in the main story and in the DLC10 timeline alike; a census shows no "x/y" text anywhere on
+the area map. When or whether the game ever shows them is unknown (the setter was not traced). So
+after three polls with the medal panel off screen, the area map counts the loaded
+`DMedalTreasure_BP_C` actors itself (`Nav.dmedal_count`, the radar's Taken predicate) and speaks
+"Medallas D: 7 de 40" (collected of total; 40 matches the Area03 save table). Log:
+`map counters hidden by the game -> world count 7/40 (…)`. Spoken 0.6 s after opening. Chests are
+not counted this way.

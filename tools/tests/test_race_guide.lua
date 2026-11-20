@@ -51,6 +51,7 @@ module("ui_core", {
     member = function(o, name) return o and o[name] end,
     read_text = function(node) return node and node.text end,
     minimap_peek = function() return false end,
+    findall = function() return {} end,   -- no walking robot in these races (car race)
 })
 module("ui_directory", { peek = function(root, field)
     if root == "hud" and field == "PlayerOwner" then return pc end
@@ -63,11 +64,21 @@ end, cue = function(name, pan, vol)
     cues[#cues + 1] = { name = name, pan = pan, vol = vol, at = clock }
 end })
 module("race_rings", {
-    reset = function() end, refresh = function() end,
+    reset = function() end, refresh = function() end, track = function() end,
     pick = function() if ring then return ring[1], ring[2] end end,
     on_route = function() if boost then return boost[1], boost[2], boost[3], boost[4], boost[5] end end,
     count = function() return 1 end,
+    nearest_unused = function() return nil end,
     cadence = function() return 1.0, 300 end,
+    jump_under = function(_, px) if boost and boost.floats then
+        if not px then return true end
+        return boost.under == true
+    end end,
+})
+local path = nil              -- what the fake surveyed route reports: {x, y, z, info}
+module("race_path", {
+    reset = function() end,
+    aim = function() if path then return path[1], path[2], path[3], path[4] end end,
 })
 module("obstacle_sensor", {
     new_race = function() end,
@@ -86,6 +97,7 @@ module("i18n", { t = function(key)
     return key
 end })
 module("mem", { mark = function() end })
+module("input", { read = function() return nil end })
 module("pad_poll", { register_every = function(name, _, fn)
     if name == "race" then tick_fn = fn end
 end, unregister = function() end })
@@ -352,6 +364,63 @@ do
     pings, cues = {}, {}
     run(10)
     check(#pings >= 1, "past the ring, the beacon returns to the checkpoint")
+end
+
+do
+    -- A floating booster on the way: under it, "jump" is said once and the test driver is told.
+    hud.next = { X = 1000, Y = 11000, Z = 0 }
+    said = {}
+    boost = { 1000, 4000, 1100, 3000, 3, floats = true, under = false }
+    run(5)
+    local jumps = 0
+    for _, l in ipairs(said) do if l.text == "race_jump" then jumps = jumps + 1 end end
+    check(jumps == 0, "short of a launch pad: no jump yet")
+    boost.under = true
+    run(5)
+    for _, l in ipairs(said) do if l.text == "race_jump" then jumps = jumps + 1 end end
+    check(jumps == 1, "under a launch pad: jump is said once")
+    boost = nil
+    run(3)
+end
+
+do
+    -- A surveyed route: the beacon pans to the route point, not to the checkpoint, rings are not
+    -- steered to, and the launch at its end is announced, then "jump" under it.
+    hud.next = { X = 1000, Y = 11000, Z = 0 }   -- straight to the right (pan > 0)
+    yaw = 0
+    boost = { 1000, 4000, 0, 3000, 2 }
+    path = { 11000, 1000, 0, { remaining = 5000, jump_ahead = false, jump_now = false, leg = "test", seg = 1 } }
+    pings, cues, said = {}, {}, {}
+    run(10)
+    local items = 0
+    for _, c in ipairs(cues) do if c.name == "item" then items = items + 1 end end
+    local route_pan = pings[#pings] and pings[#pings].pan
+    local path_off = path
+    path = nil
+    boost = nil
+    pings = {}
+    run(10)
+    local cp_pan = pings[#pings] and pings[#pings].pan
+    path = path_off
+    boost = { 1000, 4000, 0, 3000, 2 }
+    check(route_pan and cp_pan and math.abs(route_pan - cp_pan) > 0.5,
+        "on a route, the beacon pans to the route point, not to the checkpoint")
+    -- The booster on the way keeps its own cue alongside the route beacon (player report
+    -- 2026-11-20: the two used to take turns, the booster went silent on a route).
+    check(items > 0 and #pings > 0, "on a route, the booster sounds alongside the route beacon")
+    path[4].jump_ahead = true
+    run(3)
+    path[4].jump_now = true
+    run(5)
+    local ahead, jumps = 0, 0
+    for _, l in ipairs(said) do
+        if l.text == "race_booster" then ahead = ahead + 1 end
+        if l.text == "race_jump" then jumps = jumps + 1 end
+    end
+    check(ahead == 1, "the coming launch is announced once")
+    check(jumps == 1 and Race._aim.jump == false, "jump is said once, and flagged on that tick only")
+    path, boost = nil, nil
+    run(3)
 end
 
 if fails > 0 then
